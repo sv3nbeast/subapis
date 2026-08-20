@@ -53,6 +53,8 @@ type PaymentOrder struct {
 	PlanID *int64 `json:"plan_id,omitempty"`
 	// SubscriptionGroupID holds the value of the "subscription_group_id" field.
 	SubscriptionGroupID *int64 `json:"subscription_group_id,omitempty"`
+	// 订阅订单下单时固化的完整权益分组列表（主分组在首位）
+	SubscriptionGroupIds []int64 `json:"subscription_group_ids,omitempty"`
 	// SubscriptionDays holds the value of the "subscription_days" field.
 	SubscriptionDays *int `json:"subscription_days,omitempty"`
 	// ProviderInstanceID holds the value of the "provider_instance_id" field.
@@ -139,7 +141,7 @@ func (*PaymentOrder) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case paymentorder.FieldProviderSnapshot:
+		case paymentorder.FieldSubscriptionGroupIds, paymentorder.FieldProviderSnapshot:
 			values[i] = new([]byte)
 		case paymentorder.FieldForceRefund:
 			values[i] = new(sql.NullBool)
@@ -279,6 +281,14 @@ func (_m *PaymentOrder) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.SubscriptionGroupID = new(int64)
 				*_m.SubscriptionGroupID = value.Int64
+			}
+		case paymentorder.FieldSubscriptionGroupIds:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field subscription_group_ids", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.SubscriptionGroupIds); err != nil {
+					return fmt.Errorf("unmarshal field subscription_group_ids: %w", err)
+				}
 			}
 		case paymentorder.FieldSubscriptionDays:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -535,6 +545,9 @@ func (_m *PaymentOrder) String() string {
 		builder.WriteString("subscription_group_id=")
 		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
+	builder.WriteString(", ")
+	builder.WriteString("subscription_group_ids=")
+	builder.WriteString(fmt.Sprintf("%v", _m.SubscriptionGroupIds))
 	builder.WriteString(", ")
 	if v := _m.SubscriptionDays; v != nil {
 		builder.WriteString("subscription_days=")

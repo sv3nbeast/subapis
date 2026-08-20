@@ -48,6 +48,8 @@ const (
 	FieldPlanID = "plan_id"
 	// FieldSubscriptionGroupID holds the string denoting the subscription_group_id field in the database.
 	FieldSubscriptionGroupID = "subscription_group_id"
+	// FieldSubscriptionGroupIds holds the string denoting the subscription_group_ids field in the database.
+	FieldSubscriptionGroupIds = "subscription_group_ids"
 	// FieldSubscriptionDays holds the string denoting the subscription_days field in the database.
 	FieldSubscriptionDays = "subscription_days"
 	// FieldProviderInstanceID holds the string denoting the provider_instance_id field in the database.
@@ -134,6 +136,7 @@ var Columns = []string{
 	FieldOrderType,
 	FieldPlanID,
 	FieldSubscriptionGroupID,
+	FieldSubscriptionGroupIds,
 	FieldSubscriptionDays,
 	FieldProviderInstanceID,
 	FieldProviderKey,
@@ -189,6 +192,8 @@ var (
 	DefaultOrderType string
 	// OrderTypeValidator is a validator for the "order_type" field. It is called by the builders before save.
 	OrderTypeValidator func(string) error
+	// DefaultSubscriptionGroupIds holds the default value on creation for the "subscription_group_ids" field.
+	DefaultSubscriptionGroupIds []int64
 	// ProviderInstanceIDValidator is a validator for the "provider_instance_id" field. It is called by the builders before save.
 	ProviderInstanceIDValidator func(string) error
 	// ProviderKeyValidator is a validator for the "provider_key" field. It is called by the builders before save.

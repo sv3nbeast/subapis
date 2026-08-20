@@ -143,6 +143,15 @@ func (s *PaymentService) validateSubOrder(ctx context.Context, req CreateOrderRe
 	if !group.IsSubscriptionType() {
 		return nil, infraerrors.BadRequest("GROUP_TYPE_MISMATCH", "group is not a subscription type")
 	}
+	for _, bonusGroupID := range plan.BonusGroupIds {
+		bonusGroup, bonusErr := s.groupRepo.GetByID(ctx, bonusGroupID)
+		if bonusErr != nil || bonusGroup.Status != payment.EntityStatusActive {
+			return nil, infraerrors.NotFound("BONUS_GROUP_NOT_FOUND", fmt.Sprintf("bonus subscription group %d is no longer available", bonusGroupID))
+		}
+		if !bonusGroup.IsSubscriptionType() {
+			return nil, infraerrors.BadRequest("BONUS_GROUP_TYPE_MISMATCH", fmt.Sprintf("bonus group %d is not a subscription type", bonusGroupID))
+		}
+	}
 	return plan, nil
 }
 
@@ -204,7 +213,10 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 		b.SetProviderSnapshot(providerSnapshot)
 	}
 	if plan != nil {
-		b.SetPlanID(plan.ID).SetSubscriptionGroupID(plan.GroupID).SetSubscriptionDays(psComputeValidityDays(plan.ValidityDays, plan.ValidityUnit))
+		b.SetPlanID(plan.ID).
+			SetSubscriptionGroupID(plan.GroupID).
+			SetSubscriptionGroupIds(subscriptionPlanGroupIDs(plan)).
+			SetSubscriptionDays(psComputeValidityDays(plan.ValidityDays, plan.ValidityUnit))
 	}
 	order, err := b.Save(ctx)
 	if err != nil {

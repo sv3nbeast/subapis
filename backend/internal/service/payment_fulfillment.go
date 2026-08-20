@@ -441,14 +441,22 @@ func (s *PaymentService) sendSubscriptionPurchaseSuccessNotification(ctx context
 	if o.SubscriptionDays != nil {
 		variables["subscription_days"] = strconv.Itoa(*o.SubscriptionDays)
 	}
-	if o.SubscriptionGroupID != nil {
+	groupIDs := paymentOrderSubscriptionGroupIDs(o)
+	if len(groupIDs) > 0 {
+		groupNames := make([]string, 0, len(groupIDs))
 		if s.groupRepo != nil {
-			if group, err := s.groupRepo.GetByID(ctx, *o.SubscriptionGroupID); err == nil && group != nil && strings.TrimSpace(group.Name) != "" {
-				variables["subscription_group"] = group.Name
+			for _, groupID := range groupIDs {
+				if group, err := s.groupRepo.GetByID(ctx, groupID); err == nil && group != nil && strings.TrimSpace(group.Name) != "" {
+					groupNames = append(groupNames, group.Name)
+				}
+			}
+			if len(groupNames) > 0 {
+				variables["subscription_group"] = strings.Join(groupNames, " + ")
+				variables["subscription_groups"] = strings.Join(groupNames, ", ")
 			}
 		}
 		if s.subscriptionSvc != nil {
-			if sub, err := s.subscriptionSvc.GetActiveSubscription(ctx, o.UserID, *o.SubscriptionGroupID); err == nil && sub != nil {
+			if sub, err := s.subscriptionSvc.GetActiveSubscription(ctx, o.UserID, groupIDs[0]); err == nil && sub != nil {
 				variables["expiry_time"] = sub.ExpiresAt.Format("2006-01-02 15:04")
 			}
 		}
@@ -478,7 +486,7 @@ func (s *PaymentService) ExecuteSubscriptionFulfillment(ctx context.Context, oid
 	if o.Status != OrderStatusPaid && o.Status != OrderStatusFailed && o.Status != OrderStatusRecharging {
 		return infraerrors.BadRequest("INVALID_STATUS", "order cannot fulfill in status "+o.Status)
 	}
-	if o.SubscriptionGroupID == nil || o.SubscriptionDays == nil {
+	if len(paymentOrderSubscriptionGroupIDs(o)) == 0 || o.SubscriptionDays == nil {
 		return infraerrors.BadRequest("INVALID_STATUS", "missing subscription info")
 	}
 	lease, err := s.acquirePaymentFulfillmentLease(ctx, o)
@@ -496,13 +504,18 @@ func (s *PaymentService) ExecuteSubscriptionFulfillment(ctx context.Context, oid
 }
 
 func (s *PaymentService) doSub(ctx context.Context, o *dbent.PaymentOrder, lease *paymentFulfillmentLease) error {
-	gid := *o.SubscriptionGroupID
+	groupIDs := paymentOrderSubscriptionGroupIDs(o)
 	days := *o.SubscriptionDays
-	g, err := s.groupRepo.GetByID(ctx, gid)
-	if err != nil || g.Status != payment.EntityStatusActive {
-		return fmt.Errorf("group %d no longer exists or inactive", gid)
+	for _, groupID := range groupIDs {
+		entitlementGroup, err := s.groupRepo.GetByID(ctx, groupID)
+		if err != nil || entitlementGroup.Status != payment.EntityStatusActive {
+			return fmt.Errorf("group %d no longer exists or inactive", groupID)
+		}
+		if !entitlementGroup.IsSubscriptionType() {
+			return fmt.Errorf("group %d is no longer a subscription group", groupID)
+		}
 	}
-	if err := s.ensurePaymentSubscriptionAssigned(ctx, o, gid, days); err != nil {
+	if err := s.ensurePaymentSubscriptionsAssigned(ctx, o, groupIDs, days); err != nil {
 		return err
 	}
 	if err := s.applyAffiliateRebateForOrder(ctx, o); err != nil {
@@ -512,8 +525,15 @@ func (s *PaymentService) doSub(ctx context.Context, o *dbent.PaymentOrder, lease
 }
 
 func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, o *dbent.PaymentOrder, groupID int64, days int) error {
+	return s.ensurePaymentSubscriptionsAssigned(ctx, o, []int64{groupID}, days)
+}
+
+func (s *PaymentService) ensurePaymentSubscriptionsAssigned(ctx context.Context, o *dbent.PaymentOrder, groupIDs []int64, days int) error {
 	if s.subscriptionSvc == nil {
 		return errors.New("subscription service is unavailable")
+	}
+	if len(groupIDs) == 0 {
+		return errors.New("subscription entitlement groups are unavailable")
 	}
 
 	tx, err := s.entClient.Tx(ctx)
@@ -529,29 +549,31 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 		return fmt.Errorf("check subscription assignment audit: %w", err)
 	}
 
-	recoveredFromNote := false
+	recoveredFromNote := make(map[int64]bool, len(groupIDs))
 	if !alreadyAssigned {
 		orderNote := paymentSubscriptionOrderNote(o.ID)
-		existing, lookupErr := s.subscriptionSvc.userSubRepo.GetByUserIDAndGroupID(txCtx, o.UserID, groupID)
-		switch {
-		case lookupErr == nil && existing != nil && hasPaymentSubscriptionOrderNote(existing.Notes, orderNote):
-			recoveredFromNote = true
-		case lookupErr != nil && !errors.Is(lookupErr, ErrSubscriptionNotFound):
-			return fmt.Errorf("check existing subscription assignment: %w", lookupErr)
-		default:
-			if _, _, err := s.subscriptionSvc.assignOrExtendSubscription(txCtx, &AssignSubscriptionInput{
-				UserID:       o.UserID,
-				GroupID:      groupID,
-				ValidityDays: days,
-				AssignedBy:   0,
-				Notes:        orderNote,
-			}, true); err != nil {
-				return fmt.Errorf("assign subscription: %w", err)
+		for _, groupID := range groupIDs {
+			existing, lookupErr := s.subscriptionSvc.userSubRepo.GetByUserIDAndGroupID(txCtx, o.UserID, groupID)
+			switch {
+			case lookupErr == nil && existing != nil && hasPaymentSubscriptionOrderNote(existing.Notes, orderNote):
+				recoveredFromNote[groupID] = true
+			case lookupErr != nil && !errors.Is(lookupErr, ErrSubscriptionNotFound):
+				return fmt.Errorf("check existing subscription assignment for group %d: %w", groupID, lookupErr)
+			default:
+				if _, _, err := s.subscriptionSvc.assignOrExtendSubscription(txCtx, &AssignSubscriptionInput{
+					UserID:       o.UserID,
+					GroupID:      groupID,
+					ValidityDays: days,
+					AssignedBy:   0,
+					Notes:        orderNote,
+				}, true); err != nil {
+					return fmt.Errorf("assign subscription group %d: %w", groupID, err)
+				}
 			}
 		}
 
 		detail, _ := json.Marshal(map[string]any{
-			"groupID":           groupID,
+			"groupIDs":          groupIDs,
 			"validityDays":      days,
 			"recoveredFromNote": recoveredFromNote,
 		})
@@ -565,13 +587,13 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 				_ = tx.Rollback()
 				claimed, checkErr := hasPaymentSubscriptionAssignmentAudit(ctx, s.entClient, o.ID)
 				if checkErr == nil && claimed {
-					return s.subscriptionSvc.invalidateSubscriptionCaches(o.UserID, groupID)
+					return s.invalidatePaymentSubscriptionCaches(o.UserID, groupIDs)
 				}
 			}
 			return fmt.Errorf("record subscription assignment audit: %w", err)
 		}
 	} else {
-		slog.Info("subscription already assigned for order, skipping", "orderID", o.ID, "groupID", groupID)
+		slog.Info("subscription already assigned for order, skipping", "orderID", o.ID, "groupIDs", groupIDs)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -579,8 +601,17 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 	}
 	// Assignment cache invalidation is deferred while this transaction is open,
 	// then performed synchronously against the committed subscription.
-	if err := s.subscriptionSvc.invalidateSubscriptionCaches(o.UserID, groupID); err != nil {
-		return fmt.Errorf("invalidate subscription cache after fulfillment: %w", err)
+	if err := s.invalidatePaymentSubscriptionCaches(o.UserID, groupIDs); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *PaymentService) invalidatePaymentSubscriptionCaches(userID int64, groupIDs []int64) error {
+	for _, groupID := range groupIDs {
+		if err := s.subscriptionSvc.invalidateSubscriptionCaches(userID, groupID); err != nil {
+			return fmt.Errorf("invalidate subscription cache for group %d after fulfillment: %w", groupID, err)
+		}
 	}
 	return nil
 }

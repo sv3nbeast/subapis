@@ -84,6 +84,10 @@ func (PaymentOrder) Fields() []ent.Field {
 		field.Int64("subscription_group_id").
 			Optional().
 			Nillable(),
+		field.JSON("subscription_group_ids", []int64{}).
+			Default([]int64{}).
+			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
+			Comment("订阅订单下单时固化的完整权益分组列表（主分组在首位）"),
 		field.Int("subscription_days").
 			Optional().
 			Nillable(),

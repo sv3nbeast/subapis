@@ -208,9 +208,20 @@ export interface InvoiceConfig {
 
 // ==================== Plans & Channels ====================
 
+export interface SubscriptionPlanBenefitGroup {
+  id: number
+  platform: string
+  name: string
+  daily_limit_usd?: number | null
+  weekly_limit_usd?: number | null
+  monthly_limit_usd?: number | null
+}
+
 export interface SubscriptionPlan {
   id: number
   group_id: number
+  bonus_group_ids?: number[]
+  bonus_groups?: SubscriptionPlanBenefitGroup[]
   group_platform?: string
   group_name?: string
   rate_multiplier?: number

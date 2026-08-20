@@ -10,6 +10,7 @@ import (
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
+	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
@@ -46,6 +47,18 @@ func (_u *SubscriptionPlanUpdate) SetNillableGroupID(v *int64) *SubscriptionPlan
 // AddGroupID adds value to the "group_id" field.
 func (_u *SubscriptionPlanUpdate) AddGroupID(v int64) *SubscriptionPlanUpdate {
 	_u.mutation.AddGroupID(v)
+	return _u
+}
+
+// SetBonusGroupIds sets the "bonus_group_ids" field.
+func (_u *SubscriptionPlanUpdate) SetBonusGroupIds(v []int64) *SubscriptionPlanUpdate {
+	_u.mutation.SetBonusGroupIds(v)
+	return _u
+}
+
+// AppendBonusGroupIds appends value to the "bonus_group_ids" field.
+func (_u *SubscriptionPlanUpdate) AppendBonusGroupIds(v []int64) *SubscriptionPlanUpdate {
+	_u.mutation.AppendBonusGroupIds(v)
 	return _u
 }
 
@@ -327,6 +340,14 @@ func (_u *SubscriptionPlanUpdate) sqlSave(ctx context.Context) (_node int, err e
 	if value, ok := _u.mutation.AddedGroupID(); ok {
 		_spec.AddField(subscriptionplan.FieldGroupID, field.TypeInt64, value)
 	}
+	if value, ok := _u.mutation.BonusGroupIds(); ok {
+		_spec.SetField(subscriptionplan.FieldBonusGroupIds, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedBonusGroupIds(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, subscriptionplan.FieldBonusGroupIds, value)
+		})
+	}
 	if value, ok := _u.mutation.Name(); ok {
 		_spec.SetField(subscriptionplan.FieldName, field.TypeString, value)
 	}
@@ -416,6 +437,18 @@ func (_u *SubscriptionPlanUpdateOne) SetNillableGroupID(v *int64) *SubscriptionP
 // AddGroupID adds value to the "group_id" field.
 func (_u *SubscriptionPlanUpdateOne) AddGroupID(v int64) *SubscriptionPlanUpdateOne {
 	_u.mutation.AddGroupID(v)
+	return _u
+}
+
+// SetBonusGroupIds sets the "bonus_group_ids" field.
+func (_u *SubscriptionPlanUpdateOne) SetBonusGroupIds(v []int64) *SubscriptionPlanUpdateOne {
+	_u.mutation.SetBonusGroupIds(v)
+	return _u
+}
+
+// AppendBonusGroupIds appends value to the "bonus_group_ids" field.
+func (_u *SubscriptionPlanUpdateOne) AppendBonusGroupIds(v []int64) *SubscriptionPlanUpdateOne {
+	_u.mutation.AppendBonusGroupIds(v)
 	return _u
 }
 
@@ -726,6 +759,14 @@ func (_u *SubscriptionPlanUpdateOne) sqlSave(ctx context.Context) (_node *Subscr
 	}
 	if value, ok := _u.mutation.AddedGroupID(); ok {
 		_spec.AddField(subscriptionplan.FieldGroupID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.BonusGroupIds(); ok {
+		_spec.SetField(subscriptionplan.FieldBonusGroupIds, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedBonusGroupIds(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, subscriptionplan.FieldBonusGroupIds, value)
+		})
 	}
 	if value, ok := _u.mutation.Name(); ok {
 		_spec.SetField(subscriptionplan.FieldName, field.TypeString, value)

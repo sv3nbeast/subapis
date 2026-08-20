@@ -1,9 +1,15 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 
 import PlanEditDialog from '../PlanEditDialog.vue'
 import type { AdminGroup } from '@/types'
+import type { SubscriptionPlan } from '@/types/payment'
+
+const { createPlan, updatePlan } = vi.hoisted(() => ({
+  createPlan: vi.fn(),
+  updatePlan: vi.fn(),
+}))
 
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({
@@ -24,8 +30,8 @@ vi.mock('@/stores/app', () => ({
 
 vi.mock('@/api/admin/payment', () => ({
   adminPaymentAPI: {
-    createPlan: vi.fn(),
-    updatePlan: vi.fn(),
+    createPlan,
+    updatePlan,
   },
 }))
 
@@ -116,14 +122,18 @@ const groupFixture = (overrides: Partial<AdminGroup>): AdminGroup => ({
 function mountDialog({
   groups = [],
   paymentConfig = null,
+  plan = null,
+  show = true,
 }: {
   groups?: AdminGroup[]
   paymentConfig?: Record<string, unknown> | null
+  plan?: SubscriptionPlan | null
+  show?: boolean
 } = {}) {
   return mount(PlanEditDialog, {
     props: {
-      show: true,
-      plan: null,
+      show,
+      plan,
       groups,
       paymentConfig,
     },
@@ -139,6 +149,11 @@ function mountDialog({
 }
 
 describe('PlanEditDialog', () => {
+  beforeEach(() => {
+    createPlan.mockReset()
+    updatePlan.mockReset()
+  })
+
   it('shows CNY channel charge using the configured subscription rate and fee', async () => {
     const wrapper = mountDialog({
       paymentConfig: {
@@ -192,5 +207,43 @@ describe('PlanEditDialog', () => {
 
     expect(options).toContain('OpenAI + Claude + Gemini + Grok — composite (1.2x)')
     expect(options).not.toContain('Standard OpenAI — openai (1x)')
+  })
+
+  it('loads and saves bonus subscription groups with the plan', async () => {
+    const plan: SubscriptionPlan = {
+      id: 5,
+      group_id: 9,
+      bonus_group_ids: [36],
+      name: 'Max',
+      description: 'Max subscription',
+      price: 700,
+      original_price: 0,
+      currency: 'USD',
+      validity_days: 1,
+      validity_unit: 'months',
+      features: [],
+      for_sale: true,
+      sort_order: 1,
+    }
+    const wrapper = mountDialog({
+      show: false,
+      plan,
+      groups: [
+        groupFixture({ id: 9, name: 'Max primary', platform: 'composite' }),
+        groupFixture({ id: 36, name: 'Claude Opus bonus', platform: 'anthropic', monthly_limit_usd: 500 }),
+      ],
+    })
+
+    await wrapper.setProps({ show: true })
+    const bonusCheckbox = wrapper.get('input[data-bonus-group-id="36"]')
+    expect((bonusCheckbox.element as HTMLInputElement).checked).toBe(true)
+
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(updatePlan).toHaveBeenCalledWith(5, expect.objectContaining({
+      group_id: 9,
+      bonus_group_ids: [36],
+    }))
   })
 })

@@ -86,6 +86,16 @@
         </div>
       </div>
 
+      <div v-if="plan.bonus_groups?.length" class="mb-4 rounded-2xl border border-emerald-100 bg-emerald-50/70 px-3 py-3 text-xs dark:border-emerald-900/50 dark:bg-emerald-950/20">
+        <div class="mb-2 font-semibold text-emerald-700 dark:text-emerald-300">{{ t('payment.planCard.bonusGroups') }}</div>
+        <div class="space-y-1.5">
+          <div v-for="group in plan.bonus_groups" :key="group.id" class="flex items-center justify-between gap-2">
+            <span class="min-w-0 truncate font-medium text-gray-700 dark:text-gray-200">{{ group.name }}</span>
+            <span class="shrink-0 text-emerald-700 dark:text-emerald-300">{{ bonusGroupQuota(group) }}</span>
+          </div>
+        </div>
+      </div>
+
       <!-- Features list (compact) -->
       <div v-if="plan.features.length > 0" class="mb-4 space-y-1.5">
         <div v-for="feature in plan.features" :key="feature" class="flex items-start gap-1.5">
@@ -113,7 +123,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { SubscriptionPlan } from '@/types/payment'
+import type { SubscriptionPlan, SubscriptionPlanBenefitGroup } from '@/types/payment'
 import type { UserSubscription } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { hasPeakRate as groupHasPeakRate, formatPeakRateWindow, serverTimezoneLabel } from '@/utils/peak-rate'
@@ -187,6 +197,13 @@ const modelQuotaEntries = computed(() =>
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([model, ratio]) => ({ model, percent: Number((ratio * 100).toFixed(2)) })),
 )
+
+function bonusGroupQuota(group: SubscriptionPlanBenefitGroup): string {
+  if (group.monthly_limit_usd != null) return t('payment.planCard.bonusMonthlyQuota', { amount: group.monthly_limit_usd })
+  if (group.weekly_limit_usd != null) return t('payment.planCard.bonusWeeklyQuota', { amount: group.weekly_limit_usd })
+  if (group.daily_limit_usd != null) return t('payment.planCard.bonusDailyQuota', { amount: group.daily_limit_usd })
+  return t('payment.planCard.unlimited')
+}
 
 const validitySuffix = computed(() => planValiditySuffix(props.plan, t))
 </script>

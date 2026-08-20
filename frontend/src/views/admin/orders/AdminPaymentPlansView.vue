@@ -27,6 +27,22 @@
           />
           <span v-else class="text-sm text-gray-400">-</span>
         </template>
+        <template #cell-bonus_group_ids="{ row }">
+          <div v-if="row.bonus_group_ids?.length" class="flex max-w-sm flex-wrap gap-1.5">
+            <template v-for="groupId in row.bonus_group_ids" :key="groupId">
+              <GroupBadge
+                v-if="getGroup(groupId)"
+                :name="getGroup(groupId)!.name"
+                :platform="getGroup(groupId)!.platform"
+                :rate-multiplier="getGroup(groupId)!.rate_multiplier"
+              />
+              <span v-else class="text-xs text-gray-400">
+                #{{ groupId }} <span class="badge badge-danger">{{ t('payment.admin.groupMissing') }}</span>
+              </span>
+            </template>
+          </div>
+          <span v-else class="text-sm text-gray-400">-</span>
+        </template>
         <template #cell-price="{ value, row }">
           <div class="text-sm">
             <span class="font-medium text-gray-900 dark:text-white">{{ planCurrencySymbol(row.currency) }}{{ (value ?? 0).toFixed(2) }}</span>
@@ -137,6 +153,7 @@ const planColumns = computed((): Column[] => [
   { key: 'id', label: 'ID' },
   { key: 'name', label: t('payment.admin.planName') },
   { key: 'group_id', label: t('payment.admin.group') },
+  { key: 'bonus_group_ids', label: t('payment.admin.bonusGroups') },
   { key: 'price', label: t('payment.admin.price') },
   { key: 'validity_days', label: t('payment.admin.validity') },
   { key: 'for_sale', label: t('payment.admin.forSale') },

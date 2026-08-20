@@ -28,6 +28,12 @@ func (_c *SubscriptionPlanCreate) SetGroupID(v int64) *SubscriptionPlanCreate {
 	return _c
 }
 
+// SetBonusGroupIds sets the "bonus_group_ids" field.
+func (_c *SubscriptionPlanCreate) SetBonusGroupIds(v []int64) *SubscriptionPlanCreate {
+	_c.mutation.SetBonusGroupIds(v)
+	return _c
+}
+
 // SetName sets the "name" field.
 func (_c *SubscriptionPlanCreate) SetName(v string) *SubscriptionPlanCreate {
 	_c.mutation.SetName(v)
@@ -229,6 +235,10 @@ func (_c *SubscriptionPlanCreate) ExecX(ctx context.Context) {
 
 // defaults sets the default values of the builder before save.
 func (_c *SubscriptionPlanCreate) defaults() {
+	if _, ok := _c.mutation.BonusGroupIds(); !ok {
+		v := subscriptionplan.DefaultBonusGroupIds
+		_c.mutation.SetBonusGroupIds(v)
+	}
 	if _, ok := _c.mutation.Description(); !ok {
 		v := subscriptionplan.DefaultDescription
 		_c.mutation.SetDescription(v)
@@ -275,6 +285,9 @@ func (_c *SubscriptionPlanCreate) defaults() {
 func (_c *SubscriptionPlanCreate) check() error {
 	if _, ok := _c.mutation.GroupID(); !ok {
 		return &ValidationError{Name: "group_id", err: errors.New(`ent: missing required field "SubscriptionPlan.group_id"`)}
+	}
+	if _, ok := _c.mutation.BonusGroupIds(); !ok {
+		return &ValidationError{Name: "bonus_group_ids", err: errors.New(`ent: missing required field "SubscriptionPlan.bonus_group_ids"`)}
 	}
 	if _, ok := _c.mutation.Name(); !ok {
 		return &ValidationError{Name: "name", err: errors.New(`ent: missing required field "SubscriptionPlan.name"`)}
@@ -362,6 +375,10 @@ func (_c *SubscriptionPlanCreate) createSpec() (*SubscriptionPlan, *sqlgraph.Cre
 	if value, ok := _c.mutation.GroupID(); ok {
 		_spec.SetField(subscriptionplan.FieldGroupID, field.TypeInt64, value)
 		_node.GroupID = value
+	}
+	if value, ok := _c.mutation.BonusGroupIds(); ok {
+		_spec.SetField(subscriptionplan.FieldBonusGroupIds, field.TypeJSON, value)
+		_node.BonusGroupIds = value
 	}
 	if value, ok := _c.mutation.Name(); ok {
 		_spec.SetField(subscriptionplan.FieldName, field.TypeString, value)
@@ -482,6 +499,18 @@ func (u *SubscriptionPlanUpsert) UpdateGroupID() *SubscriptionPlanUpsert {
 // AddGroupID adds v to the "group_id" field.
 func (u *SubscriptionPlanUpsert) AddGroupID(v int64) *SubscriptionPlanUpsert {
 	u.Add(subscriptionplan.FieldGroupID, v)
+	return u
+}
+
+// SetBonusGroupIds sets the "bonus_group_ids" field.
+func (u *SubscriptionPlanUpsert) SetBonusGroupIds(v []int64) *SubscriptionPlanUpsert {
+	u.Set(subscriptionplan.FieldBonusGroupIds, v)
+	return u
+}
+
+// UpdateBonusGroupIds sets the "bonus_group_ids" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsert) UpdateBonusGroupIds() *SubscriptionPlanUpsert {
+	u.SetExcluded(subscriptionplan.FieldBonusGroupIds)
 	return u
 }
 
@@ -722,6 +751,20 @@ func (u *SubscriptionPlanUpsertOne) AddGroupID(v int64) *SubscriptionPlanUpsertO
 func (u *SubscriptionPlanUpsertOne) UpdateGroupID() *SubscriptionPlanUpsertOne {
 	return u.Update(func(s *SubscriptionPlanUpsert) {
 		s.UpdateGroupID()
+	})
+}
+
+// SetBonusGroupIds sets the "bonus_group_ids" field.
+func (u *SubscriptionPlanUpsertOne) SetBonusGroupIds(v []int64) *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.SetBonusGroupIds(v)
+	})
+}
+
+// UpdateBonusGroupIds sets the "bonus_group_ids" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsertOne) UpdateBonusGroupIds() *SubscriptionPlanUpsertOne {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.UpdateBonusGroupIds()
 	})
 }
 
@@ -1157,6 +1200,20 @@ func (u *SubscriptionPlanUpsertBulk) AddGroupID(v int64) *SubscriptionPlanUpsert
 func (u *SubscriptionPlanUpsertBulk) UpdateGroupID() *SubscriptionPlanUpsertBulk {
 	return u.Update(func(s *SubscriptionPlanUpsert) {
 		s.UpdateGroupID()
+	})
+}
+
+// SetBonusGroupIds sets the "bonus_group_ids" field.
+func (u *SubscriptionPlanUpsertBulk) SetBonusGroupIds(v []int64) *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.SetBonusGroupIds(v)
+	})
+}
+
+// UpdateBonusGroupIds sets the "bonus_group_ids" field to the value that was provided on create.
+func (u *SubscriptionPlanUpsertBulk) UpdateBonusGroupIds() *SubscriptionPlanUpsertBulk {
+	return u.Update(func(s *SubscriptionPlanUpsert) {
+		s.UpdateBonusGroupIds()
 	})
 }
 

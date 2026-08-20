@@ -55,26 +55,28 @@ func (h *PaymentHandler) GetPlans(c *gin.Context) {
 	}
 	// Enrich plans with group platform for frontend color coding
 	type planWithPlatform struct {
-		ID                 int64              `json:"id"`
-		GroupID            int64              `json:"group_id"`
-		GroupPlatform      string             `json:"group_platform"`
-		GroupName          string             `json:"group_name"`
-		RateMultiplier     float64            `json:"rate_multiplier"`
-		PeakRateEnabled    bool               `json:"peak_rate_enabled"`
-		PeakStart          string             `json:"peak_start"`
-		PeakEnd            string             `json:"peak_end"`
-		PeakRateMultiplier float64            `json:"peak_rate_multiplier"`
-		ModelQuotaRatios   map[string]float64 `json:"model_quota_ratios"`
-		Name               string             `json:"name"`
-		Description        string             `json:"description"`
-		Price              float64            `json:"price"`
-		OriginalPrice      *float64           `json:"original_price,omitempty"`
-		ValidityDays       int                `json:"validity_days"`
-		ValidityUnit       string             `json:"validity_unit"`
-		Features           string             `json:"features"`
-		ProductName        string             `json:"product_name"`
-		ForSale            bool               `json:"for_sale"`
-		SortOrder          int                `json:"sort_order"`
+		ID                 int64                          `json:"id"`
+		GroupID            int64                          `json:"group_id"`
+		BonusGroupIDs      []int64                        `json:"bonus_group_ids"`
+		BonusGroups        []service.PlanBenefitGroupInfo `json:"bonus_groups"`
+		GroupPlatform      string                         `json:"group_platform"`
+		GroupName          string                         `json:"group_name"`
+		RateMultiplier     float64                        `json:"rate_multiplier"`
+		PeakRateEnabled    bool                           `json:"peak_rate_enabled"`
+		PeakStart          string                         `json:"peak_start"`
+		PeakEnd            string                         `json:"peak_end"`
+		PeakRateMultiplier float64                        `json:"peak_rate_multiplier"`
+		ModelQuotaRatios   map[string]float64             `json:"model_quota_ratios"`
+		Name               string                         `json:"name"`
+		Description        string                         `json:"description"`
+		Price              float64                        `json:"price"`
+		OriginalPrice      *float64                       `json:"original_price,omitempty"`
+		ValidityDays       int                            `json:"validity_days"`
+		ValidityUnit       string                         `json:"validity_unit"`
+		Features           string                         `json:"features"`
+		ProductName        string                         `json:"product_name"`
+		ForSale            bool                           `json:"for_sale"`
+		SortOrder          int                            `json:"sort_order"`
 	}
 	groupInfo := h.configService.GetGroupInfoMap(c.Request.Context(), plans)
 	result := make([]planWithPlatform, 0, len(plans))
@@ -82,6 +84,7 @@ func (h *PaymentHandler) GetPlans(c *gin.Context) {
 		gi := groupInfo[p.GroupID]
 		result = append(result, planWithPlatform{
 			ID: int64(p.ID), GroupID: p.GroupID,
+			BonusGroupIDs: append([]int64(nil), p.BonusGroupIds...), BonusGroups: service.PlanBenefitGroupInfos(p, groupInfo),
 			GroupPlatform: gi.Platform, GroupName: gi.Name,
 			RateMultiplier: gi.RateMultiplier, PeakRateEnabled: gi.PeakRateEnabled,
 			PeakStart: gi.PeakStart, PeakEnd: gi.PeakEnd, PeakRateMultiplier: gi.PeakRateMultiplier,
@@ -133,6 +136,7 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 		gi := groupInfo[p.GroupID]
 		planList = append(planList, checkoutPlan{
 			ID: int64(p.ID), GroupID: p.GroupID,
+			BonusGroupIDs: append([]int64(nil), p.BonusGroupIds...), BonusGroups: service.PlanBenefitGroupInfos(p, groupInfo),
 			GroupPlatform: gi.Platform, GroupName: gi.Name,
 			RateMultiplier:  gi.RateMultiplier,
 			PeakRateEnabled: gi.PeakRateEnabled, PeakStart: gi.PeakStart,
@@ -179,28 +183,30 @@ type checkoutInfoResponse struct {
 }
 
 type checkoutPlan struct {
-	ID                 int64              `json:"id"`
-	GroupID            int64              `json:"group_id"`
-	GroupPlatform      string             `json:"group_platform"`
-	GroupName          string             `json:"group_name"`
-	RateMultiplier     float64            `json:"rate_multiplier"`
-	PeakRateEnabled    bool               `json:"peak_rate_enabled"`
-	PeakStart          string             `json:"peak_start"`
-	PeakEnd            string             `json:"peak_end"`
-	PeakRateMultiplier float64            `json:"peak_rate_multiplier"`
-	DailyLimitUSD      *float64           `json:"daily_limit_usd"`
-	WeeklyLimitUSD     *float64           `json:"weekly_limit_usd"`
-	MonthlyLimitUSD    *float64           `json:"monthly_limit_usd"`
-	ModelQuotaRatios   map[string]float64 `json:"model_quota_ratios"`
-	ModelScopes        []string           `json:"supported_model_scopes"`
-	Name               string             `json:"name"`
-	Description        string             `json:"description"`
-	Price              float64            `json:"price"`
-	OriginalPrice      *float64           `json:"original_price,omitempty"`
-	ValidityDays       int                `json:"validity_days"`
-	ValidityUnit       string             `json:"validity_unit"`
-	Features           []string           `json:"features"`
-	ProductName        string             `json:"product_name"`
+	ID                 int64                          `json:"id"`
+	GroupID            int64                          `json:"group_id"`
+	BonusGroupIDs      []int64                        `json:"bonus_group_ids"`
+	BonusGroups        []service.PlanBenefitGroupInfo `json:"bonus_groups"`
+	GroupPlatform      string                         `json:"group_platform"`
+	GroupName          string                         `json:"group_name"`
+	RateMultiplier     float64                        `json:"rate_multiplier"`
+	PeakRateEnabled    bool                           `json:"peak_rate_enabled"`
+	PeakStart          string                         `json:"peak_start"`
+	PeakEnd            string                         `json:"peak_end"`
+	PeakRateMultiplier float64                        `json:"peak_rate_multiplier"`
+	DailyLimitUSD      *float64                       `json:"daily_limit_usd"`
+	WeeklyLimitUSD     *float64                       `json:"weekly_limit_usd"`
+	MonthlyLimitUSD    *float64                       `json:"monthly_limit_usd"`
+	ModelQuotaRatios   map[string]float64             `json:"model_quota_ratios"`
+	ModelScopes        []string                       `json:"supported_model_scopes"`
+	Name               string                         `json:"name"`
+	Description        string                         `json:"description"`
+	Price              float64                        `json:"price"`
+	OriginalPrice      *float64                       `json:"original_price,omitempty"`
+	ValidityDays       int                            `json:"validity_days"`
+	ValidityUnit       string                         `json:"validity_unit"`
+	Features           []string                       `json:"features"`
+	ProductName        string                         `json:"product_name"`
 }
 
 // parseFeatures splits a newline-separated features string into a string slice.
@@ -605,25 +611,26 @@ func (h *PaymentHandler) VerifyOrder(c *gin.Context) {
 // proves possession of the checkout session, so the result keeps the legacy
 // frontend contract needed by payment result pages.
 type PublicOrderResult struct {
-	ID                  int64      `json:"id"`
-	OutTradeNo          string     `json:"out_trade_no"`
-	Amount              float64    `json:"amount"`
-	PayAmount           float64    `json:"pay_amount"`
-	FeeRate             float64    `json:"fee_rate"`
-	Currency            string     `json:"currency"`
-	PaymentType         string     `json:"payment_type"`
-	OrderType           string     `json:"order_type"`
-	Status              string     `json:"status"`
-	CreatedAt           time.Time  `json:"created_at"`
-	ExpiresAt           time.Time  `json:"expires_at"`
-	PaidAt              *time.Time `json:"paid_at,omitempty"`
-	CompletedAt         *time.Time `json:"completed_at,omitempty"`
-	RefundAmount        float64    `json:"refund_amount"`
-	RefundReason        *string    `json:"refund_reason,omitempty"`
-	RefundRequestedAt   *time.Time `json:"refund_requested_at,omitempty"`
-	RefundRequestedBy   *string    `json:"refund_requested_by,omitempty"`
-	RefundRequestReason *string    `json:"refund_request_reason,omitempty"`
-	PlanID              *int64     `json:"plan_id,omitempty"`
+	ID                   int64      `json:"id"`
+	OutTradeNo           string     `json:"out_trade_no"`
+	Amount               float64    `json:"amount"`
+	PayAmount            float64    `json:"pay_amount"`
+	FeeRate              float64    `json:"fee_rate"`
+	Currency             string     `json:"currency"`
+	PaymentType          string     `json:"payment_type"`
+	OrderType            string     `json:"order_type"`
+	Status               string     `json:"status"`
+	CreatedAt            time.Time  `json:"created_at"`
+	ExpiresAt            time.Time  `json:"expires_at"`
+	PaidAt               *time.Time `json:"paid_at,omitempty"`
+	CompletedAt          *time.Time `json:"completed_at,omitempty"`
+	RefundAmount         float64    `json:"refund_amount"`
+	RefundReason         *string    `json:"refund_reason,omitempty"`
+	RefundRequestedAt    *time.Time `json:"refund_requested_at,omitempty"`
+	RefundRequestedBy    *string    `json:"refund_requested_by,omitempty"`
+	RefundRequestReason  *string    `json:"refund_request_reason,omitempty"`
+	PlanID               *int64     `json:"plan_id,omitempty"`
+	SubscriptionGroupIDs []int64    `json:"subscription_group_ids,omitempty"`
 }
 
 // PublicOrderVerifyResult is returned by the legacy anonymous out_trade_no
@@ -640,25 +647,26 @@ type PublicOrderVerifyResult struct {
 
 func buildPublicOrderResult(order *dbent.PaymentOrder) PublicOrderResult {
 	return PublicOrderResult{
-		ID:                  order.ID,
-		OutTradeNo:          order.OutTradeNo,
-		Amount:              order.Amount,
-		PayAmount:           order.PayAmount,
-		FeeRate:             order.FeeRate,
-		Currency:            service.PaymentOrderCurrency(order),
-		PaymentType:         order.PaymentType,
-		OrderType:           order.OrderType,
-		Status:              order.Status,
-		CreatedAt:           order.CreatedAt,
-		ExpiresAt:           order.ExpiresAt,
-		PaidAt:              order.PaidAt,
-		CompletedAt:         order.CompletedAt,
-		RefundAmount:        order.RefundAmount,
-		RefundReason:        order.RefundReason,
-		RefundRequestedAt:   order.RefundRequestedAt,
-		RefundRequestedBy:   order.RefundRequestedBy,
-		RefundRequestReason: order.RefundRequestReason,
-		PlanID:              order.PlanID,
+		ID:                   order.ID,
+		OutTradeNo:           order.OutTradeNo,
+		Amount:               order.Amount,
+		PayAmount:            order.PayAmount,
+		FeeRate:              order.FeeRate,
+		Currency:             service.PaymentOrderCurrency(order),
+		PaymentType:          order.PaymentType,
+		OrderType:            order.OrderType,
+		Status:               order.Status,
+		CreatedAt:            order.CreatedAt,
+		ExpiresAt:            order.ExpiresAt,
+		PaidAt:               order.PaidAt,
+		CompletedAt:          order.CompletedAt,
+		RefundAmount:         order.RefundAmount,
+		RefundReason:         order.RefundReason,
+		RefundRequestedAt:    order.RefundRequestedAt,
+		RefundRequestedBy:    order.RefundRequestedBy,
+		RefundRequestReason:  order.RefundRequestReason,
+		PlanID:               order.PlanID,
+		SubscriptionGroupIDs: service.PaymentOrderSubscriptionGroupIDs(order),
 	}
 }
 

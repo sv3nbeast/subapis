@@ -37,6 +37,31 @@
         </div>
       </div>
 
+      <div>
+        <label class="input-label">{{ t('payment.admin.bonusGroups') }}</label>
+        <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.bonusGroupsHint') }}</p>
+        <div v-if="bonusGroupOptions.length" class="max-h-44 space-y-2 overflow-y-auto rounded-lg border border-gray-200 p-2 dark:border-dark-600">
+          <label
+            v-for="group in bonusGroupOptions"
+            :key="group.id"
+            class="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 hover:bg-gray-50 dark:hover:bg-dark-700"
+          >
+            <input
+              type="checkbox"
+              :data-bonus-group-id="group.id"
+              :checked="planForm.bonus_group_ids.includes(group.id)"
+              class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              @change="toggleBonusGroup(group.id)"
+            />
+            <GroupBadge :name="group.name" :platform="group.platform" :rate-multiplier="group.rate_multiplier" />
+            <span class="ml-auto text-xs text-gray-500 dark:text-gray-400">{{ bonusGroupQuota(group) }}</span>
+          </label>
+        </div>
+        <p v-else class="rounded-lg border border-dashed border-gray-200 px-3 py-2 text-xs text-gray-400 dark:border-dark-600">
+          {{ t('payment.admin.noBonusGroups') }}
+        </p>
+      </div>
+
       <div><label class="input-label">{{ t('payment.admin.planDescription') }} <span class="text-red-500">*</span></label><textarea v-model="planForm.description" rows="2" class="input" required></textarea></div>
       <div class="grid grid-cols-2 gap-4">
         <div>
@@ -126,7 +151,7 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 const saving = ref(false)
-const planForm = reactive({ name: '', group_id: null as number | null, description: '', price: 0, original_price: 0, currency: '', validity_days: 30, validity_unit: 'days', sort_order: 0, for_sale: true })
+const planForm = reactive({ name: '', group_id: null as number | null, bonus_group_ids: [] as number[], description: '', price: 0, original_price: 0, currency: '', validity_days: 30, validity_unit: 'days', sort_order: 0, for_sale: true })
 const planFeaturesText = ref('')
 
 const validityUnitOptions = computed(() => [
@@ -148,6 +173,28 @@ const groupOptions = computed(() =>
 const selectedGroupInfo = computed(() => {
   if (!planForm.group_id) return null
   return props.groups.find(g => g.id === planForm.group_id) || null
+})
+
+const bonusGroupOptions = computed(() =>
+  props.groups.filter(group => group.subscription_type === 'subscription' && group.id !== planForm.group_id),
+)
+
+function toggleBonusGroup(groupID: number) {
+  const index = planForm.bonus_group_ids.indexOf(groupID)
+  if (index >= 0) planForm.bonus_group_ids.splice(index, 1)
+  else planForm.bonus_group_ids.push(groupID)
+}
+
+function bonusGroupQuota(group: AdminGroup): string {
+  if (group.monthly_limit_usd != null) return t('payment.admin.bonusMonthlyQuota', { amount: group.monthly_limit_usd })
+  if (group.weekly_limit_usd != null) return t('payment.admin.bonusWeeklyQuota', { amount: group.weekly_limit_usd })
+  if (group.daily_limit_usd != null) return t('payment.admin.bonusDailyQuota', { amount: group.daily_limit_usd })
+  return t('payment.admin.unlimited')
+}
+
+watch(() => planForm.group_id, (groupID) => {
+  if (groupID == null) return
+  planForm.bonus_group_ids = planForm.bonus_group_ids.filter(id => id !== groupID)
 })
 
 function roundCnyAmount(value: number): number {
@@ -179,10 +226,10 @@ const subscriptionCnyPreview = computed(() => {
 watch(() => props.show, (visible) => {
   if (!visible) return
   if (props.plan) {
-    Object.assign(planForm, { name: props.plan.name, group_id: props.plan.group_id, description: props.plan.description, price: props.plan.price, original_price: props.plan.original_price || 0, currency: props.plan.currency || '', validity_days: props.plan.validity_days, validity_unit: props.plan.validity_unit || 'days', sort_order: props.plan.sort_order || 0, for_sale: props.plan.for_sale })
+    Object.assign(planForm, { name: props.plan.name, group_id: props.plan.group_id, bonus_group_ids: [...(props.plan.bonus_group_ids || [])], description: props.plan.description, price: props.plan.price, original_price: props.plan.original_price || 0, currency: props.plan.currency || '', validity_days: props.plan.validity_days, validity_unit: props.plan.validity_unit || 'days', sort_order: props.plan.sort_order || 0, for_sale: props.plan.for_sale })
     planFeaturesText.value = (props.plan.features || []).join('\n')
   } else {
-    Object.assign(planForm, { name: '', group_id: null, description: '', price: 0, original_price: 0, currency: '', validity_days: 30, validity_unit: 'days', sort_order: 0, for_sale: true })
+    Object.assign(planForm, { name: '', group_id: null, bonus_group_ids: [], description: '', price: 0, original_price: 0, currency: '', validity_days: 30, validity_unit: 'days', sort_order: 0, for_sale: true })
     planFeaturesText.value = ''
   }
 })
@@ -193,6 +240,7 @@ function buildPlanPayload() {
   return {
     name: planForm.name,
     group_id: planForm.group_id,
+    bonus_group_ids: [...planForm.bonus_group_ids],
     description: planForm.description,
     price: planForm.price,
     original_price: planForm.original_price || 0,

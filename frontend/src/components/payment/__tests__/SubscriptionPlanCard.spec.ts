@@ -22,6 +22,8 @@ const i18n = createI18n({
           quota: "Quota",
           rate: "Rate",
           unlimited: "Unlimited",
+          bonusGroups: "Included bonus subscriptions",
+          bonusMonthlyQuota: "${amount}/month",
         },
         subscribeNow: "Subscribe now",
       },
@@ -74,6 +76,24 @@ describe("SubscriptionPlanCard", () => {
 
     expect(text).toContain("claude-fable-5");
     expect(text).toContain("50%");
+  });
+
+  it("shows every included bonus subscription and its quota", () => {
+    const text = mountPlanCard("composite", {
+      bonus_group_ids: [36],
+      bonus_groups: [{
+        id: 36,
+        name: "Claude Opus 4.6 bonus",
+        platform: "anthropic",
+        monthly_limit_usd: 500,
+      }],
+    }).text();
+
+    // This suite runs vue-i18n's runtime-only build, so translated messages are
+    // represented by their keys (see the validity-unit test below).
+    expect(text).toContain("payment.planCard.bonusGroups");
+    expect(text).toContain("Claude Opus 4.6 bonus");
+    expect(text).toContain("payment.planCard.bonusMonthlyQuota");
   });
 
   // #4607：管理端保存的单位是复数（months/weeks），此前用户侧只匹配单数

@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,18 +14,19 @@ import (
 func TestSanitizeAdminPaymentOrderForResponseAddsCurrency(t *testing.T) {
 	now := time.Now()
 	order := &dbent.PaymentOrder{
-		ID:          1,
-		UserID:      2,
-		Amount:      100,
-		PayAmount:   108,
-		FeeRate:     8,
-		OutTradeNo:  "sub2_202606250001",
-		PaymentType: "stripe",
-		OrderType:   "subscription",
-		Status:      "COMPLETED",
-		ExpiresAt:   now,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:                   1,
+		UserID:               2,
+		Amount:               100,
+		PayAmount:            108,
+		FeeRate:              8,
+		OutTradeNo:           "sub2_202606250001",
+		PaymentType:          "stripe",
+		OrderType:            "subscription",
+		Status:               "COMPLETED",
+		ExpiresAt:            now,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+		SubscriptionGroupIds: []int64{9, 36},
 		ProviderSnapshot: map[string]any{
 			"schema_version": 2,
 			"currency":       "USD",
@@ -37,6 +39,9 @@ func TestSanitizeAdminPaymentOrderForResponseAddsCurrency(t *testing.T) {
 	}
 	if got.Currency != "USD" {
 		t.Fatalf("expected currency USD, got %q", got.Currency)
+	}
+	if strings.Join([]string{strconv.FormatInt(got.SubscriptionGroupIDs[0], 10), strconv.FormatInt(got.SubscriptionGroupIDs[1], 10)}, ",") != "9,36" {
+		t.Fatalf("expected entitlement snapshot in response, got %#v", got.SubscriptionGroupIDs)
 	}
 
 	body, err := json.Marshal(got)
@@ -53,20 +58,21 @@ func TestAdminSubscriptionPlansForResponseIncludesCompositeGroupInfo(t *testing.
 	now := time.Now()
 	plans := []*dbent.SubscriptionPlan{
 		{
-			ID:           11,
-			GroupID:      7,
-			Name:         "All models",
-			Description:  "Composite access",
-			Price:        19.99,
-			Currency:     "CNY",
-			ValidityDays: 30,
-			ValidityUnit: "days",
-			Features:     "OpenAI\nClaude\nGemini\nGrok",
-			ProductName:  "Sub2API",
-			ForSale:      true,
-			SortOrder:    1,
-			CreatedAt:    now,
-			UpdatedAt:    now,
+			ID:            11,
+			GroupID:       7,
+			BonusGroupIds: []int64{36},
+			Name:          "All models",
+			Description:   "Composite access",
+			Price:         19.99,
+			Currency:      "CNY",
+			ValidityDays:  30,
+			ValidityUnit:  "days",
+			Features:      "OpenAI\nClaude\nGemini\nGrok",
+			ProductName:   "Sub2API",
+			ForSale:       true,
+			SortOrder:     1,
+			CreatedAt:     now,
+			UpdatedAt:     now,
 		},
 	}
 	groupInfo := map[int64]service.PlanGroupInfo{
@@ -76,6 +82,11 @@ func TestAdminSubscriptionPlansForResponseIncludesCompositeGroupInfo(t *testing.
 			RateMultiplier: 1.5,
 			WeeklyLimitUSD: &weekly,
 			ModelScopes:    []string{"openai", "claude", "gemini", "grok"},
+		},
+		36: {
+			Platform:        service.PlatformAnthropic,
+			Name:            "Max bonus Claude",
+			MonthlyLimitUSD: func() *float64 { value := 500.0; return &value }(),
 		},
 	}
 
@@ -89,6 +100,9 @@ func TestAdminSubscriptionPlansForResponseIncludesCompositeGroupInfo(t *testing.
 	}
 	if got[0].GroupName != "Bucket 2 composite" {
 		t.Fatalf("expected group name to be included, got %q", got[0].GroupName)
+	}
+	if len(got[0].BonusGroups) != 1 || got[0].BonusGroups[0].ID != 36 || got[0].BonusGroups[0].Name != "Max bonus Claude" {
+		t.Fatalf("expected bonus group summary, got %#v", got[0].BonusGroups)
 	}
 	if got[0].WeeklyLimitUSD == nil || *got[0].WeeklyLimitUSD != weekly {
 		t.Fatalf("expected weekly limit to be included, got %#v", got[0].WeeklyLimitUSD)

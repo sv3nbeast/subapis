@@ -71,6 +71,50 @@ func validatePlanPatch(req UpdatePlanRequest) error {
 	return nil
 }
 
+func normalizePlanBonusGroupIDs(primaryGroupID int64, raw []int64) ([]int64, error) {
+	if len(raw) == 0 {
+		return []int64{}, nil
+	}
+	normalized := make([]int64, 0, len(raw))
+	seen := make(map[int64]struct{}, len(raw))
+	for _, groupID := range raw {
+		if groupID <= 0 {
+			return nil, infraerrors.BadRequest("PLAN_BONUS_GROUP_INVALID", "bonus group IDs must be positive")
+		}
+		if groupID == primaryGroupID {
+			return nil, infraerrors.BadRequest("PLAN_BONUS_GROUP_DUPLICATES_PRIMARY", "the primary group cannot also be a bonus group")
+		}
+		if _, exists := seen[groupID]; exists {
+			return nil, infraerrors.BadRequest("PLAN_BONUS_GROUP_DUPLICATE", "bonus group IDs must be unique")
+		}
+		seen[groupID] = struct{}{}
+		normalized = append(normalized, groupID)
+	}
+	return normalized, nil
+}
+
+func (s *PaymentConfigService) validatePlanEntitlementGroups(ctx context.Context, primaryGroupID int64, bonusGroupIDs []int64) error {
+	groupIDs := append([]int64{primaryGroupID}, bonusGroupIDs...)
+	groups, err := s.entClient.Group.Query().Where(group.IDIn(groupIDs...)).All(ctx)
+	if err != nil {
+		return fmt.Errorf("load plan entitlement groups: %w", err)
+	}
+	byID := make(map[int64]*dbent.Group, len(groups))
+	for _, entitlementGroup := range groups {
+		byID[entitlementGroup.ID] = entitlementGroup
+	}
+	for _, groupID := range groupIDs {
+		entitlementGroup := byID[groupID]
+		if entitlementGroup == nil {
+			return infraerrors.BadRequest("PLAN_GROUP_NOT_FOUND", fmt.Sprintf("subscription group %d does not exist", groupID))
+		}
+		if entitlementGroup.SubscriptionType != SubscriptionTypeSubscription {
+			return infraerrors.BadRequest("PLAN_GROUP_TYPE_MISMATCH", fmt.Sprintf("group %d is not a subscription group", groupID))
+		}
+	}
+	return nil
+}
+
 // --- Plan CRUD ---
 
 // PlanGroupInfo holds the group details needed for subscription plan display.
@@ -89,6 +133,34 @@ type PlanGroupInfo struct {
 	ModelScopes        []string           `json:"supported_model_scopes"`
 }
 
+// PlanBenefitGroupInfo is the public/admin summary for a bonus subscription group.
+type PlanBenefitGroupInfo struct {
+	ID              int64    `json:"id"`
+	Platform        string   `json:"platform"`
+	Name            string   `json:"name"`
+	DailyLimitUSD   *float64 `json:"daily_limit_usd"`
+	WeeklyLimitUSD  *float64 `json:"weekly_limit_usd"`
+	MonthlyLimitUSD *float64 `json:"monthly_limit_usd"`
+}
+
+func PlanBenefitGroupInfos(plan *dbent.SubscriptionPlan, groupInfo map[int64]PlanGroupInfo) []PlanBenefitGroupInfo {
+	if plan == nil || len(plan.BonusGroupIds) == 0 {
+		return []PlanBenefitGroupInfo{}
+	}
+	benefits := make([]PlanBenefitGroupInfo, 0, len(plan.BonusGroupIds))
+	for _, groupID := range plan.BonusGroupIds {
+		info, exists := groupInfo[groupID]
+		if !exists {
+			continue
+		}
+		benefits = append(benefits, PlanBenefitGroupInfo{
+			ID: groupID, Platform: info.Platform, Name: info.Name,
+			DailyLimitUSD: info.DailyLimitUSD, WeeklyLimitUSD: info.WeeklyLimitUSD, MonthlyLimitUSD: info.MonthlyLimitUSD,
+		})
+	}
+	return benefits
+}
+
 // GetGroupInfoMap returns a map of group_id → PlanGroupInfo for the given plans.
 func (s *PaymentConfigService) GetGroupInfoMap(ctx context.Context, plans []*dbent.SubscriptionPlan) map[int64]PlanGroupInfo {
 	ids := make([]int64, 0, len(plans))
@@ -97,6 +169,12 @@ func (s *PaymentConfigService) GetGroupInfoMap(ctx context.Context, plans []*dbe
 		if !seen[p.GroupID] {
 			seen[p.GroupID] = true
 			ids = append(ids, p.GroupID)
+		}
+		for _, bonusGroupID := range p.BonusGroupIds {
+			if !seen[bonusGroupID] {
+				seen[bonusGroupID] = true
+				ids = append(ids, bonusGroupID)
+			}
 		}
 	}
 	if len(ids) == 0 {
@@ -142,8 +220,15 @@ func (s *PaymentConfigService) CreatePlan(ctx context.Context, req CreatePlanReq
 	if err != nil {
 		return nil, err
 	}
+	bonusGroupIDs, err := normalizePlanBonusGroupIDs(req.GroupID, req.BonusGroupIDs)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validatePlanEntitlementGroups(ctx, req.GroupID, bonusGroupIDs); err != nil {
+		return nil, err
+	}
 	b := s.entClient.SubscriptionPlan.Create().
-		SetGroupID(req.GroupID).SetName(req.Name).SetDescription(req.Description).
+		SetGroupID(req.GroupID).SetBonusGroupIds(bonusGroupIDs).SetName(req.Name).SetDescription(req.Description).
 		SetPrice(req.Price).SetCurrency(currency).SetValidityDays(req.ValidityDays).SetValidityUnit(req.ValidityUnit).
 		SetFeatures(req.Features).SetProductName(req.ProductName).
 		SetForSale(req.ForSale).SetSortOrder(req.SortOrder)
@@ -161,8 +246,33 @@ func (s *PaymentConfigService) UpdatePlan(ctx context.Context, id int64, req Upd
 		return nil, err
 	}
 	u := s.entClient.SubscriptionPlan.UpdateOneID(id)
+	var bonusGroupIDs []int64
+	if req.GroupID != nil || req.BonusGroupIDs != nil {
+		existing, err := s.GetPlan(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		primaryGroupID := existing.GroupID
+		if req.GroupID != nil {
+			primaryGroupID = *req.GroupID
+		}
+		bonusGroupIDs = existing.BonusGroupIds
+		if req.BonusGroupIDs != nil {
+			bonusGroupIDs = *req.BonusGroupIDs
+		}
+		bonusGroupIDs, err = normalizePlanBonusGroupIDs(primaryGroupID, bonusGroupIDs)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.validatePlanEntitlementGroups(ctx, primaryGroupID, bonusGroupIDs); err != nil {
+			return nil, err
+		}
+	}
 	if req.GroupID != nil {
 		u.SetGroupID(*req.GroupID)
+	}
+	if req.BonusGroupIDs != nil {
+		u.SetBonusGroupIds(bonusGroupIDs)
 	}
 	if req.Name != nil {
 		u.SetName(*req.Name)

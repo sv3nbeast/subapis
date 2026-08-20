@@ -31,6 +31,10 @@ func (SubscriptionPlan) Annotations() []schema.Annotation {
 func (SubscriptionPlan) Fields() []ent.Field {
 	return []ent.Field{
 		field.Int64("group_id"),
+		field.JSON("bonus_group_ids", []int64{}).
+			Default([]int64{}).
+			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
+			Comment("附赠订阅分组 ID 列表；有效期跟随主订阅"),
 		field.String("name").
 			MaxLen(100).
 			NotEmpty(),
