@@ -14,6 +14,7 @@ import (
 // contract and passes the exact upstream bytes through without rewriting them.
 type providerThinkingSignature struct {
 	WireModel          string
+	ChannelVersion     uint64
 	ChannelKind        uint64
 	ContextID          string
 	SignedPayloadBytes int
@@ -104,8 +105,16 @@ func validateThinkingSignatureEnvelope(value string, requireKiroMarker bool) (pr
 	if err != nil {
 		return providerThinkingSignature{}, fmt.Errorf("parse provider thinking signature channel: %w", err)
 	}
-	if err := requireProviderSignatureVarint(channel, 1, 16, "channel version"); err != nil {
+	channelVersion, err := requireProviderSignatureField(channel, 1, protowire.VarintType, "channel version")
+	if err != nil {
 		return providerThinkingSignature{}, err
+	}
+	// Amazon Q currently emits channel version 17 while older, still valid
+	// responses use version 16. Keep the allowlist explicit: the signature is
+	// provider-owned opaque data, so an unknown future version must be reviewed
+	// instead of being accepted as structurally equivalent by accident.
+	if channelVersion.varint != 16 && channelVersion.varint != 17 {
+		return providerThinkingSignature{}, fmt.Errorf("provider thinking signature channel version is %d, want 16 or 17", channelVersion.varint)
 	}
 	if requireKiroMarker {
 		if err := requireProviderSignatureVarint(channel, 2, 1, "provider-native marker"); err != nil {
@@ -153,6 +162,7 @@ func validateThinkingSignatureEnvelope(value string, requireKiroMarker bool) (pr
 
 	return providerThinkingSignature{
 		WireModel:          wireModel,
+		ChannelVersion:     channelVersion.varint,
 		ChannelKind:        channelKindField.varint,
 		ContextID:          string(contextID),
 		SignedPayloadBytes: len(signedPayload),

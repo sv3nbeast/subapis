@@ -752,7 +752,7 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 	}
 
 	messages := gjson.GetBytes(claudeBody, "messages")
-	inlineSystem, filteredMessages := extractInlineSystemPrompts(messages)
+	normalizedMessages := normalizeInlineSystemMessages(messages)
 	thinking := deriveThinkingDirective(claudeBody, headers)
 	if hasForcedClaudeToolChoice(claudeBody) {
 		thinking = nil
@@ -777,13 +777,6 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 		structuredOutputHint,
 	)
 	baseSystem := extractSystemPrompt(claudeBody)
-	if inlineSystem != "" {
-		if strings.TrimSpace(baseSystem) != "" {
-			baseSystem = baseSystem + "\n\n" + inlineSystem
-		} else {
-			baseSystem = inlineSystem
-		}
-	}
 	systemPrompt := buildInjectedSystemPrompt(baseSystem, thinking, toolChoiceHint, modelID)
 	if !options.InjectThinkingSystemPrompt {
 		systemPrompt = buildInjectedSystemPrompt(baseSystem, nil, toolChoiceHint, modelID)
@@ -793,7 +786,7 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 		envState = parseKiroEnvState(baseSystem)
 	}
 
-	history, currentUserMsg, currentToolResults := processMessages(filteredMessages, modelID, normalizeOrigin(origin), &requestCtx)
+	history, currentUserMsg, currentToolResults := processMessages(normalizedMessages, modelID, normalizeOrigin(origin), &requestCtx)
 	history = prependSystemHistory(history, systemPrompt, modelID, normalizeOrigin(origin))
 	var tools gjson.Result
 	if !isToolChoiceNone(claudeBody) {
@@ -890,7 +883,7 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 		}
 	}
 
-	conversationID := buildKiroConversationID(modelID, systemPrompt, firstKiroConversationAnchor(filteredMessages))
+	conversationID := buildKiroConversationID(modelID, systemPrompt, firstKiroConversationAnchor(normalizedMessages))
 
 	payload := KiroPayload{
 		ConversationState: KiroConversationState{
@@ -2166,28 +2159,44 @@ func extractTextFromContentBlocks(content gjson.Result) string {
 	return content.String()
 }
 
-// extractInlineSystemPrompts 从 messages 中提取所有 role=="system" 的中途消息文本，
-// 返回拼接后的 system 文本与剔除 system 后（顺序保留）的消息切片。
-// Claude 桌面版 beta mid-conversation-system-2026-04-07 会在 messages 中插入 system 消息，
-// Kiro/CodeWhisperer 不支持中途 system，故在此提取并折叠进顶层 systemPrompt。
-func extractInlineSystemPrompts(messages gjson.Result) (string, []gjson.Result) {
+// normalizeInlineSystemMessages 把 Claude Desktop beta
+// mid-conversation-system-2026-04-07 插入的 role=="system" 消息就地改成 user。
+//
+// Kiro/CodeWhisperer 没有中途 system 角色。历史实现把所有中途 system 全量上提到
+// 顶层提示；长会话压缩摘要会因此形成超大的 priming 消息，使 Amazon Q 在返回首个
+// 语义事件前失败。保留原位置和完整 content 可避免顶层提示持续膨胀，也比移到会话开头
+// 更贴近中途指令的时序。空 content 直接丢弃，避免生成无效的空 user 消息。
+func normalizeInlineSystemMessages(messages gjson.Result) []gjson.Result {
 	arr := messages.Array()
-	var sb strings.Builder
-	filtered := make([]gjson.Result, 0, len(arr))
+	normalized := make([]gjson.Result, 0, len(arr))
 	for _, msg := range arr {
 		if msg.Get("role").String() == "system" {
-			text := strings.TrimSpace(extractTextFromContentBlocks(msg.Get("content")))
-			if text != "" {
-				if sb.Len() > 0 {
-					_, _ = sb.WriteString("\n\n")
-				}
-				_, _ = sb.WriteString(text)
+			content := msg.Get("content")
+			if inlineSystemContentIsEmpty(content) {
+				continue
 			}
+			// processMessages only consumes role and content. Rebuild that minimal
+			// envelope around the exact raw content, avoiding a general JSON rewrite
+			// here and retaining non-text blocks for normal message processing.
+			normalized = append(normalized, gjson.Parse(`{"role":"user","content":`+content.Raw+`}`))
 			continue
 		}
-		filtered = append(filtered, msg)
+		normalized = append(normalized, msg)
 	}
-	return sb.String(), filtered
+	return normalized
+}
+
+func inlineSystemContentIsEmpty(content gjson.Result) bool {
+	if !content.Exists() || content.Type == gjson.Null {
+		return true
+	}
+	if content.Type == gjson.String {
+		return strings.TrimSpace(content.String()) == ""
+	}
+	if content.IsArray() {
+		return len(content.Array()) == 0
+	}
+	return false
 }
 
 func deriveThinkingDirective(body []byte, headers http.Header) *thinkingDirective {

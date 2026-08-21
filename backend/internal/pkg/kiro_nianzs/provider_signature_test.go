@@ -14,9 +14,23 @@ func TestValidateProviderThinkingSignatureAcceptsNativeKiroEnvelope(t *testing.T
 	metadata, err := validateProviderThinkingSignature(signature)
 	require.NoError(t, err)
 	require.Equal(t, "claude-quince", metadata.WireModel)
+	require.Equal(t, uint64(16), metadata.ChannelVersion)
 	require.Zero(t, metadata.ChannelKind)
 	require.Equal(t, "015911059195", metadata.ContextID)
 	require.Equal(t, 128, metadata.SignedPayloadBytes)
+}
+
+func TestValidateProviderThinkingSignatureAcceptsCurrentChannelVersion17(t *testing.T) {
+	signature := providerThinkingSignatureFixtureWithVersion(t, true, 17)
+
+	metadata, err := validateProviderThinkingSignature(signature)
+	require.NoError(t, err)
+	require.Equal(t, uint64(17), metadata.ChannelVersion)
+}
+
+func TestValidateProviderThinkingSignatureRejectsUnknownChannelVersion(t *testing.T) {
+	_, err := validateProviderThinkingSignature(providerThinkingSignatureFixtureWithVersion(t, true, 18))
+	require.ErrorContains(t, err, "channel version is 18, want 16 or 17")
 }
 
 func TestValidateProviderThinkingSignatureRejectsFormerLocalFallbackShape(t *testing.T) {
@@ -41,6 +55,11 @@ func providerThinkingSignatureFixtureWithOuterMarker(t *testing.T) string {
 
 func providerThinkingSignatureFixture(t *testing.T, providerNative bool) string {
 	t.Helper()
+	return providerThinkingSignatureFixtureWithVersion(t, providerNative, 16)
+}
+
+func providerThinkingSignatureFixtureWithVersion(t *testing.T, providerNative bool, channelVersion uint64) string {
+	t.Helper()
 	appendVarint := func(dst []byte, field protowire.Number, value uint64) []byte {
 		dst = protowire.AppendTag(dst, field, protowire.VarintType)
 		return protowire.AppendVarint(dst, value)
@@ -57,7 +76,7 @@ func providerThinkingSignatureFixture(t *testing.T, providerNative bool) string 
 		return result
 	}
 
-	channel := appendVarint(nil, 1, 16)
+	channel := appendVarint(nil, 1, channelVersion)
 	if providerNative {
 		channel = appendVarint(channel, 2, 1)
 	}

@@ -2660,7 +2660,7 @@ func TestStreamEventStreamAsAnthropicThinkingOnlyResponse(t *testing.T) {
 }
 
 func TestStreamEventStreamAsAnthropicThinkingAndTextFollowCanonicalSSELifecycle(t *testing.T) {
-	providerSignature := providerThinkingSignatureFixture(t, true)
+	providerSignature := providerThinkingSignatureFixtureWithVersion(t, true, 17)
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
 		"reasoningContentEvent": map[string]any{"text": "inspect the request", "signature": providerSignature},
@@ -2988,7 +2988,7 @@ func TestStreamEventStreamAsAnthropicPassesThroughProviderThinkingSignature(t *t
 }
 
 func TestParseNonStreamingEventStreamPassesThroughProviderThinkingSignature(t *testing.T) {
-	providerSignature := providerThinkingSignatureFixture(t, true)
+	providerSignature := providerThinkingSignatureFixtureWithVersion(t, true, 17)
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
 		"reasoningContentEvent": map[string]any{
@@ -4554,9 +4554,11 @@ func TestBuildKiroPayloadTrailingInlineSystemPreservesCurrentUserAndTools(t *tes
 	require.NoError(t, err)
 	payload := result.Payload
 
-	require.Equal(t, "real question", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
+	current := gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String()
+	require.Contains(t, current, "real question")
+	require.Contains(t, current, "SKILL LIST REMINDER")
 	require.Equal(t, int64(2), gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.#").Int())
-	require.Contains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "SKILL LIST REMINDER")
+	require.NotContains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "SKILL LIST REMINDER")
 }
 
 func TestBuildKiroPayloadMidConversationSystemMergesAndKeepsAlternation(t *testing.T) {
@@ -4573,12 +4575,12 @@ func TestBuildKiroPayloadMidConversationSystemMergesAndKeepsAlternation(t *testi
 	require.NoError(t, err)
 	payload := result.Payload
 
-	// alpha 与 bravo 过滤 system 后相邻，应被合并为当前消息
+	// system 就地转成 user 后与相邻 user 合并，时序和内容均保留。
 	current := gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String()
 	require.Contains(t, current, "alpha")
+	require.Contains(t, current, "MID NOTE")
 	require.Contains(t, current, "bravo")
-	// MID NOTE 折叠进前置注入
-	require.Contains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "MID NOTE")
+	require.NotContains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "MID NOTE")
 	// history 中不应出现裸 system 角色
 	for _, msg := range gjson.GetBytes(payload, "conversationState.history").Array() {
 		require.NotEqual(t, "system", msg.Get("userInputMessage.role").String())
@@ -4590,7 +4592,10 @@ func TestBuildKiroPayloadInlineSystemBlockArrayExtracted(t *testing.T) {
 		"model":"claude-sonnet-4-5",
 		"messages":[
 			{"role":"user","content":"hi"},
-			{"role":"system","content":[{"type":"text","text":"BLOCK NOTE"}]}
+			{"role":"system","content":[
+				{"type":"text","text":"BLOCK NOTE"},
+				{"type":"image","source":{"type":"base64","media_type":"image/png","data":"QUJD"}}
+			]}
 		]
 	}`)
 
@@ -4598,8 +4603,29 @@ func TestBuildKiroPayloadInlineSystemBlockArrayExtracted(t *testing.T) {
 	require.NoError(t, err)
 	payload := result.Payload
 
-	require.Equal(t, "hi", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
-	require.Contains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "BLOCK NOTE")
+	current := gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String()
+	require.Contains(t, current, "hi")
+	require.Contains(t, current, "BLOCK NOTE")
+	require.Equal(t, int64(1), gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.images.#").Int())
+	require.NotContains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "BLOCK NOTE")
+}
+
+func TestBuildKiroPayloadDropsEmptyInlineSystemMessages(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-sonnet-4-5",
+		"messages":[
+			{"role":"user","content":"hi"},
+			{"role":"system","content":"  "},
+			{"role":"system","content":[]},
+			{"role":"user","content":"bye"}
+		]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	current := gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String()
+	require.Contains(t, current, "hi")
+	require.Contains(t, current, "bye")
 }
 
 func TestBuildKiroPayloadTrailingAssistantThenSystemStillAttachesTools(t *testing.T) {
@@ -4619,8 +4645,57 @@ func TestBuildKiroPayloadTrailingAssistantThenSystemStillAttachesTools(t *testin
 	require.NoError(t, err)
 	payload := result.Payload
 
-	// 末尾过滤后变 assistant，走 Continue 兜底，但 tools 仍应挂载
-	require.Equal(t, "Continue", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
+	// 末尾 system 就地成为当前 user 消息，tools 仍挂载在真正的当前请求上。
+	require.Equal(t, "TRAILING NOTE", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
 	require.Greater(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.#").Int(), int64(0))
-	require.Contains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "TRAILING NOTE")
+	require.NotContains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "TRAILING NOTE")
+}
+
+func TestBuildKiroPayloadLargeClaudeDesktopCompactionSystemStaysInConversation(t *testing.T) {
+	const beginMarker = "CLAUDE_DESKTOP_COMPACTION_BEGIN"
+	const endMarker = "CLAUDE_DESKTOP_COMPACTION_END"
+	summary := beginMarker + strings.Repeat("s", 61574-len(beginMarker)-len(endMarker)) + endMarker
+	require.Len(t, summary, 61574)
+
+	for _, stream := range []bool{true, false} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			body := []byte(fmt.Sprintf(`{
+				"model":"claude-opus-5",
+				"stream":%t,
+				"system":[{"type":"text","text":"BASE SYSTEM"}],
+				"messages":[
+					{"role":"user","content":"start"},
+					{"role":"assistant","content":[{"type":"tool_use","id":"tool-1","name":"Bash","input":{"cmd":"true"}}]},
+					{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"ok"}]},
+					{"role":"system","content":%q},
+					{"role":"assistant","content":"continued"},
+					{"role":"user","content":"latest"}
+				],
+				"tools":[{"name":"Bash","description":"run","input_schema":{"type":"object","properties":{"cmd":{"type":"string"}}}}]
+			}`, stream, summary))
+
+			result, err := BuildKiroPayloadWithContext(body, "claude-opus-5", "", "AI_EDITOR", nil)
+			require.NoError(t, err)
+			payload := result.Payload
+
+			priming := gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String()
+			require.Contains(t, priming, "BASE SYSTEM")
+			require.NotContains(t, priming, beginMarker)
+
+			markerCount := strings.Count(gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String(), beginMarker)
+			for _, message := range gjson.GetBytes(payload, "conversationState.history").Array() {
+				markerCount += strings.Count(message.Get("userInputMessage.content").String(), beginMarker)
+			}
+			require.Equal(t, 1, markerCount, "compaction summary must be preserved exactly once in conversation history")
+			toolUseCount := 0
+			for _, message := range gjson.GetBytes(payload, "conversationState.history").Array() {
+				for _, toolUse := range message.Get("assistantResponseMessage.toolUses").Array() {
+					if toolUse.Get("toolUseId").String() == "tool-1" {
+						toolUseCount++
+					}
+				}
+			}
+			require.Equal(t, 1, toolUseCount)
+		})
+	}
 }
