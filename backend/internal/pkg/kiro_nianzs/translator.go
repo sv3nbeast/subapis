@@ -36,6 +36,7 @@ const (
 	kiroMaxToolNameLen         = 63
 	kiroHistoryImageKeepCount  = 5
 	kiroMinimalFallbackContent = "."
+	kiroToolCallsPrefix        = "Tool calls:"
 	kiroToolResultsPrefix      = "Tool results:"
 	kiroToolResultCompactLimit = 12000
 	kiroToolResultKeepHead     = 4000
@@ -266,9 +267,10 @@ type KiroPayloadOptions struct {
 	RequireNativeToolProgress    bool
 	RequireNativeToolCallMarker  bool
 	RequireNativeToolTextPrelude bool
-	// FlattenCompletedToolHistory enables the KRS-only compatibility rewrite
-	// for completed historical tool cycles. Amazon Q accepts the native
-	// structured history and must not inherit this KRS workaround.
+	// FlattenCompletedToolHistory keeps only the active final tool turn
+	// structured and converts older completed tool cycles into compact ordinary
+	// conversation text. Besides KRS compatibility, this avoids making Kiro
+	// count the verbose tool protocol envelope again on every stateless replay.
 	FlattenCompletedToolHistory bool
 }
 
@@ -3443,9 +3445,9 @@ func collectKiroHistoryToolNames(history []KiroHistoryMessage, requestCtx KiroRe
 
 // KRS accepts older completed tool cycles but can answer with only metadata
 // and context usage. When flattenCompletedToolHistory is enabled, keep only
-// the active final tool turn structured and preserve completed tool output as
-// ordinary conversation text. Amazon Q retains its native structured cycles
-// while sharing the endpoint-neutral empty/orphan history cleanup.
+// the active final tool turn structured and preserve completed tool calls and
+// outputs as ordinary conversation text. Endpoint selection decides whether
+// the rewrite is required; empty/orphan history cleanup remains neutral.
 func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs map[string]bool, requestCtx KiroRequestContext, flattenCompletedToolHistory bool) []KiroHistoryMessage {
 	if len(history) == 0 {
 		return history
@@ -3463,6 +3465,10 @@ func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs 
 		if msg.AssistantResponseMessage != nil {
 			msg.AssistantResponseMessage.Content = stripKiroPollutedToolCallText(msg.AssistantResponseMessage.Content)
 			if flattenCompletedToolHistory && len(msg.AssistantResponseMessage.ToolUses) > 0 && i != activeAssistantIdx {
+				msg.AssistantResponseMessage.Content = joinKiroHistoryText(
+					msg.AssistantResponseMessage.Content,
+					narrateKiroToolUses(msg.AssistantResponseMessage.ToolUses, requestCtx),
+				)
 				msg.AssistantResponseMessage.ToolUses = nil
 			}
 		}
@@ -3534,6 +3540,33 @@ func narrateKiroToolResults(toolResults []KiroToolResult, names map[string]strin
 		return ""
 	}
 	return kiroToolResultsPrefix + "\n\n" + strings.Join(parts, "\n\n")
+}
+
+func narrateKiroToolUses(toolUses []KiroToolUse, requestCtx KiroRequestContext) string {
+	if len(toolUses) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(toolUses))
+	for _, toolUse := range toolUses {
+		name := strings.TrimSpace(restoreResponseToolName(toolUse.Name, requestCtx))
+		if name == "" {
+			name = "tool"
+		}
+		input := strings.TrimSpace(toolUse.TruncatedRaw)
+		if input == "" {
+			if encoded, err := json.Marshal(toolUse.Input); err == nil {
+				input = string(encoded)
+			}
+		}
+		if input == "" {
+			input = "{}"
+		}
+		parts = append(parts, fmt.Sprintf("[%s] %s", name, input))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return kiroToolCallsPrefix + "\n\n" + strings.Join(parts, "\n\n")
 }
 
 func joinKiroHistoryText(existing, addition string) string {

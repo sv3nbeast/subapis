@@ -39,8 +39,9 @@ type nianzsKiroEndpointConfig struct {
 const nianzsKiroInvalidModelTempUnschedDuration = time.Minute
 
 const (
-	nianzsKiroRetryBaseDelay = 200 * time.Millisecond
-	nianzsKiroRetryMaxDelay  = 2 * time.Second
+	nianzsKiroRetryBaseDelay                    = 200 * time.Millisecond
+	nianzsKiroRetryMaxDelay                     = 2 * time.Second
+	nianzsKiroCompactCompletedToolUsesThreshold = 64
 )
 
 const nianzsKiroNativeToolProgressRetryInstruction = "[INTERNAL NATIVE TOOL RETRY: The previous attempt ended after announcing tool-backed work without making a tool call. Do not repeat the announcement. Call one of the available native tools now.]"
@@ -496,6 +497,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 	nianzsEnsureClaudeResponseVary(c.Writer.Header())
 	requestID := nianzsSetClaudeResponseRequestID(c.Writer.Header())
 	c.Data(http.StatusOK, "application/json", parseResult.ResponseBody)
+	nianzsLogKiroContextUsage(account, mappedModel, inputTokens, parseResult.Usage)
 
 	upstreamModel := nianzsResolveKiroUpstreamModel(mappedModel)
 
@@ -641,7 +643,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 		nativeRetryUsed := false
 		for attempt := 0; ; attempt++ {
 			currentRequestCtx.BodyAttempt = attempt
-			_, streamErr := nianzskiro.StreamEventStreamAsAnthropicWithContext(upstreamCtx, currentResp.Body, streamWriter, requestModel, inputTokens, currentRequestCtx)
+			streamResult, streamErr := nianzskiro.StreamEventStreamAsAnthropicWithContext(upstreamCtx, currentResp.Body, streamWriter, requestModel, inputTokens, currentRequestCtx)
 			_ = currentResp.Body.Close()
 			if streamErr == nil {
 				if structuredWriter != nil {
@@ -652,6 +654,9 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 				}
 				plan.commit()
 				_ = pw.Close()
+				if streamResult != nil {
+					nianzsLogKiroContextUsage(account, mappedModel, inputTokens, streamResult.Usage)
+				}
 				return
 			}
 			if !nianzskiro.IsNativeToolProgressStalled(streamErr) || nativeRetryUsed {
@@ -869,7 +874,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 		if endpoint.Name == "KiroRuntime" {
 			profileArn = nianzsKiroResolveProfileArnForKRS(account)
 		}
-		flattenCompletedToolHistory := endpoint.Name == "KiroRuntime"
+		flattenCompletedToolHistory := nianzsShouldFlattenCompletedToolHistory(endpoint.Name, anthropicBody)
 		buildResult, err := s.buildKiroPayloadForAccountWithArnNianzs(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, profileArn, flattenCompletedToolHistory, options)
 		if err != nil {
 			return nil, requestCtx, err
@@ -1184,6 +1189,7 @@ func nianzsLogKiroStatelessReplay(account *Account, payload []byte, endpointName
 		zap.String("endpoint_name", strings.TrimSpace(endpointName)),
 		zap.Bool("flatten_completed_tool_history", flattenCompletedToolHistory),
 		zap.Bool("stateless_replay", true),
+		zap.Int("payload_bytes", len(payload)),
 		zap.Int("history_count", len(gjson.GetBytes(payload, "conversationState.history").Array())),
 		zap.Bool("has_agent_continuation_id", gjson.GetBytes(payload, "conversationState.agentContinuationId").Exists()),
 		zap.String("conversation_id_hash", nianzsHashKiroLogString(conversationID)),
@@ -1192,6 +1198,64 @@ func nianzsLogKiroStatelessReplay(account *Account, payload []byte, endpointName
 		zap.Int("system_prompt_len", len(systemPrompt)),
 		zap.String("current_content_hash", nianzsHashKiroLogString(currentContent)),
 		zap.Int("tool_count", len(gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Array())),
+	)
+}
+
+// KRS requires completed tool history to be flattened for protocol
+// compatibility. Amazon Q accepts native structured cycles, but each completed
+// cycle carries a large provider-side context tax during stateless replay. Keep
+// short conversations native and compact long tool sessions before they can
+// exhaust a 1M context window. The translator preserves tool names, inputs,
+// outputs, order, and message roles; only the completed protocol envelope is
+// removed, while the active final tool turn stays structured.
+func nianzsShouldFlattenCompletedToolHistory(endpointName string, anthropicBody []byte) bool {
+	switch strings.TrimSpace(endpointName) {
+	case "KiroRuntime":
+		return true
+	case "AmazonQ":
+		return nianzsCountAnthropicToolUses(anthropicBody, nianzsKiroCompactCompletedToolUsesThreshold) >= nianzsKiroCompactCompletedToolUsesThreshold
+	default:
+		return false
+	}
+}
+
+func nianzsCountAnthropicToolUses(anthropicBody []byte, stopAfter int) int {
+	if len(anthropicBody) == 0 || stopAfter <= 0 {
+		return 0
+	}
+	messages := gjson.GetBytes(anthropicBody, "messages")
+	if !messages.IsArray() {
+		return 0
+	}
+	count := 0
+	messages.ForEach(func(_, message gjson.Result) bool {
+		content := message.Get("content")
+		if !content.IsArray() {
+			return true
+		}
+		content.ForEach(func(_, block gjson.Result) bool {
+			if block.Get("type").String() == "tool_use" {
+				count++
+			}
+			return count < stopAfter
+		})
+		return count < stopAfter
+	})
+	return count
+}
+
+func nianzsLogKiroContextUsage(account *Account, model string, estimatedInputTokens int, usage nianzskiro.Usage) {
+	if account == nil || !usage.HasContextUsage {
+		return
+	}
+	if usage.ContextUsagePercentage < 70 && estimatedInputTokens < 500_000 {
+		return
+	}
+	logger.L().Info("kiro.context_usage",
+		zap.Int64("selected_account_id", account.ID),
+		zap.String("model", strings.TrimSpace(model)),
+		zap.Float64("context_usage_percentage", usage.ContextUsagePercentage),
+		zap.Int("estimated_anthropic_input_tokens", estimatedInputTokens),
 	)
 }
 

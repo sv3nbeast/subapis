@@ -1210,6 +1210,7 @@ func TestBuildKiroPayloadFlattensCompletedHistoryToolCyclesForKRS(t *testing.T) 
 	}
 	require.False(t, foundT1ToolUse)
 	require.True(t, foundT2ToolUse)
+	require.Contains(t, historyText.String(), `[exec_command] {"cmd":"make"}`)
 	require.Contains(t, historyText.String(), "[exec_command] build ok")
 	require.Equal(t, "t2", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
 	require.Equal(t, "tests pass", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.content.0.text").String())

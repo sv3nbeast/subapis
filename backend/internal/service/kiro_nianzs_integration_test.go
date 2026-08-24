@@ -1110,6 +1110,8 @@ func TestNianzsMessagesForwardScopesCompletedToolHistoryByEndpoint(t *testing.T)
 				payload := upstream.lastBody
 				if endpoint.flattenOldHistory {
 					require.NotContains(t, string(payload), `"toolUseId":"old-tool"`)
+					require.Contains(t, string(payload), "Tool calls:")
+					require.Contains(t, string(payload), `[exec_command] {\"cmd\":\"make\"}`)
 					require.Contains(t, string(payload), "Tool results:")
 					require.Contains(t, string(payload), "[exec_command] build ok")
 				} else {
@@ -1136,6 +1138,100 @@ func TestNianzsMessagesForwardScopesCompletedToolHistoryByEndpoint(t *testing.T)
 			})
 		}
 	}
+}
+
+func TestNianzsMessagesForwardCompactsLongAmazonQToolHistory(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, stream := range []bool{false, true} {
+		stream := stream
+		t.Run(fmt.Sprintf("stream_%t", stream), func(t *testing.T) {
+			messages := make([]any, 0, nianzsKiroCompactCompletedToolUsesThreshold*2+1)
+			messages = append(messages, map[string]any{"role": "user", "content": "run the checks"})
+			for i := 0; i < nianzsKiroCompactCompletedToolUsesThreshold; i++ {
+				toolID := fmt.Sprintf("long-tool-%d", i)
+				messages = append(messages,
+					map[string]any{"role": "assistant", "content": []any{map[string]any{
+						"type": "tool_use", "id": toolID, "name": "exec_command", "input": map[string]any{"cmd": fmt.Sprintf("check-%d", i)},
+					}}},
+					map[string]any{"role": "user", "content": []any{map[string]any{
+						"type": "tool_result", "tool_use_id": toolID, "content": fmt.Sprintf("result-%d", i),
+					}}},
+				)
+			}
+			body, err := json.Marshal(map[string]any{
+				"model":      "claude-opus-5",
+				"max_tokens": 128,
+				"stream":     stream,
+				"tools": []any{map[string]any{
+					"name": "exec_command", "description": "run", "input_schema": map[string]any{"type": "object"},
+				}},
+				"messages": messages,
+			})
+			require.NoError(t, err)
+
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+			require.NoError(t, err)
+			groupID := int64(29)
+			parsed.GroupID = &groupID
+			parsed.Group = &Group{ID: groupID, Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeQ}
+			upstreamResponse := kiroEventStreamResponse(t, "continued", 64, 5)
+			svc, upstream, account := newNianzsKiroRouteTestRuntime(t, upstreamResponse)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+			result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+
+			require.NoError(t, forwardErr)
+			require.NotNil(t, result)
+			require.Len(t, upstream.requests, 1)
+			require.Equal(t, "q.us-east-1.amazonaws.com", upstream.requests[0].URL.Host)
+			payload := upstream.lastBody
+			require.NotContains(t, string(payload), `"toolUseId":"long-tool-0"`)
+			require.Contains(t, string(payload), `[exec_command] {\"cmd\":\"check-0\"}`)
+			require.Contains(t, string(payload), "[exec_command] result-0")
+			lastToolID := fmt.Sprintf("long-tool-%d", nianzsKiroCompactCompletedToolUsesThreshold-1)
+			require.Equal(t, lastToolID, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
+			history := gjson.GetBytes(payload, "conversationState.history").Array()
+			require.NotEmpty(t, history)
+			require.Equal(t, lastToolID, history[len(history)-1].Get("assistantResponseMessage.toolUses.0.toolUseId").String())
+			if stream {
+				require.Equal(t, 1, strings.Count(recorder.Body.String(), "event: message_stop"))
+			} else {
+				require.Equal(t, "continued", gjson.GetBytes(recorder.Body.Bytes(), "content.0.text").String())
+			}
+		})
+	}
+}
+
+func TestNianzsShouldFlattenCompletedToolHistory(t *testing.T) {
+	buildToolHistory := func(count int) []byte {
+		messages := make([]any, 0, count)
+		for i := 0; i < count; i++ {
+			messages = append(messages, map[string]any{
+				"role": "assistant",
+				"content": []any{map[string]any{
+					"type": "tool_use",
+					"id":   fmt.Sprintf("tool-%d", i),
+					"name": "exec_command",
+				}},
+			})
+		}
+		body, err := json.Marshal(map[string]any{"messages": messages})
+		require.NoError(t, err)
+		return body
+	}
+	shortAmazonQ := buildToolHistory(nianzsKiroCompactCompletedToolUsesThreshold - 1)
+	longAmazonQ := buildToolHistory(nianzsKiroCompactCompletedToolUsesThreshold)
+	textOnly, err := json.Marshal(map[string]any{"messages": []any{map[string]any{
+		"role": "user", "content": strings.Repeat(`"tool_use"`, nianzsKiroCompactCompletedToolUsesThreshold),
+	}}})
+	require.NoError(t, err)
+	require.False(t, nianzsShouldFlattenCompletedToolHistory("AmazonQ", shortAmazonQ))
+	require.True(t, nianzsShouldFlattenCompletedToolHistory("AmazonQ", longAmazonQ))
+	require.False(t, nianzsShouldFlattenCompletedToolHistory("AmazonQ", textOnly))
+	require.True(t, nianzsShouldFlattenCompletedToolHistory("KiroRuntime", nil))
+	require.False(t, nianzsShouldFlattenCompletedToolHistory("unknown", longAmazonQ))
 }
 
 func TestNianzsMessagesAutoRebuildsToolHistoryForEachEndpoint(t *testing.T) {
