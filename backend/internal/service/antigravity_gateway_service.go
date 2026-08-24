@@ -45,9 +45,11 @@ const (
 	antigravitySmartRetryMinWait        = 1 * time.Second  // 智能重试最小等待时间
 	antigravitySmartRetryMaxAttempts    = 1                // 智能重试最大次数（仅重试 1 次，防止重复限流/长期等待）
 	antigravityDefaultRateLimitDuration = 30 * time.Second // 默认限流时间（无 retryDelay 时使用）
-	// quota/credits 类 429 只在原账号上延迟重试一次；第二次仍失败则原样返回 429。
-	antigravityQuota429RetryDelay  = 5 * time.Second
-	antigravityQuota429MaxAttempts = 2
+	// quota/credits 类 429 在原账号上按 5s、10s 延迟重试；第三次仍失败时
+	// 保持账号可调度，只把当前请求切换到同组候选账号。
+	antigravityQuota429FirstRetryDelay  = 5 * time.Second
+	antigravityQuota429SecondRetryDelay = 10 * time.Second
+	antigravityQuota429MaxAttempts      = 3
 
 	// MODEL_CAPACITY_EXHAUSTED 专用重试参数
 	// 模型容量不足时保留有限的原地重试窗口，兼顾短暂恢复机会和请求时延。
@@ -122,6 +124,7 @@ type AntigravityAccountSwitchError struct {
 	StatusCode        int
 	RateLimitedModel  string
 	IsStickySession   bool // 是否为粘性会话切换（决定是否缓存计费）
+	Quota429          bool // quota/check-quota 429：当前请求最多尝试两个账号，不持久禁调
 	RateLimitResetAt  *time.Time
 	ResponseBody      []byte
 }
@@ -138,6 +141,27 @@ func IsAntigravityAccountSwitchError(err error) (*AntigravityAccountSwitchError,
 		return switchErr, true
 	}
 	return nil, false
+}
+
+func newAntigravityAccountSwitchFailoverError(switchErr *AntigravityAccountSwitchError) *UpstreamFailoverError {
+	statusCode := http.StatusServiceUnavailable
+	if switchErr != nil && switchErr.StatusCode != 0 {
+		statusCode = switchErr.StatusCode
+	}
+	result := &UpstreamFailoverError{
+		StatusCode: statusCode,
+	}
+	if switchErr != nil {
+		result.ResponseBody = append([]byte(nil), switchErr.ResponseBody...)
+		result.ForceCacheBilling = switchErr.IsStickySession
+		if switchErr.Quota429 {
+			result.SuppressTempUnschedule = true
+			result.FailureKind = UpstreamFailureRateLimited
+			result.RequestedModel = switchErr.RateLimitedModel
+			result.AntigravityQuota429 = true
+		}
+	}
+	return result
 }
 
 // PromptTooLongError 表示上游明确返回 prompt too long
@@ -174,6 +198,8 @@ type antigravityRetryLoopParams struct {
 	bypassModelRateLimitPrecheck bool
 	// 计划测试等轻量探测可覆盖 MODEL_CAPACITY_EXHAUSTED 的最大重试次数。
 	modelCapacityRetryMaxAttempts int
+	// 当前请求在该账号上已连续收到的 quota/credits 类 429 次数。
+	quota429FailureCount int
 }
 
 // antigravityRetryLoopResult 重试循环的结果
@@ -252,20 +278,7 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 
 	if resp.StatusCode == http.StatusTooManyRequests {
 		if keyword := matchAntigravityQuotaSameAccountRetryKeyword(respBody); keyword != "" {
-			retryDelay := antigravityQuota429RetryDelayForContext(p.ctx)
-			displayModel := strings.TrimSpace(modelName)
-			if displayModel == "" {
-				displayModel = strings.TrimSpace(p.requestedModel)
-			}
-			logger.LegacyPrintf(
-				"service.antigravity_gateway",
-				"%s status=429 quota_retry_same_account account=%d model=%s keyword=%q delay=%v",
-				p.prefix,
-				p.account.ID,
-				displayModel,
-				keyword,
-				retryDelay,
-			)
+			retryDelay := antigravityQuota429RetryDelayForAttempt(p.ctx, p.quota429FailureCount)
 			return &smartRetryResult{
 				action:     smartRetryActionRetrySameAccount,
 				retryDelay: retryDelay,
@@ -820,6 +833,9 @@ urlFallbackLoop:
 
 				// 429/503 限流处理：区分 URL 级别限流、智能重试和账户配额限流
 				if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+					if resp.StatusCode == http.StatusTooManyRequests && matchAntigravityQuotaSameAccountRetryKeyword(respBody) != "" {
+						p.quota429FailureCount++
+					}
 					// 尝试智能重试处理（OAuth 账号专用）
 					smartResult := s.handleSmartRetry(p, resp, respBody, baseURL, urlIdx, availableURLs)
 					switch smartResult.action {
@@ -837,6 +853,18 @@ urlFallbackLoop:
 						break urlFallbackLoop
 					case smartRetryActionRetrySameAccount:
 						if attempt < antigravityQuota429MaxAttempts {
+							displayModel := strings.TrimSpace(p.requestedModel)
+							logger.LegacyPrintf(
+								"service.antigravity_gateway",
+								"%s status=429 quota_retry_same_account account=%d model=%s keyword=%q attempt=%d/%d delay=%v",
+								p.prefix,
+								p.account.ID,
+								displayModel,
+								matchAntigravityQuotaSameAccountRetryKeyword(respBody),
+								p.quota429FailureCount,
+								antigravityQuota429MaxAttempts,
+								smartResult.retryDelay,
+							)
 							upstreamMsg := strings.TrimSpace(extractAntigravityErrorMessage(respBody))
 							upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 							appendOpsUpstreamError(p.c, OpsUpstreamErrorEvent{
@@ -856,19 +884,22 @@ urlFallbackLoop:
 							}
 							continue
 						}
+						modelName := strings.TrimSpace(p.requestedModel)
 						logger.LegacyPrintf(
 							"service.antigravity_gateway",
-							"%s status=429 quota_retry_same_account_exhausted account=%d attempts=%d no_cooldown=true no_failover=true",
+							"%s status=429 quota_retry_same_account_exhausted account=%d attempts=%d no_cooldown=true failover=true",
 							p.prefix,
 							p.account.ID,
-							attempt,
+							p.quota429FailureCount,
 						)
-						resp = &http.Response{
-							StatusCode: resp.StatusCode,
-							Header:     resp.Header.Clone(),
-							Body:       io.NopCloser(bytes.NewReader(respBody)),
+						return nil, &AntigravityAccountSwitchError{
+							OriginalAccountID: p.account.ID,
+							StatusCode:        resp.StatusCode,
+							RateLimitedModel:  modelName,
+							IsStickySession:   p.isStickySession,
+							Quota429:          true,
+							ResponseBody:      append([]byte(nil), respBody...),
 						}
-						break urlFallbackLoop
 					}
 					// smartRetryActionContinue: 继续默认重试逻辑
 
@@ -1382,6 +1413,9 @@ func buildAntigravityTestConnectionSwitchError(switchErr *AntigravityAccountSwit
 	if switchErr != nil && switchErr.RateLimitResetAt != nil {
 		until := switchErr.RateLimitResetAt.Local().Format("15:04:05")
 		return fmt.Errorf("本次测试已请求上游并收到 429 配额耗尽响应，该账号模型 %s 已按模型隔离至 %s", switchErr.RateLimitedModel, until)
+	}
+	if switchErr != nil && switchErr.StatusCode == http.StatusTooManyRequests && matchAntigravityQuotaSameAccountRetryKeyword(switchErr.ResponseBody) != "" {
+		return fmt.Errorf("API 返回 429：同账号按 5 秒、10 秒延迟重试后仍收到配额响应；账号和模型均未被标记为不可调度")
 	}
 	if switchErr != nil && switchErr.StatusCode == http.StatusTooManyRequests {
 		return fmt.Errorf("本次测试已请求上游并收到 429 模型限流响应；账号未被标记为临时不可调度")
@@ -2058,15 +2092,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	if err != nil {
 		// 检查是否是账号切换信号，转换为 UpstreamFailoverError 让 Handler 切换账号
 		if switchErr, ok := IsAntigravityAccountSwitchError(err); ok {
-			statusCode := switchErr.StatusCode
-			if statusCode == 0 {
-				statusCode = http.StatusServiceUnavailable
-			}
-			return nil, &UpstreamFailoverError{
-				StatusCode:        statusCode,
-				ResponseBody:      append([]byte(nil), switchErr.ResponseBody...),
-				ForceCacheBilling: switchErr.IsStickySession,
-			}
+			return nil, newAntigravityAccountSwitchFailoverError(switchErr)
 		}
 		// 区分客户端取消和真正的上游失败，返回更准确的错误消息
 		if c.Request.Context().Err() != nil {
@@ -2934,15 +2960,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 	if err != nil {
 		// 检查是否是账号切换信号，转换为 UpstreamFailoverError 让 Handler 切换账号
 		if switchErr, ok := IsAntigravityAccountSwitchError(err); ok {
-			statusCode := switchErr.StatusCode
-			if statusCode == 0 {
-				statusCode = http.StatusServiceUnavailable
-			}
-			return nil, &UpstreamFailoverError{
-				StatusCode:        statusCode,
-				ResponseBody:      append([]byte(nil), switchErr.ResponseBody...),
-				ForceCacheBilling: switchErr.IsStickySession,
-			}
+			return nil, newAntigravityAccountSwitchFailoverError(switchErr)
 		}
 		// 区分客户端取消和真正的上游失败，返回更准确的错误消息
 		if c.Request.Context().Err() != nil {
@@ -3090,11 +3108,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 							Kind:               "failover",
 							Message:            sanitizeUpstreamErrorMessage(retryErr.Error()),
 						})
-						return nil, &UpstreamFailoverError{
-							StatusCode:        statusCode,
-							ResponseBody:      append([]byte(nil), switchErr.ResponseBody...),
-							ForceCacheBilling: switchErr.IsStickySession,
-						}
+						return nil, newAntigravityAccountSwitchFailoverError(switchErr)
 					}
 					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 						Platform:           account.Platform,
@@ -3329,13 +3343,16 @@ func withAntigravityQuota429RetryDelay(ctx context.Context, delay time.Duration)
 	return context.WithValue(ctx, antigravityQuota429RetryDelayContextKey{}, delay)
 }
 
-func antigravityQuota429RetryDelayForContext(ctx context.Context) time.Duration {
+func antigravityQuota429RetryDelayForAttempt(ctx context.Context, failureCount int) time.Duration {
 	if ctx != nil {
 		if delay, ok := ctx.Value(antigravityQuota429RetryDelayContextKey{}).(time.Duration); ok && delay >= 0 {
 			return delay
 		}
 	}
-	return antigravityQuota429RetryDelay
+	if failureCount <= 1 {
+		return antigravityQuota429FirstRetryDelay
+	}
+	return antigravityQuota429SecondRetryDelay
 }
 
 // isSingleAccountRetry 检查 context 中是否设置了单账号退避重试标记

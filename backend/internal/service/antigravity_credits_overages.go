@@ -35,8 +35,9 @@ var (
 		"resource has been exhausted",
 	}
 
-	// These quota-like 429 responses receive one delayed retry on the same
-	// account. They must never persist a cooldown or trigger account failover.
+	// These quota-like 429 responses receive two delayed retries on the same
+	// account. A third rejection may fail over the current request, but must
+	// never persist an account/model cooldown.
 	antigravityQuotaSameAccountRetryKeywords = []string{
 		"quota_exhausted",
 		"quota exhausted",

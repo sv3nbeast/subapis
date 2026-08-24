@@ -677,7 +677,7 @@ func TestAntigravityGatewayService_TestConnection_QuotaExhaustedReturnsAccurateM
 	ctx := withAntigravityQuota429RetryDelay(context.Background(), 0)
 	_, err := svc.TestConnection(ctx, account, "claude-opus-4-6-thinking")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "同账号延迟重试后仍收到配额响应")
+	require.Contains(t, err.Error(), "同账号按 5 秒、10 秒延迟重试后仍收到配额响应")
 	require.Contains(t, err.Error(), "账号和模型均未被标记为不可调度")
 	require.NotContains(t, err.Error(), "当前限流中")
 	require.Equal(t, antigravityQuota429MaxAttempts, upstream.calls)

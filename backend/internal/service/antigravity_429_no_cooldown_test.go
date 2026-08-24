@@ -108,7 +108,7 @@ func newAntigravity429NoCooldownParams(account *Account, upstream HTTPUpstream, 
 	}
 }
 
-func TestAntigravity429QuotaExhaustedRetriesSameAccountThenReturns429WithoutCooldown(t *testing.T) {
+func TestAntigravity429QuotaExhaustedRetriesSameAccountThenFailsOverWithoutCooldown(t *testing.T) {
 	t.Setenv(antigravityForwardBaseURLEnv, "https://ag-429-no-cooldown.test")
 	repo := &antigravity429NoCooldownRepo{}
 	upstream := &antigravity429FixedUpstream{
@@ -125,21 +125,29 @@ func TestAntigravity429QuotaExhaustedRetriesSameAccountThenReturns429WithoutCool
 
 	result, err := svc.antigravityRetryLoop(params)
 
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.NotNil(t, result.resp)
-	require.Equal(t, http.StatusTooManyRequests, result.resp.StatusCode)
+	require.Nil(t, result)
+	var switchErr *AntigravityAccountSwitchError
+	require.ErrorAs(t, err, &switchErr)
+	require.Equal(t, http.StatusTooManyRequests, switchErr.StatusCode)
+	require.Equal(t, account.ID, switchErr.OriginalAccountID)
+	require.Equal(t, params.requestedModel, switchErr.RateLimitedModel)
+	require.True(t, switchErr.IsStickySession)
+	require.True(t, switchErr.Quota429)
+	require.Contains(t, string(switchErr.ResponseBody), "check quota")
+	require.Nil(t, switchErr.RateLimitResetAt)
 	require.Equal(t, antigravityQuota429MaxAttempts, upstream.calls)
-	respBody, readErr := io.ReadAll(result.resp.Body)
-	require.NoError(t, readErr)
-	require.Contains(t, string(respBody), "check quota")
-	require.False(t, svc.shouldFailoverAntigravityUpstreamError(result.resp.StatusCode, respBody))
 	require.Zero(t, repo.tempUnschedCalls)
 	require.Zero(t, repo.modelLimitCalls)
 	require.Zero(t, repo.accountRateCalls)
-	require.Empty(t, cache.deleteCalls, "same-account retry must preserve the sticky binding")
+	require.Empty(t, cache.deleteCalls, "request-scoped failover must not persistently clear the sticky binding")
 	require.Nil(t, account.TempUnschedulableUntil)
 	require.Empty(t, account.TempUnschedulableReason)
+}
+
+func TestAntigravity429QuotaRetryDelaysAreFiveThenTenSeconds(t *testing.T) {
+	require.Equal(t, 5*time.Second, antigravityQuota429RetryDelayForAttempt(context.Background(), 1))
+	require.Equal(t, 10*time.Second, antigravityQuota429RetryDelayForAttempt(context.Background(), 2))
+	require.Equal(t, time.Duration(0), antigravityQuota429RetryDelayForAttempt(withAntigravityQuota429RetryDelay(context.Background(), 0), 2))
 }
 
 func TestAntigravity429QuotaRetryHonorsContextCancellation(t *testing.T) {
@@ -166,10 +174,15 @@ func TestAntigravity429QuotaRetryHonorsContextCancellation(t *testing.T) {
 	require.Zero(t, repo.accountRateCalls)
 }
 
-func TestAntigravity429QuotaExhaustedRetriesSameAccountThenSucceeds(t *testing.T) {
+func TestAntigravity429QuotaExhaustedSucceedsOnThirdSameAccountAttempt(t *testing.T) {
 	t.Setenv(antigravityForwardBaseURLEnv, "https://ag-429-no-cooldown.test")
 	repo := &antigravity429NoCooldownRepo{}
 	upstream := &antigravity429SequenceUpstream{responses: []*http.Response{
+		{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     http.Header{},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"check quota"}}`)),
+		},
 		{
 			StatusCode: http.StatusTooManyRequests,
 			Header:     http.Header{},
@@ -248,15 +261,89 @@ func TestAntigravity429ConfiguredTempRuleDoesNotOverrideSameAccountRetry(t *test
 
 	result, err := svc.antigravityRetryLoop(newAntigravity429NoCooldownParams(account, upstream, repo))
 
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Equal(t, http.StatusTooManyRequests, result.resp.StatusCode)
+	require.Nil(t, result)
+	var switchErr *AntigravityAccountSwitchError
+	require.ErrorAs(t, err, &switchErr)
+	require.Equal(t, http.StatusTooManyRequests, switchErr.StatusCode)
+	require.Equal(t, account.ID, switchErr.OriginalAccountID)
 	require.Equal(t, antigravityQuota429MaxAttempts, upstream.calls)
 	require.Zero(t, repo.tempUnschedCalls)
 	require.Zero(t, repo.modelLimitCalls)
 	require.Zero(t, repo.accountRateCalls)
 	require.Nil(t, account.TempUnschedulableUntil)
 	require.Empty(t, account.TempUnschedulableReason)
+}
+
+func TestAntigravityAccountSwitchFailoverErrorPreserves429WithoutCooldown(t *testing.T) {
+	body := []byte(`{"error":{"message":"check quota"}}`)
+	failoverErr := newAntigravityAccountSwitchFailoverError(&AntigravityAccountSwitchError{
+		OriginalAccountID: 42901,
+		StatusCode:        http.StatusTooManyRequests,
+		RateLimitedModel:  "claude-opus-4-6",
+		IsStickySession:   true,
+		Quota429:          true,
+		ResponseBody:      body,
+	})
+
+	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
+	require.Equal(t, body, failoverErr.ResponseBody)
+	require.Equal(t, "claude-opus-4-6", failoverErr.RequestedModel)
+	require.True(t, failoverErr.ForceCacheBilling)
+	require.True(t, failoverErr.SuppressTempUnschedule)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.True(t, failoverErr.AntigravityQuota429)
+	require.Equal(t, UpstreamFailureRateLimited, failoverErr.FailureKind)
+}
+
+func TestAntigravity429CompatTransportErrorPreservesRequestScopedFailover(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	body := []byte(`{"error":{"message":"check quota"}}`)
+	svc := &AntigravityGatewayService{}
+
+	err := svc.handleAntigravityCompatTransportError(c, &AntigravityAccountSwitchError{
+		OriginalAccountID: 42901,
+		StatusCode:        http.StatusTooManyRequests,
+		RateLimitedModel:  "claude-opus-4-6",
+		Quota429:          true,
+		ResponseBody:      body,
+	})
+
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
+	require.Equal(t, body, failoverErr.ResponseBody)
+	require.Equal(t, "claude-opus-4-6", failoverErr.RequestedModel)
+	require.True(t, failoverErr.AntigravityQuota429)
+	require.True(t, failoverErr.SuppressTempUnschedule)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.Equal(t, UpstreamFailureRateLimited, failoverErr.FailureKind)
+	require.Equal(t, http.StatusOK, recorder.Code, "transport failover must not write a client response before peer selection")
+}
+
+func TestAntigravityCompatTransportErrorKeepsLegacyNonQuotaSwitch(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	svc := &AntigravityGatewayService{}
+
+	err := svc.handleAntigravityCompatTransportError(c, &AntigravityAccountSwitchError{
+		OriginalAccountID: 42901,
+		StatusCode:        http.StatusTooManyRequests,
+		RateLimitedModel:  "claude-opus-4-6",
+		ResponseBody:      []byte(`{"error":{"message":"model rate limited"}}`),
+	})
+
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
+	require.False(t, failoverErr.AntigravityQuota429)
+	require.Empty(t, failoverErr.ResponseBody)
+	require.Empty(t, failoverErr.RequestedModel)
+	require.False(t, failoverErr.SuppressTempUnschedule)
+	require.Equal(t, UpstreamFailureKind(""), failoverErr.FailureKind)
+	require.Equal(t, http.StatusOK, recorder.Code)
 }
 
 func TestAntigravity429CompatHTTPErrorReturns429WithoutFailover(t *testing.T) {

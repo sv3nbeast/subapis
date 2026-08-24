@@ -100,6 +100,7 @@ type FailoverState struct {
 	SameAccountRetryCount        map[int64]int
 	AnthropicSoft429Retries      map[int64]int
 	AnthropicSoft429Accounts     map[int64]struct{}
+	AntigravityQuota429Accounts  map[int64]struct{}
 	Kiro429RetryCount            map[int64]int
 	Kiro429SoftExcludedIDs       map[int64]struct{}
 	Kiro429LastSoftExcluded      int64
@@ -128,17 +129,18 @@ type FailoverState struct {
 // NewFailoverState 创建 failover 状态
 func NewFailoverState(maxSwitches int, hasBoundSession bool) *FailoverState {
 	return &FailoverState{
-		MaxSwitches:              maxSwitches,
-		FailedAccountIDs:         make(map[int64]struct{}),
-		SameAccountRetryCount:    make(map[int64]int),
-		AnthropicSoft429Retries:  make(map[int64]int),
-		AnthropicSoft429Accounts: make(map[int64]struct{}),
-		Kiro429RetryCount:        make(map[int64]int),
-		Kiro429SoftExcludedIDs:   make(map[int64]struct{}),
-		AvoidEmailDomainSuffixes: make(map[string]struct{}),
-		ModelCapacityRetryState:  service.NewModelCapacityRetryState(0),
-		hasBoundSession:          hasBoundSession,
-		profitVetoedAccountIDs:   make(map[int64]struct{}),
+		MaxSwitches:                 maxSwitches,
+		FailedAccountIDs:            make(map[int64]struct{}),
+		SameAccountRetryCount:       make(map[int64]int),
+		AnthropicSoft429Retries:     make(map[int64]int),
+		AnthropicSoft429Accounts:    make(map[int64]struct{}),
+		AntigravityQuota429Accounts: make(map[int64]struct{}),
+		Kiro429RetryCount:           make(map[int64]int),
+		Kiro429SoftExcludedIDs:      make(map[int64]struct{}),
+		AvoidEmailDomainSuffixes:    make(map[string]struct{}),
+		ModelCapacityRetryState:     service.NewModelCapacityRetryState(0),
+		hasBoundSession:             hasBoundSession,
+		profitVetoedAccountIDs:      make(map[int64]struct{}),
 	}
 }
 
@@ -248,6 +250,9 @@ func (s *FailoverState) HandleFailoverError(
 	if platform == service.PlatformAnthropic && service.IsAnthropicSoftRateLimitFailover(failoverErr) {
 		return s.handleAnthropicSoftRateLimit(ctx, gatewayService, accountID, failoverErr, selectedAccount...)
 	}
+	if platform == service.PlatformAntigravity && failoverErr.AntigravityQuota429 {
+		return s.handleAntigravityQuota429(ctx, accountID, failoverErr)
+	}
 
 	if isKiro429Failover(platform, failoverErr) {
 		if !s.KiroResilienceEnforced {
@@ -326,6 +331,41 @@ func (s *FailoverState) HandleFailoverError(
 		zap.Int64("retry_after_ms", failoverErr.RetryAfter.Milliseconds()),
 	)
 
+	return FailoverContinue
+}
+
+func (s *FailoverState) handleAntigravityQuota429(
+	ctx context.Context,
+	accountID int64,
+	failoverErr *service.UpstreamFailoverError,
+) FailoverAction {
+	const maxAccounts = 2
+	if s.AntigravityQuota429Accounts == nil {
+		s.AntigravityQuota429Accounts = make(map[int64]struct{})
+	}
+	s.AntigravityQuota429Accounts[accountID] = struct{}{}
+	s.FailedAccountIDs[accountID] = struct{}{}
+	failoverErr.RetryableOnSameAccount = false
+	failoverErr.SuppressTempUnschedule = true
+
+	if len(s.AntigravityQuota429Accounts) >= maxAccounts || s.SwitchCount >= s.MaxSwitches {
+		logger.FromContext(ctx).Warn("gateway.antigravity_quota_429_cohort_exhausted",
+			zap.Int64("account_id", accountID),
+			zap.Int("attempted_account_count", len(s.AntigravityQuota429Accounts)),
+			zap.Int("max_account_count", maxAccounts),
+			zap.Int("switch_count", s.SwitchCount),
+		)
+		return FailoverExhausted
+	}
+
+	s.SwitchCount++
+	logger.FromContext(ctx).Warn("gateway.antigravity_quota_429_switch_account",
+		zap.Int64("account_id", accountID),
+		zap.Int("upstream_status", failoverErr.StatusCode),
+		zap.Int("attempted_account_count", len(s.AntigravityQuota429Accounts)),
+		zap.Int("switch_count", s.SwitchCount),
+		zap.Int("max_switches", s.MaxSwitches),
+	)
 	return FailoverContinue
 }
 

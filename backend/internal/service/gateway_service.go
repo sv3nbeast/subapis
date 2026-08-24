@@ -845,6 +845,10 @@ type UpstreamFailoverError struct {
 	// that retry also fails.
 	AnthropicSoftRateLimit          bool
 	AnthropicSoftRateLimitCommitted bool
+	// AntigravityQuota429 identifies a quota/check-quota rejection that has
+	// already exhausted the provider-local 5s/10s retries. Handler failover is
+	// request-scoped, never persists cooldown, and is bounded to two accounts.
+	AntigravityQuota429 bool
 	// RequestedModel preserves the client-visible model for model-scoped
 	// cooldown decisions. It is intentionally optional for non-model errors.
 	RequestedModel        string

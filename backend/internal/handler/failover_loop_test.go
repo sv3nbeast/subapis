@@ -91,6 +91,8 @@ func TestNewFailoverState(t *testing.T) {
 		require.Empty(t, fs.FailedAccountIDs)
 		require.NotNil(t, fs.SameAccountRetryCount)
 		require.Empty(t, fs.SameAccountRetryCount)
+		require.NotNil(t, fs.AntigravityQuota429Accounts)
+		require.Empty(t, fs.AntigravityQuota429Accounts)
 		require.NotNil(t, fs.AvoidEmailDomainSuffixes)
 		require.Empty(t, fs.AvoidEmailDomainSuffixes)
 		require.NotNil(t, fs.ModelCapacityRetryState)
@@ -519,6 +521,44 @@ func TestHandleFailoverError_NianzsKiroZeroFrameEOFSwitchesPeerImmediately(t *te
 	require.Equal(t, 1, fs.SwitchCount, "the next selection must move to a peer account")
 	require.Empty(t, mock.calls, "a request-scoped empty stream must not globally unschedule an otherwise healthy account")
 	require.False(t, fs.ForceCacheBilling, "the failed pre-semantic attempt must not alter user cache billing")
+}
+
+func TestHandleFailoverError_AntigravityQuota429SwitchesPeerWithoutDisablingAccount(t *testing.T) {
+	mock := &mockTempUnscheduler{}
+	fs := NewFailoverState(10, true)
+	err := &service.UpstreamFailoverError{
+		StatusCode:             http.StatusTooManyRequests,
+		ResponseBody:           []byte(`{"error":{"message":"check quota"}}`),
+		ForceCacheBilling:      true,
+		RetryableOnSameAccount: false,
+		SuppressTempUnschedule: true,
+		AntigravityQuota429:    true,
+		FailureKind:            service.UpstreamFailureRateLimited,
+	}
+
+	action := fs.HandleFailoverError(context.Background(), mock, 2583, service.PlatformAntigravity, err)
+
+	require.Equal(t, FailoverContinue, action)
+	require.Contains(t, fs.FailedAccountIDs, int64(2583), "the rejected account must be excluded only from this logical request")
+	require.Equal(t, 1, fs.SwitchCount, "the next scheduler pass must select a peer account")
+	require.Empty(t, mock.calls, "quota 429 failover must not persist a temp-unschedulable account state")
+	require.True(t, fs.ForceCacheBilling, "sticky-session failover must preserve cache billing semantics")
+
+	peerErr := &service.UpstreamFailoverError{
+		StatusCode:             http.StatusTooManyRequests,
+		ResponseBody:           []byte(`{"error":{"message":"check quota"}}`),
+		RetryableOnSameAccount: false,
+		SuppressTempUnschedule: true,
+		AntigravityQuota429:    true,
+		FailureKind:            service.UpstreamFailureRateLimited,
+	}
+	action = fs.HandleFailoverError(context.Background(), mock, 2593, service.PlatformAntigravity, peerErr)
+
+	require.Equal(t, FailoverExhausted, action, "a third account must not extend the request beyond the two-account budget")
+	require.Contains(t, fs.FailedAccountIDs, int64(2593))
+	require.Len(t, fs.AntigravityQuota429Accounts, 2)
+	require.Equal(t, 1, fs.SwitchCount)
+	require.Empty(t, mock.calls)
 }
 
 func TestHandleFailoverError_Kiro429StateMachine(t *testing.T) {

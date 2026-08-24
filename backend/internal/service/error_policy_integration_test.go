@@ -259,9 +259,10 @@ func TestRetryLoop_ErrorPolicy_TempUnschedulable(t *testing.T) {
 
 		result, err := svc.antigravityRetryLoop(p)
 
-		require.NoError(t, err)
-		require.NotNil(t, result)
-		require.Equal(t, http.StatusTooManyRequests, result.resp.StatusCode)
+		require.Nil(t, result)
+		var switchErr *AntigravityAccountSwitchError
+		require.ErrorAs(t, err, &switchErr)
+		require.Equal(t, http.StatusTooManyRequests, switchErr.StatusCode)
 		require.Equal(t, antigravityQuota429MaxAttempts, upstream.calls)
 		require.Zero(t, repo.tempCalls, "Antigravity 429 rules must not persist temporary-unschedulable state")
 		require.Nil(t, account.TempUnschedulableUntil)
@@ -295,9 +296,10 @@ func TestRetryLoop_ErrorPolicy_TempUnschedulable(t *testing.T) {
 
 		result, err := svc.antigravityRetryLoop(p)
 
-		require.NoError(t, err)
-		require.NotNil(t, result)
-		require.Equal(t, http.StatusTooManyRequests, result.resp.StatusCode)
+		require.Nil(t, result)
+		var switchErr *AntigravityAccountSwitchError
+		require.ErrorAs(t, err, &switchErr)
+		require.Equal(t, http.StatusTooManyRequests, switchErr.StatusCode)
 		require.Equal(t, antigravityQuota429MaxAttempts, upstream.calls)
 		require.Zero(t, repo.modelRateLimitCalls)
 		require.Zero(t, repo.tempCalls)
