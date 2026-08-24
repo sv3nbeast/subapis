@@ -1219,6 +1219,40 @@ func TestBuildKiroPayloadFlattensCompletedHistoryToolCyclesForKRS(t *testing.T) 
 	require.Contains(t, string(payload), "Tool results:")
 }
 
+func TestBuildKiroPayloadAgeBoundsOnlyOldCompletedToolHistory(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-5",
+		"max_tokens":128,
+		"tools":[{"name":"exec_command","description":"run","input_schema":{"type":"object"}}],
+		"messages":[
+			{"role":"user","content":"run checks"},
+			{"role":"assistant","content":[{"type":"tool_use","id":"old","name":"exec_command","input":{"cmd":"old-input-abcdefghijklmnopqrstuvwxyz"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"old","content":"old-result-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz"}]},
+			{"role":"assistant","content":[{"type":"tool_use","id":"recent","name":"exec_command","input":{"cmd":"recent-full-input"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"recent","content":"recent-full-result"}]},
+			{"role":"user","content":"summarize"}
+		]
+	}`)
+
+	result, err := BuildKiroPayloadWithOptions(body, "claude-opus-5", "", nil, KiroPayloadOptions{
+		Origin:                                 "AI_EDITOR",
+		FlattenCompletedToolHistory:            true,
+		CompletedToolHistoryKeepRecentToolUses: 0,
+		CompletedToolHistoryOldInputLimit:      24,
+		CompletedToolHistoryOldResultLimit:     32,
+	})
+	require.NoError(t, err)
+	require.True(t, result.Context.CompletedToolHistoryFlattened)
+	require.True(t, result.Context.OldCompletedToolHistoryCompacted)
+	payload := string(result.Payload)
+	require.Contains(t, payload, "Older completed tool input compacted")
+	require.Contains(t, payload, "Older completed tool result compacted")
+	require.Contains(t, payload, `recent-full-input`)
+	require.Contains(t, payload, `recent-full-result`)
+	require.NotContains(t, payload, `"toolUseId":"old"`)
+	require.Contains(t, payload, `"toolUseId":"recent"`)
+}
+
 func TestBuildKiroPayloadPreservesCompletedHistoryToolCyclesForAmazonQ(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-opus-5",

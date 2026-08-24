@@ -39,9 +39,12 @@ type nianzsKiroEndpointConfig struct {
 const nianzsKiroInvalidModelTempUnschedDuration = time.Minute
 
 const (
-	nianzsKiroRetryBaseDelay                    = 200 * time.Millisecond
-	nianzsKiroRetryMaxDelay                     = 2 * time.Second
-	nianzsKiroCompactCompletedToolUsesThreshold = 64
+	nianzsKiroRetryBaseDelay                   = 200 * time.Millisecond
+	nianzsKiroRetryMaxDelay                    = 2 * time.Second
+	nianzsKiroLongContextPayloadSoftLimitBytes = 2_000_000
+	nianzsKiroLongContextKeepRecentToolUses    = 64
+	nianzsKiroLongContextOldToolInputLimit     = 512
+	nianzsKiroLongContextOldToolResultLimit    = 1024
 )
 
 const nianzsKiroNativeToolProgressRetryInstruction = "[INTERNAL NATIVE TOOL RETRY: The previous attempt ended after announcing tool-backed work without making a tool call. Do not repeat the announcement. Call one of the available native tools now.]"
@@ -497,7 +500,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 	nianzsEnsureClaudeResponseVary(c.Writer.Header())
 	requestID := nianzsSetClaudeResponseRequestID(c.Writer.Header())
 	c.Data(http.StatusOK, "application/json", parseResult.ResponseBody)
-	nianzsLogKiroContextUsage(account, mappedModel, inputTokens, requestCtx.CompletedToolHistoryFlattened, parseResult.Usage)
+	nianzsLogKiroContextUsage(account, mappedModel, inputTokens, requestCtx.CompletedToolHistoryFlattened, requestCtx.OldCompletedToolHistoryCompacted, parseResult.Usage)
 
 	upstreamModel := nianzsResolveKiroUpstreamModel(mappedModel)
 
@@ -655,7 +658,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 				plan.commit()
 				_ = pw.Close()
 				if streamResult != nil {
-					nianzsLogKiroContextUsage(account, mappedModel, inputTokens, currentRequestCtx.CompletedToolHistoryFlattened, streamResult.Usage)
+					nianzsLogKiroContextUsage(account, mappedModel, inputTokens, currentRequestCtx.CompletedToolHistoryFlattened, currentRequestCtx.OldCompletedToolHistoryCompacted, streamResult.Usage)
 				}
 				return
 			}
@@ -874,8 +877,24 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 		if endpoint.Name == "KiroRuntime" {
 			profileArn = nianzsKiroResolveProfileArnForKRS(account)
 		}
-		flattenCompletedToolHistory := nianzsShouldFlattenCompletedToolHistory(endpoint.Name, anthropicBody)
-		buildResult, err := s.buildKiroPayloadForAccountWithArnNianzs(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, profileArn, flattenCompletedToolHistory, options)
+		buildEndpointPayload := func() (*nianzskiro.KiroBuildResult, bool, bool, error) {
+			flattenCompletedToolHistory := endpoint.Name == "KiroRuntime"
+			compactOldCompletedToolHistory := false
+			buildResult, buildErr := s.buildKiroPayloadForAccountWithArnNianzs(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, profileArn, flattenCompletedToolHistory, compactOldCompletedToolHistory, options)
+			if buildErr != nil {
+				return nil, false, false, buildErr
+			}
+			if endpoint.Name == "AmazonQ" && nianzsShouldCompactOldCompletedToolHistory(buildResult.Payload, anthropicBody) {
+				flattenCompletedToolHistory = true
+				compactOldCompletedToolHistory = true
+				buildResult, buildErr = s.buildKiroPayloadForAccountWithArnNianzs(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, profileArn, flattenCompletedToolHistory, compactOldCompletedToolHistory, options)
+				if buildErr != nil {
+					return nil, false, false, buildErr
+				}
+			}
+			return buildResult, flattenCompletedToolHistory, compactOldCompletedToolHistory, nil
+		}
+		buildResult, flattenCompletedToolHistory, compactOldCompletedToolHistory, err := buildEndpointPayload()
 		if err != nil {
 			return nil, requestCtx, err
 		}
@@ -885,7 +904,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 		// by contextUsageEvent and a frame-aligned EOF, omitting the separate
 		// metering/messageStop frame. Q endpoints retain strict terminal proof.
 		requestCtx.AcceptSemanticTailEOF = endpoint.Name == "KiroRuntime"
-		nianzsLogKiroStatelessReplay(account, buildResult.Payload, endpoint.Name, flattenCompletedToolHistory)
+		nianzsLogKiroStatelessReplay(account, buildResult.Payload, endpoint.Name, flattenCompletedToolHistory, compactOldCompletedToolHistory)
 
 		for attempt := 0; attempt <= maxRetries; attempt++ {
 			req, err := nianzsNewKiroJSONRequest(ctx, endpoint.URL, payload, currentToken, accountKey, nianzsBuildKiroMachineID(account), endpoint.AmzTarget, account)
@@ -984,13 +1003,13 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 						} else {
 							profileArn = ""
 						}
-						buildResult, err = s.buildKiroPayloadForAccountWithArnNianzs(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, profileArn, flattenCompletedToolHistory, options)
+						buildResult, flattenCompletedToolHistory, compactOldCompletedToolHistory, err = buildEndpointPayload()
 						if err != nil {
 							return nil, requestCtx, err
 						}
 						payload = buildResult.Payload
 						requestCtx = buildResult.Context
-						nianzsLogKiroStatelessReplay(account, buildResult.Payload, endpoint.Name, flattenCompletedToolHistory)
+						nianzsLogKiroStatelessReplay(account, buildResult.Payload, endpoint.Name, flattenCompletedToolHistory, compactOldCompletedToolHistory)
 						if sleepErr := nianzsSleepKiroRetry(ctx, attempt); sleepErr != nil {
 							return nil, requestCtx, sleepErr
 						}
@@ -1086,7 +1105,7 @@ func nianzsKiroEndpointModeForRequest(account *Account, parsed *ParsedRequest) s
 
 // buildKiroPayloadForAccountWithArnNianzs 使用显式 profileArn 构建 Kiro 请求 payload。
 // auto 模式下 Q/KRS 端点需要不同 profileArn，调用方按端点维度传入。
-func (s *GatewayService) buildKiroPayloadForAccountWithArnNianzs(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header, profileArn string, flattenCompletedToolHistory bool, options nianzsKiroUpstreamRequestOptions) (*nianzskiro.KiroBuildResult, error) {
+func (s *GatewayService) buildKiroPayloadForAccountWithArnNianzs(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header, profileArn string, flattenCompletedToolHistory, compactOldCompletedToolHistory bool, options nianzsKiroUpstreamRequestOptions) (*nianzskiro.KiroBuildResult, error) {
 	_ = s
 	_ = ctx
 	_ = token
@@ -1094,12 +1113,23 @@ func (s *GatewayService) buildKiroPayloadForAccountWithArnNianzs(ctx context.Con
 	requireNativeToolProgress := parsed != nil && parsed.KiroNativeToolProgressRequired
 	requireNativeToolCallMarker := parsed != nil && parsed.KiroNativeToolCallMarkerRequired
 	requireNativeToolTextPrelude := parsed != nil && parsed.KiroNativeToolTextPreludeGuard
+	keepRecentToolUses := 0
+	oldToolInputLimit := 0
+	oldToolResultLimit := 0
+	if compactOldCompletedToolHistory {
+		keepRecentToolUses = nianzsKiroLongContextKeepRecentToolUses
+		oldToolInputLimit = nianzsKiroLongContextOldToolInputLimit
+		oldToolResultLimit = nianzsKiroLongContextOldToolResultLimit
+	}
 	buildResult, err := nianzskiro.BuildKiroPayloadWithOptions(anthropicBody, modelID, profileArn, headers, nianzskiro.KiroPayloadOptions{
-		Origin:                       "AI_EDITOR",
-		RequireNativeToolProgress:    requireNativeToolProgress,
-		RequireNativeToolCallMarker:  requireNativeToolCallMarker,
-		RequireNativeToolTextPrelude: requireNativeToolTextPrelude,
-		FlattenCompletedToolHistory:  flattenCompletedToolHistory,
+		Origin:                                 "AI_EDITOR",
+		RequireNativeToolProgress:              requireNativeToolProgress,
+		RequireNativeToolCallMarker:            requireNativeToolCallMarker,
+		RequireNativeToolTextPrelude:           requireNativeToolTextPrelude,
+		FlattenCompletedToolHistory:            flattenCompletedToolHistory,
+		CompletedToolHistoryKeepRecentToolUses: keepRecentToolUses,
+		CompletedToolHistoryOldInputLimit:      oldToolInputLimit,
+		CompletedToolHistoryOldResultLimit:     oldToolResultLimit,
 	})
 	if err != nil {
 		return nil, err
@@ -1177,7 +1207,7 @@ func nianzsStableKiroConversationSeed(account *Account, parsed *ParsedRequest, a
 	return sb.String()
 }
 
-func nianzsLogKiroStatelessReplay(account *Account, payload []byte, endpointName string, flattenCompletedToolHistory bool) {
+func nianzsLogKiroStatelessReplay(account *Account, payload []byte, endpointName string, flattenCompletedToolHistory, compactOldCompletedToolHistory bool) {
 	if account == nil {
 		return
 	}
@@ -1188,6 +1218,7 @@ func nianzsLogKiroStatelessReplay(account *Account, payload []byte, endpointName
 		zap.Int64("selected_account_id", account.ID),
 		zap.String("endpoint_name", strings.TrimSpace(endpointName)),
 		zap.Bool("flatten_completed_tool_history", flattenCompletedToolHistory),
+		zap.Bool("compact_old_completed_tool_history", compactOldCompletedToolHistory),
 		zap.Bool("stateless_replay", true),
 		zap.Int("payload_bytes", len(payload)),
 		zap.Int("history_count", len(gjson.GetBytes(payload, "conversationState.history").Array())),
@@ -1201,22 +1232,17 @@ func nianzsLogKiroStatelessReplay(account *Account, payload []byte, endpointName
 	)
 }
 
-// KRS requires completed tool history to be flattened for protocol
-// compatibility. Amazon Q accepts native structured cycles, but each completed
-// cycle carries a large provider-side context tax during stateless replay. Keep
-// short conversations native and compact long tool sessions before they can
-// exhaust a 1M context window. The translator preserves tool names, inputs,
-// outputs, order, and message roles; only the completed protocol envelope is
-// removed, while the active final tool turn stays structured.
-func nianzsShouldFlattenCompletedToolHistory(endpointName string, anthropicBody []byte) bool {
-	switch strings.TrimSpace(endpointName) {
-	case "KiroRuntime":
-		return true
-	case "AmazonQ":
-		return nianzsCountAnthropicToolUses(anthropicBody, nianzsKiroCompactCompletedToolUsesThreshold) >= nianzsKiroCompactCompletedToolUsesThreshold
-	default:
+// Kiro's provider-side context accounting can reach 1M substantially earlier
+// than the Anthropic tokenizer estimate for tool-heavy Claude Desktop/Codex
+// sessions. Build the endpoint-native payload first, then age-bound only old
+// completed tool I/O when the actual Kiro wire representation is already near
+// the calibrated danger zone. Natural conversation, current tool work, and the
+// newest tool window remain verbatim.
+func nianzsShouldCompactOldCompletedToolHistory(nativePayload, anthropicBody []byte) bool {
+	if len(nativePayload) < nianzsKiroLongContextPayloadSoftLimitBytes {
 		return false
 	}
+	return nianzsCountAnthropicToolUses(anthropicBody, nianzsKiroLongContextKeepRecentToolUses+1) > nianzsKiroLongContextKeepRecentToolUses
 }
 
 func nianzsCountAnthropicToolUses(anthropicBody []byte, stopAfter int) int {
@@ -1244,17 +1270,18 @@ func nianzsCountAnthropicToolUses(anthropicBody []byte, stopAfter int) int {
 	return count
 }
 
-func nianzsLogKiroContextUsage(account *Account, model string, estimatedInputTokens int, completedToolHistoryFlattened bool, usage nianzskiro.Usage) {
+func nianzsLogKiroContextUsage(account *Account, model string, estimatedInputTokens int, completedToolHistoryFlattened, oldCompletedToolHistoryCompacted bool, usage nianzskiro.Usage) {
 	if account == nil || !usage.HasContextUsage {
 		return
 	}
-	if !completedToolHistoryFlattened && usage.ContextUsagePercentage < 70 && estimatedInputTokens < 500_000 {
+	if !oldCompletedToolHistoryCompacted && usage.ContextUsagePercentage < 70 && estimatedInputTokens < 500_000 {
 		return
 	}
 	logger.L().Info("kiro.context_usage",
 		zap.Int64("selected_account_id", account.ID),
 		zap.String("model", strings.TrimSpace(model)),
 		zap.Bool("flatten_completed_tool_history", completedToolHistoryFlattened),
+		zap.Bool("compact_old_completed_tool_history", oldCompletedToolHistoryCompacted),
 		zap.Float64("context_usage_percentage", usage.ContextUsagePercentage),
 		zap.Int("estimated_anthropic_input_tokens", estimatedInputTokens),
 	)

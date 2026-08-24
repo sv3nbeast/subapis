@@ -251,6 +251,9 @@ type KiroRequestContext struct {
 	// the request representation selected before the upstream call. It never
 	// changes parsing, usage reconciliation, or client-visible output.
 	CompletedToolHistoryFlattened bool
+	// OldCompletedToolHistoryCompacted marks age-bounded tool inputs/results.
+	// Natural conversation and the most recent tool window remain unchanged.
+	OldCompletedToolHistoryCompacted bool
 	// EstimatedInputTokens 是调用方预估的输入 token 数，用于非流式路径兜底：
 	// Kiro 上游只上报 credits(meteringEvent),不发 tokenUsage,解析结果里的
 	// InputTokens 恒为 0。流式路径通过独立的 inputTokens 参数种入初值,非流式
@@ -276,6 +279,13 @@ type KiroPayloadOptions struct {
 	// conversation text. Besides KRS compatibility, this avoids making Kiro
 	// count the verbose tool protocol envelope again on every stateless replay.
 	FlattenCompletedToolHistory bool
+	// CompletedToolHistoryKeepRecentToolUses keeps this many newest completed
+	// tool uses and their results verbatim. Older completed tool inputs/results
+	// are bounded by the byte limits below after history flattening. Zero limits
+	// disable age-bounded content compaction.
+	CompletedToolHistoryKeepRecentToolUses int
+	CompletedToolHistoryOldInputLimit      int
+	CompletedToolHistoryOldResultLimit     int
 }
 
 type KiroPayload struct {
@@ -572,10 +582,11 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 
 func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, headers http.Header, options KiroPayloadOptions) (*KiroBuildResult, error) {
 	requestCtx := KiroRequestContext{
-		ToolNameMap:                   map[string]string{},
-		ContextWindowTokens:           contextWindowTokensForModel(modelID),
-		ContextWindowSource:           "static_fallback",
-		CompletedToolHistoryFlattened: options.FlattenCompletedToolHistory,
+		ToolNameMap:                      map[string]string{},
+		ContextWindowTokens:              contextWindowTokensForModel(modelID),
+		ContextWindowSource:              "static_fallback",
+		CompletedToolHistoryFlattened:    options.FlattenCompletedToolHistory,
+		OldCompletedToolHistoryCompacted: options.FlattenCompletedToolHistory && options.CompletedToolHistoryOldInputLimit > 0 && options.CompletedToolHistoryOldResultLimit > 0,
 	}
 	requestCtx.EmitProtocolPing = anthropicBetaHeaderContains(headers, "claude-code-20250219")
 	requestCtx.ReportUsageIterations = requestCtx.EmitProtocolPing
@@ -686,11 +697,11 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 			currentToolResultIDs = collectKiroToolResultIDs(currentToolResults)
 			if !isKiroActiveToolResultTurn(history, currentToolResultIDs) {
 				currentToolResultIDs = nil
-				currentUserMsg.Content = joinKiroHistoryText(currentUserMsg.Content, narrateKiroToolResults(currentToolResults, collectKiroHistoryToolNames(history, requestCtx)))
+				currentUserMsg.Content = joinKiroHistoryText(currentUserMsg.Content, narrateKiroToolResults(currentToolResults, collectKiroHistoryToolNames(history, requestCtx), nil, 0))
 				currentToolResults = nil
 			}
 		}
-		history = sanitizeKiroToolHistory(history, currentToolResultIDs, requestCtx, options.FlattenCompletedToolHistory)
+		history = sanitizeKiroToolHistory(history, currentToolResultIDs, requestCtx, options)
 		if len(kiroTools) > 0 || len(currentToolResults) > 0 {
 			currentUserMsg.UserInputMessageContext = &KiroUserInputMessageContext{
 				Tools:       kiroTools,
@@ -698,7 +709,7 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 			}
 		}
 	} else {
-		history = sanitizeKiroToolHistory(history, nil, requestCtx, options.FlattenCompletedToolHistory)
+		history = sanitizeKiroToolHistory(history, nil, requestCtx, options)
 	}
 
 	var currentMessage KiroCurrentMessage
@@ -3453,17 +3464,19 @@ func collectKiroHistoryToolNames(history []KiroHistoryMessage, requestCtx KiroRe
 // the active final tool turn structured and preserve completed tool calls and
 // outputs as ordinary conversation text. Endpoint selection decides whether
 // the rewrite is required; empty/orphan history cleanup remains neutral.
-func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs map[string]bool, requestCtx KiroRequestContext, flattenCompletedToolHistory bool) []KiroHistoryMessage {
+func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs map[string]bool, requestCtx KiroRequestContext, options KiroPayloadOptions) []KiroHistoryMessage {
 	if len(history) == 0 {
 		return history
 	}
 
+	flattenCompletedToolHistory := options.FlattenCompletedToolHistory
 	toolNames := collectKiroHistoryToolNames(history, requestCtx)
 	flattenedToolMessages := make(map[*KiroUserInputMessage]bool)
 	activeAssistantIdx := -1
 	if flattenCompletedToolHistory && isKiroActiveToolResultTurn(history, currentToolResultIDs) {
 		activeAssistantIdx = len(history) - 1
 	}
+	oldToolUseIDs := collectOldCompletedKiroToolUseIDs(history, activeAssistantIdx, options.CompletedToolHistoryKeepRecentToolUses, options.CompletedToolHistoryOldInputLimit, options.CompletedToolHistoryOldResultLimit)
 
 	for i := range history {
 		msg := &history[i]
@@ -3472,7 +3485,7 @@ func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs 
 			if flattenCompletedToolHistory && len(msg.AssistantResponseMessage.ToolUses) > 0 && i != activeAssistantIdx {
 				msg.AssistantResponseMessage.Content = joinKiroHistoryText(
 					msg.AssistantResponseMessage.Content,
-					narrateKiroToolUses(msg.AssistantResponseMessage.ToolUses, requestCtx),
+					narrateKiroToolUses(msg.AssistantResponseMessage.ToolUses, requestCtx, oldToolUseIDs, options.CompletedToolHistoryOldInputLimit),
 				)
 				msg.AssistantResponseMessage.ToolUses = nil
 			}
@@ -3480,7 +3493,7 @@ func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs 
 		if msg.UserInputMessage != nil && msg.UserInputMessage.UserInputMessageContext != nil {
 			ctx := msg.UserInputMessage.UserInputMessageContext
 			if flattenCompletedToolHistory && len(ctx.ToolResults) > 0 {
-				msg.UserInputMessage.Content = joinKiroHistoryText(msg.UserInputMessage.Content, narrateKiroToolResults(ctx.ToolResults, toolNames))
+				msg.UserInputMessage.Content = joinKiroHistoryText(msg.UserInputMessage.Content, narrateKiroToolResults(ctx.ToolResults, toolNames, oldToolUseIDs, options.CompletedToolHistoryOldResultLimit))
 				flattenedToolMessages[msg.UserInputMessage] = true
 				ctx.ToolResults = nil
 			}
@@ -3519,7 +3532,49 @@ func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs 
 	return trimLeadingKiroAssistantHistory(cleaned)
 }
 
-func narrateKiroToolResults(toolResults []KiroToolResult, names map[string]string) string {
+func collectOldCompletedKiroToolUseIDs(history []KiroHistoryMessage, activeAssistantIdx, keepRecent, inputLimit, resultLimit int) map[string]bool {
+	if keepRecent < 0 || inputLimit <= 0 || resultLimit <= 0 {
+		return nil
+	}
+	toolUseIDs := make([]string, 0)
+	for index, message := range history {
+		if index == activeAssistantIdx || message.AssistantResponseMessage == nil {
+			continue
+		}
+		for _, toolUse := range message.AssistantResponseMessage.ToolUses {
+			if toolUse.ToolUseID != "" {
+				toolUseIDs = append(toolUseIDs, toolUse.ToolUseID)
+			}
+		}
+	}
+	compactCount := len(toolUseIDs) - keepRecent
+	if compactCount <= 0 {
+		return nil
+	}
+	old := make(map[string]bool, compactCount)
+	for _, toolUseID := range toolUseIDs[:compactCount] {
+		old[toolUseID] = true
+	}
+	return old
+}
+
+func compactOldKiroToolText(text string, limit int, kind string) string {
+	text = strings.TrimSpace(text)
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	headLimit := limit * 2 / 3
+	tailLimit := limit - headLimit
+	head := truncateUTF8(text, headLimit)
+	tail := tailUTF8(text, tailLimit)
+	omitted := utf8.RuneCountInString(text) - utf8.RuneCountInString(head) - utf8.RuneCountInString(tail)
+	if omitted < 0 {
+		omitted = 0
+	}
+	return head + fmt.Sprintf("\n\n[Older completed tool %s compacted: original chars=%d, omitted chars=%d]\n\n", kind, utf8.RuneCountInString(text), omitted) + tail
+}
+
+func narrateKiroToolResults(toolResults []KiroToolResult, names map[string]string, oldToolUseIDs map[string]bool, oldResultLimit int) string {
 	if len(toolResults) == 0 {
 		return ""
 	}
@@ -3535,6 +3590,9 @@ func narrateKiroToolResults(toolResults []KiroToolResult, names map[string]strin
 		if strings.TrimSpace(body) == "" {
 			body = "(no output)"
 		}
+		if oldToolUseIDs[result.ToolUseID] {
+			body = compactOldKiroToolText(body, oldResultLimit, "result")
+		}
 		if name := strings.TrimSpace(names[result.ToolUseID]); name != "" {
 			parts = append(parts, fmt.Sprintf("[%s] %s", name, body))
 		} else {
@@ -3547,7 +3605,7 @@ func narrateKiroToolResults(toolResults []KiroToolResult, names map[string]strin
 	return kiroToolResultsPrefix + "\n\n" + strings.Join(parts, "\n\n")
 }
 
-func narrateKiroToolUses(toolUses []KiroToolUse, requestCtx KiroRequestContext) string {
+func narrateKiroToolUses(toolUses []KiroToolUse, requestCtx KiroRequestContext, oldToolUseIDs map[string]bool, oldInputLimit int) string {
 	if len(toolUses) == 0 {
 		return ""
 	}
@@ -3565,6 +3623,9 @@ func narrateKiroToolUses(toolUses []KiroToolUse, requestCtx KiroRequestContext) 
 		}
 		if input == "" {
 			input = "{}"
+		}
+		if oldToolUseIDs[toolUse.ToolUseID] {
+			input = compactOldKiroToolText(input, oldInputLimit, "input")
 		}
 		parts = append(parts, fmt.Sprintf("[%s] %s", name, input))
 	}
