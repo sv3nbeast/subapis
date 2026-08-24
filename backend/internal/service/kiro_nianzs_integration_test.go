@@ -1140,40 +1140,46 @@ func TestNianzsMessagesForwardScopesCompletedToolHistoryByEndpoint(t *testing.T)
 	}
 }
 
+func nianzsLongToolHistoryRequestBody(t *testing.T, stream bool) ([]byte, string) {
+	t.Helper()
+	const longToolUses = 300
+	messages := make([]any, 0, longToolUses*2+1)
+	messages = append(messages, map[string]any{"role": "user", "content": "run the checks"})
+	for i := 0; i < longToolUses; i++ {
+		toolID := fmt.Sprintf("long-tool-%d", i)
+		resultText := fmt.Sprintf("result-%d-%s", i, strings.Repeat("x", 8_000))
+		var resultContent any = resultText
+		if i%2 == 1 {
+			resultContent = []any{map[string]any{"type": "text", "text": resultText}}
+		}
+		messages = append(messages,
+			map[string]any{"role": "assistant", "content": []any{map[string]any{
+				"type": "tool_use", "id": toolID, "name": "exec_command", "input": map[string]any{"cmd": fmt.Sprintf("check-%d", i)},
+			}}},
+			map[string]any{"role": "user", "content": []any{map[string]any{
+				"type": "tool_result", "tool_use_id": toolID, "content": resultContent,
+			}}},
+		)
+	}
+	body, err := json.Marshal(map[string]any{
+		"model":      "claude-opus-5",
+		"max_tokens": 128,
+		"stream":     stream,
+		"tools": []any{map[string]any{
+			"name": "exec_command", "description": "run", "input_schema": map[string]any{"type": "object"},
+		}},
+		"messages": messages,
+	})
+	require.NoError(t, err)
+	return body, fmt.Sprintf("long-tool-%d", longToolUses-1)
+}
+
 func TestNianzsMessagesForwardCompactsLongAmazonQToolHistory(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	const longToolUses = 300
 	for _, stream := range []bool{false, true} {
 		stream := stream
 		t.Run(fmt.Sprintf("stream_%t", stream), func(t *testing.T) {
-			messages := make([]any, 0, longToolUses*2+1)
-			messages = append(messages, map[string]any{"role": "user", "content": "run the checks"})
-			for i := 0; i < longToolUses; i++ {
-				toolID := fmt.Sprintf("long-tool-%d", i)
-				resultText := fmt.Sprintf("result-%d-%s", i, strings.Repeat("x", 8_000))
-				var resultContent any = resultText
-				if i%2 == 1 {
-					resultContent = []any{map[string]any{"type": "text", "text": resultText}}
-				}
-				messages = append(messages,
-					map[string]any{"role": "assistant", "content": []any{map[string]any{
-						"type": "tool_use", "id": toolID, "name": "exec_command", "input": map[string]any{"cmd": fmt.Sprintf("check-%d", i)},
-					}}},
-					map[string]any{"role": "user", "content": []any{map[string]any{
-						"type": "tool_result", "tool_use_id": toolID, "content": resultContent,
-					}}},
-				)
-			}
-			body, err := json.Marshal(map[string]any{
-				"model":      "claude-opus-5",
-				"max_tokens": 128,
-				"stream":     stream,
-				"tools": []any{map[string]any{
-					"name": "exec_command", "description": "run", "input_schema": map[string]any{"type": "object"},
-				}},
-				"messages": messages,
-			})
-			require.NoError(t, err)
+			body, lastToolID := nianzsLongToolHistoryRequestBody(t, stream)
 
 			parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
 			require.NoError(t, err)
@@ -1199,7 +1205,6 @@ func TestNianzsMessagesForwardCompactsLongAmazonQToolHistory(t *testing.T) {
 			require.Contains(t, string(payload), "[exec_command] result-0")
 			require.Contains(t, string(payload), "[exec_command] result-1")
 			require.Contains(t, string(payload), "Older completed tool result compacted")
-			lastToolID := fmt.Sprintf("long-tool-%d", longToolUses-1)
 			require.Equal(t, lastToolID, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
 			history := gjson.GetBytes(payload, "conversationState.history").Array()
 			require.NotEmpty(t, history)
@@ -1344,6 +1349,56 @@ func TestNianzsMessagesAutoRebuildsToolHistoryForEachEndpoint(t *testing.T) {
 	require.Equal(t, "runtime.us-east-1.kiro.dev", upstream.requests[3].URL.Host)
 	require.NotContains(t, string(upstream.bodies[3]), `"toolUseId":"old-tool"`)
 	require.Contains(t, string(upstream.bodies[3]), "[exec_command] build ok")
+	require.Equal(t, "recovered on krs", gjson.GetBytes(recorder.Body.Bytes(), "content.0.text").String())
+}
+
+func TestNianzsMessagesAutoKeepsLongToolHistoryCompactedAcrossEndpointFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body, lastToolID := nianzsLongToolHistoryRequestBody(t, false)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	groupID := int64(29)
+	parsed.GroupID = &groupID
+	parsed.Group = &Group{ID: groupID, Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeAuto}
+
+	serviceUnavailable := func() *http.Response {
+		return &http.Response{
+			StatusCode: http.StatusServiceUnavailable,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"message":"temporary"}`)),
+		}
+	}
+	svc, upstream, account := newNianzsKiroRouteTestRuntime(t, nil)
+	upstream.responses = []*http.Response{
+		serviceUnavailable(),
+		serviceUnavailable(),
+		serviceUnavailable(),
+		kiroEventStreamResponse(t, "recovered on krs", 64, 5),
+	}
+	originalRetrySleep := nianzsKiroRetrySleep
+	nianzsKiroRetrySleep = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { nianzsKiroRetrySleep = originalRetrySleep })
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+	result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+
+	require.NoError(t, forwardErr)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 4)
+	require.Len(t, upstream.bodies, 4)
+	for i, payload := range upstream.bodies {
+		require.Less(t, len(payload), nianzsKiroLongContextPayloadSoftLimitBytes)
+		require.NotContains(t, string(payload), `"toolUseId":"long-tool-0"`)
+		require.Contains(t, string(payload), "Older completed tool result compacted")
+		require.Equal(t, lastToolID, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
+		if i < 3 {
+			require.Equal(t, "q.us-east-1.amazonaws.com", upstream.requests[i].URL.Host)
+		} else {
+			require.Equal(t, "runtime.us-east-1.kiro.dev", upstream.requests[i].URL.Host)
+		}
+	}
 	require.Equal(t, "recovered on krs", gjson.GetBytes(recorder.Body.Bytes(), "content.0.text").String())
 }
 

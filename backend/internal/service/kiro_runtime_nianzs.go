@@ -884,7 +884,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 			if buildErr != nil {
 				return nil, false, false, buildErr
 			}
-			if endpoint.Name == "AmazonQ" && nianzsShouldCompactOldCompletedToolHistory(buildResult.Payload, anthropicBody) {
+			if nianzsShouldCompactOldCompletedToolHistory(buildResult.Payload, anthropicBody) {
 				flattenCompletedToolHistory = true
 				compactOldCompletedToolHistory = true
 				buildResult, buildErr = s.buildKiroPayloadForAccountWithArnNianzs(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, profileArn, flattenCompletedToolHistory, compactOldCompletedToolHistory, options)
