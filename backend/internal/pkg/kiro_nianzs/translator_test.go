@@ -1188,6 +1188,7 @@ func TestBuildKiroPayloadFlattensCompletedHistoryToolCyclesForKRS(t *testing.T) 
 		FlattenCompletedToolHistory: true,
 	})
 	require.NoError(t, err)
+	require.True(t, result.Context.CompletedToolHistoryFlattened)
 	payload := result.Payload
 
 	foundT1ToolUse := false

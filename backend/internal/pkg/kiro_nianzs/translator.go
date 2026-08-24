@@ -247,6 +247,10 @@ type KiroRequestContext struct {
 	// ContextWindowSource is "upstream_model_metadata" when ListAvailableModels
 	// supplied the limit and "static_fallback" otherwise.
 	ContextWindowSource string
+	// CompletedToolHistoryFlattened is safe response-side telemetry describing
+	// the request representation selected before the upstream call. It never
+	// changes parsing, usage reconciliation, or client-visible output.
+	CompletedToolHistoryFlattened bool
 	// EstimatedInputTokens 是调用方预估的输入 token 数，用于非流式路径兜底：
 	// Kiro 上游只上报 credits(meteringEvent),不发 tokenUsage,解析结果里的
 	// InputTokens 恒为 0。流式路径通过独立的 inputTokens 参数种入初值,非流式
@@ -568,9 +572,10 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 
 func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, headers http.Header, options KiroPayloadOptions) (*KiroBuildResult, error) {
 	requestCtx := KiroRequestContext{
-		ToolNameMap:         map[string]string{},
-		ContextWindowTokens: contextWindowTokensForModel(modelID),
-		ContextWindowSource: "static_fallback",
+		ToolNameMap:                   map[string]string{},
+		ContextWindowTokens:           contextWindowTokensForModel(modelID),
+		ContextWindowSource:           "static_fallback",
+		CompletedToolHistoryFlattened: options.FlattenCompletedToolHistory,
 	}
 	requestCtx.EmitProtocolPing = anthropicBetaHeaderContains(headers, "claude-code-20250219")
 	requestCtx.ReportUsageIterations = requestCtx.EmitProtocolPing

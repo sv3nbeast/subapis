@@ -1149,12 +1149,16 @@ func TestNianzsMessagesForwardCompactsLongAmazonQToolHistory(t *testing.T) {
 			messages = append(messages, map[string]any{"role": "user", "content": "run the checks"})
 			for i := 0; i < nianzsKiroCompactCompletedToolUsesThreshold; i++ {
 				toolID := fmt.Sprintf("long-tool-%d", i)
+				var resultContent any = fmt.Sprintf("result-%d", i)
+				if i%2 == 1 {
+					resultContent = []any{map[string]any{"type": "text", "text": fmt.Sprintf("result-%d", i)}}
+				}
 				messages = append(messages,
 					map[string]any{"role": "assistant", "content": []any{map[string]any{
 						"type": "tool_use", "id": toolID, "name": "exec_command", "input": map[string]any{"cmd": fmt.Sprintf("check-%d", i)},
 					}}},
 					map[string]any{"role": "user", "content": []any{map[string]any{
-						"type": "tool_result", "tool_use_id": toolID, "content": fmt.Sprintf("result-%d", i),
+						"type": "tool_result", "tool_use_id": toolID, "content": resultContent,
 					}}},
 				)
 			}
@@ -1190,6 +1194,7 @@ func TestNianzsMessagesForwardCompactsLongAmazonQToolHistory(t *testing.T) {
 			require.NotContains(t, string(payload), `"toolUseId":"long-tool-0"`)
 			require.Contains(t, string(payload), `[exec_command] {\"cmd\":\"check-0\"}`)
 			require.Contains(t, string(payload), "[exec_command] result-0")
+			require.Contains(t, string(payload), "[exec_command] result-1")
 			lastToolID := fmt.Sprintf("long-tool-%d", nianzsKiroCompactCompletedToolUsesThreshold-1)
 			require.Equal(t, lastToolID, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
 			history := gjson.GetBytes(payload, "conversationState.history").Array()

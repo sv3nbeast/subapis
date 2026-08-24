@@ -497,7 +497,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 	nianzsEnsureClaudeResponseVary(c.Writer.Header())
 	requestID := nianzsSetClaudeResponseRequestID(c.Writer.Header())
 	c.Data(http.StatusOK, "application/json", parseResult.ResponseBody)
-	nianzsLogKiroContextUsage(account, mappedModel, inputTokens, parseResult.Usage)
+	nianzsLogKiroContextUsage(account, mappedModel, inputTokens, requestCtx.CompletedToolHistoryFlattened, parseResult.Usage)
 
 	upstreamModel := nianzsResolveKiroUpstreamModel(mappedModel)
 
@@ -655,7 +655,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 				plan.commit()
 				_ = pw.Close()
 				if streamResult != nil {
-					nianzsLogKiroContextUsage(account, mappedModel, inputTokens, streamResult.Usage)
+					nianzsLogKiroContextUsage(account, mappedModel, inputTokens, currentRequestCtx.CompletedToolHistoryFlattened, streamResult.Usage)
 				}
 				return
 			}
@@ -1244,16 +1244,17 @@ func nianzsCountAnthropicToolUses(anthropicBody []byte, stopAfter int) int {
 	return count
 }
 
-func nianzsLogKiroContextUsage(account *Account, model string, estimatedInputTokens int, usage nianzskiro.Usage) {
+func nianzsLogKiroContextUsage(account *Account, model string, estimatedInputTokens int, completedToolHistoryFlattened bool, usage nianzskiro.Usage) {
 	if account == nil || !usage.HasContextUsage {
 		return
 	}
-	if usage.ContextUsagePercentage < 70 && estimatedInputTokens < 500_000 {
+	if !completedToolHistoryFlattened && usage.ContextUsagePercentage < 70 && estimatedInputTokens < 500_000 {
 		return
 	}
 	logger.L().Info("kiro.context_usage",
 		zap.Int64("selected_account_id", account.ID),
 		zap.String("model", strings.TrimSpace(model)),
+		zap.Bool("flatten_completed_tool_history", completedToolHistoryFlattened),
 		zap.Float64("context_usage_percentage", usage.ContextUsagePercentage),
 		zap.Int("estimated_anthropic_input_tokens", estimatedInputTokens),
 	)
