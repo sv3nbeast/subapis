@@ -43,8 +43,11 @@ const (
 	nianzsKiroRetryMaxDelay                    = 2 * time.Second
 	nianzsKiroLongContextPayloadSoftLimitBytes = 2_000_000
 	nianzsKiroLongContextKeepRecentToolUses    = 64
-	nianzsKiroLongContextOldToolInputLimit     = 512
-	nianzsKiroLongContextOldToolResultLimit    = 1024
+	// Preserve the active/recent tool window verbatim, but keep older completed
+	// cycles small enough that clients can reach their own ~900k compact point
+	// without Kiro's protocol envelope exhausting the 1M upstream window first.
+	nianzsKiroLongContextOldToolInputLimit  = 256
+	nianzsKiroLongContextOldToolResultLimit = 512
 )
 
 const nianzsKiroNativeToolProgressRetryInstruction = "[INTERNAL NATIVE TOOL RETRY: The previous attempt ended after announcing tool-backed work without making a tool call. Do not repeat the announcement. Call one of the available native tools now.]"

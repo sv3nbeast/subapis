@@ -1228,8 +1228,9 @@ func TestBuildKiroPayloadAgeBoundsOnlyOldCompletedToolHistory(t *testing.T) {
 			{"role":"user","content":"run checks"},
 			{"role":"assistant","content":[{"type":"tool_use","id":"old","name":"exec_command","input":{"cmd":"old-input-abcdefghijklmnopqrstuvwxyz"}}]},
 			{"role":"user","content":[{"type":"tool_result","tool_use_id":"old","content":"old-result-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz"}]},
-			{"role":"assistant","content":[{"type":"tool_use","id":"recent","name":"exec_command","input":{"cmd":"recent-full-input"}}]},
-			{"role":"user","content":[{"type":"tool_result","tool_use_id":"recent","content":"recent-full-result"}]},
+			{"role":"assistant","content":[{"type":"tool_use","id":"recent","name":"exec_command","input":{"cmd":"recent-full-input-abcdefghijklmnopqrstuvwxyz"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"recent","content":"recent-full-result-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz"}]},
+			{"role":"assistant","content":"checks completed"},
 			{"role":"user","content":"summarize"}
 		]
 	}`)
@@ -1237,7 +1238,7 @@ func TestBuildKiroPayloadAgeBoundsOnlyOldCompletedToolHistory(t *testing.T) {
 	result, err := BuildKiroPayloadWithOptions(body, "claude-opus-5", "", nil, KiroPayloadOptions{
 		Origin:                                 "AI_EDITOR",
 		FlattenCompletedToolHistory:            true,
-		CompletedToolHistoryKeepRecentToolUses: 0,
+		CompletedToolHistoryKeepRecentToolUses: 1,
 		CompletedToolHistoryOldInputLimit:      24,
 		CompletedToolHistoryOldResultLimit:     32,
 	})
@@ -1247,10 +1248,10 @@ func TestBuildKiroPayloadAgeBoundsOnlyOldCompletedToolHistory(t *testing.T) {
 	payload := string(result.Payload)
 	require.Contains(t, payload, "Older completed tool input compacted")
 	require.Contains(t, payload, "Older completed tool result compacted")
-	require.Contains(t, payload, `recent-full-input`)
-	require.Contains(t, payload, `recent-full-result`)
+	require.Contains(t, payload, `recent-full-input-abcdefghijklmnopqrstuvwxyz`)
+	require.Contains(t, payload, `recent-full-result-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz`)
 	require.NotContains(t, payload, `"toolUseId":"old"`)
-	require.Contains(t, payload, `"toolUseId":"recent"`)
+	require.NotContains(t, payload, `"toolUseId":"recent"`)
 }
 
 func TestBuildKiroPayloadPreservesCompletedHistoryToolCyclesForAmazonQ(t *testing.T) {
