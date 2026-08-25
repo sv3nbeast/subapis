@@ -1110,8 +1110,8 @@ func TestNianzsMessagesForwardScopesCompletedToolHistoryByEndpoint(t *testing.T)
 				payload := upstream.lastBody
 				if endpoint.flattenOldHistory {
 					require.NotContains(t, string(payload), `"toolUseId":"old-tool"`)
-					require.Contains(t, string(payload), "Tool calls:")
-					require.Contains(t, string(payload), `[exec_command] {\"cmd\":\"make\"}`)
+					require.NotContains(t, string(payload), "Tool calls:")
+					require.NotContains(t, string(payload), `[exec_command] {\"cmd\":\"make\"}`)
 					require.Contains(t, string(payload), "Tool results:")
 					require.Contains(t, string(payload), "[exec_command] build ok")
 				} else {
@@ -1137,6 +1137,47 @@ func TestNianzsMessagesForwardScopesCompletedToolHistoryByEndpoint(t *testing.T)
 				}
 			})
 		}
+	}
+}
+
+func TestNianzsMessagesRecoversLegacyFlattenedToolEnvelopeAsNativeToolUse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, stream := range []bool{false, true} {
+		stream := stream
+		t.Run(fmt.Sprintf("stream_%t", stream), func(t *testing.T) {
+			body := []byte(fmt.Sprintf(`{
+				"model":"claude-opus-5",
+				"max_tokens":128,
+				"stream":%t,
+				"tools":[{"name":"Bash","description":"run","input_schema":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}],
+				"messages":[{"role":"user","content":"inspect the workspace"}]
+			}`, stream))
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+			require.NoError(t, err)
+			upstreamResponse := kiroEventStreamResponse(t,
+				"I need to inspect the workspace.\n\nTool calls:\n\n[Bash] {\"command\":\"pwd\",\"description\":\"print cwd\"}", 64, 5)
+			svc, upstream, account := newNianzsKiroRouteTestRuntime(t, upstreamResponse)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+			result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+
+			require.NoError(t, forwardErr)
+			require.NotNil(t, result)
+			require.Len(t, upstream.requests, 1)
+			require.Contains(t, recorder.Body.String(), `"name":"Bash"`)
+			require.NotContains(t, recorder.Body.String(), "Tool calls:")
+			if stream {
+				require.Contains(t, recorder.Body.String(), `"partial_json":"{\"command\":\"pwd\",`)
+				require.Equal(t, 1, strings.Count(recorder.Body.String(), "event: message_stop"))
+				require.Contains(t, recorder.Body.String(), `"stop_reason":"tool_use"`)
+			} else {
+				require.Equal(t, "pwd", gjson.GetBytes(recorder.Body.Bytes(), "content.1.input.command").String())
+				require.Equal(t, "tool_use", gjson.GetBytes(recorder.Body.Bytes(), "stop_reason").String())
+				require.Equal(t, "tool_use", gjson.GetBytes(recorder.Body.Bytes(), "content.1.type").String())
+			}
+		})
 	}
 }
 
@@ -1201,7 +1242,8 @@ func TestNianzsMessagesForwardCompactsLongAmazonQToolHistory(t *testing.T) {
 			payload := upstream.lastBody
 			require.Less(t, len(payload), nianzsKiroLongContextPayloadSoftLimitBytes)
 			require.NotContains(t, string(payload), `"toolUseId":"long-tool-0"`)
-			require.Contains(t, string(payload), `[exec_command] {\"cmd\":\"check-0\"}`)
+			require.NotContains(t, string(payload), "Tool calls:")
+			require.NotContains(t, string(payload), `[exec_command] {\"cmd\":\"check-0\"}`)
 			require.Contains(t, string(payload), "[exec_command] result-0")
 			require.Contains(t, string(payload), "[exec_command] result-1")
 			require.Contains(t, string(payload), "Older completed tool result compacted")

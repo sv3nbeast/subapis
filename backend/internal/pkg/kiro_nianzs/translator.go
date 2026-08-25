@@ -36,16 +36,20 @@ const (
 	kiroMaxToolNameLen         = 63
 	kiroHistoryImageKeepCount  = 5
 	kiroMinimalFallbackContent = "."
-	kiroToolCallsPrefix        = "Tool calls:"
-	kiroToolResultsPrefix      = "Tool results:"
-	kiroToolResultCompactLimit = 12000
-	kiroToolResultKeepHead     = 4000
-	kiroToolResultKeepTail     = 2000
-	kiroDefaultMaxOutputTokens = 64000
-	kiroDefaultContextTokens   = 200_000
-	kiroExtendedContextTokens  = 1_000_000
-	kiroRemoteImageMaxBytes    = 10 << 20
-	kiroRemoteImageTimeout     = 8 * time.Second
+	// kiroLegacyToolCallsPrefix was emitted by the completed-history flattener
+	// between 2026-08-25 releases. Keep it only for bounded recovery of sessions
+	// polluted by that representation; new requests must never generate it.
+	kiroLegacyToolCallsPrefix      = "Tool calls:"
+	kiroLegacyToolEnvelopeMaxBytes = 128 << 10
+	kiroToolResultsPrefix          = "Tool results:"
+	kiroToolResultCompactLimit     = 12000
+	kiroToolResultKeepHead         = 4000
+	kiroToolResultKeepTail         = 2000
+	kiroDefaultMaxOutputTokens     = 64000
+	kiroDefaultContextTokens       = 200_000
+	kiroExtendedContextTokens      = 1_000_000
+	kiroRemoteImageMaxBytes        = 10 << 20
+	kiroRemoteImageTimeout         = 8 * time.Second
 )
 
 // kiroUpstreamTraceEnabled 由环境变量 KIRO_UPSTREAM_TRACE=1 开启，仅用于诊断：
@@ -275,9 +279,10 @@ type KiroPayloadOptions struct {
 	RequireNativeToolCallMarker  bool
 	RequireNativeToolTextPrelude bool
 	// FlattenCompletedToolHistory keeps only the active final tool turn
-	// structured and converts older completed tool cycles into compact ordinary
-	// conversation text. Besides KRS compatibility, this avoids making Kiro
-	// count the verbose tool protocol envelope again on every stateless replay.
+	// structured, drops older completed tool-call envelopes, and retains their
+	// bounded results as ordinary user-side history. Besides KRS compatibility,
+	// this avoids making Kiro count the verbose tool protocol envelope again on
+	// every stateless replay without teaching it a textual tool-call syntax.
 	FlattenCompletedToolHistory bool
 	// CompletedToolHistoryKeepRecentToolUses keeps this many newest completed
 	// tool uses and their results verbatim. Older completed tool inputs/results
@@ -1430,6 +1435,19 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 		return nil
 	}
+	flushPendingAssistantTextAtEOF := func() error {
+		text, embeddedTools, pending := drainEmbeddedToolTextForRequestFinal(pendingAssistantText, requestCtx)
+		pendingAssistantText = pending
+		if err := emitTextDelta(text, false); err != nil {
+			return err
+		}
+		for _, tool := range embeddedTools {
+			if err := emitToolUse(tool); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	emitPlainAssistantText := func(text string) error {
 		if text == "" {
 			return nil
@@ -1883,7 +1901,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if err := flushThinkingAtEOF(); err != nil {
 		return nil, err
 	}
-	if err := flushPendingAssistantText(); err != nil {
+	if err := flushPendingAssistantTextAtEOF(); err != nil {
 		return nil, err
 	}
 	if tail := preserveUnparsedToolTail(pendingAssistantText, requestCtx); tail != "" {
@@ -3461,9 +3479,10 @@ func collectKiroHistoryToolNames(history []KiroHistoryMessage, requestCtx KiroRe
 
 // KRS accepts older completed tool cycles but can answer with only metadata
 // and context usage. When flattenCompletedToolHistory is enabled, keep only
-// the active final tool turn structured and preserve completed tool calls and
-// outputs as ordinary conversation text. Endpoint selection decides whether
-// the rewrite is required; empty/orphan history cleanup remains neutral.
+// the active final tool turn structured, discard older call envelopes, and
+// preserve their outputs as ordinary user-side conversation text. Endpoint
+// selection decides whether the rewrite is required; empty/orphan history
+// cleanup remains neutral.
 func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs map[string]bool, requestCtx KiroRequestContext, options KiroPayloadOptions) []KiroHistoryMessage {
 	if len(history) == 0 {
 		return history
@@ -3481,12 +3500,8 @@ func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs 
 	for i := range history {
 		msg := &history[i]
 		if msg.AssistantResponseMessage != nil {
-			msg.AssistantResponseMessage.Content = stripKiroPollutedToolCallText(msg.AssistantResponseMessage.Content)
+			msg.AssistantResponseMessage.Content = stripKiroPollutedToolCallTextForRequest(msg.AssistantResponseMessage.Content, requestCtx)
 			if flattenCompletedToolHistory && len(msg.AssistantResponseMessage.ToolUses) > 0 && i != activeAssistantIdx {
-				msg.AssistantResponseMessage.Content = joinKiroHistoryText(
-					msg.AssistantResponseMessage.Content,
-					narrateKiroToolUses(msg.AssistantResponseMessage.ToolUses, requestCtx, oldToolUseIDs, options.CompletedToolHistoryOldInputLimit),
-				)
 				msg.AssistantResponseMessage.ToolUses = nil
 			}
 		}
@@ -3605,36 +3620,6 @@ func narrateKiroToolResults(toolResults []KiroToolResult, names map[string]strin
 	return kiroToolResultsPrefix + "\n\n" + strings.Join(parts, "\n\n")
 }
 
-func narrateKiroToolUses(toolUses []KiroToolUse, requestCtx KiroRequestContext, oldToolUseIDs map[string]bool, oldInputLimit int) string {
-	if len(toolUses) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(toolUses))
-	for _, toolUse := range toolUses {
-		name := strings.TrimSpace(restoreResponseToolName(toolUse.Name, requestCtx))
-		if name == "" {
-			name = "tool"
-		}
-		input := strings.TrimSpace(toolUse.TruncatedRaw)
-		if input == "" {
-			if encoded, err := json.Marshal(toolUse.Input); err == nil {
-				input = string(encoded)
-			}
-		}
-		if input == "" {
-			input = "{}"
-		}
-		if oldToolUseIDs[toolUse.ToolUseID] {
-			input = compactOldKiroToolText(input, oldInputLimit, "input")
-		}
-		parts = append(parts, fmt.Sprintf("[%s] %s", name, input))
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return kiroToolCallsPrefix + "\n\n" + strings.Join(parts, "\n\n")
-}
-
 func joinKiroHistoryText(existing, addition string) string {
 	existing = strings.TrimSpace(existing)
 	addition = strings.TrimSpace(addition)
@@ -3660,6 +3645,15 @@ func stripKiroPollutedToolCallText(content string) string {
 	cleaned := kiroPollutedToolCallTextPattern.ReplaceAllString(content, "")
 	cleaned = kiroExcessNewlinePattern.ReplaceAllString(cleaned, "\n\n")
 	return strings.TrimSpace(cleaned)
+}
+
+func stripKiroPollutedToolCallTextForRequest(content string, requestCtx KiroRequestContext) string {
+	cleaned := stripKiroPollutedToolCallText(content)
+	withoutLegacyEnvelope, toolUses, ok := parseLegacyKiroToolEnvelopeSuffix(cleaned, requestCtx)
+	if !ok || len(toolUses) == 0 {
+		return cleaned
+	}
+	return strings.TrimSpace(withoutLegacyEnvelope)
 }
 
 func trimLeadingKiroAssistantHistory(history []KiroHistoryMessage) []KiroHistoryMessage {
@@ -4536,7 +4530,7 @@ func parseEventStream(body io.Reader, model string, requestCtx KiroRequestContex
 		}, currentTool, processedIDs)
 		toolUses = append(toolUses, completed...)
 	}
-	cleanText, embeddedToolUses, pending := drainEmbeddedToolTextForRequest(content.String(), requestCtx)
+	cleanText, embeddedToolUses, pending := drainEmbeddedToolTextForRequestFinal(content.String(), requestCtx)
 	cleanText += preserveUnparsedToolTail(pending, requestCtx)
 	if requestCtx.RequireProviderThinkingSignature && findRealThinkingStartTag(cleanText, 0) >= 0 && strings.TrimSpace(reasoningArtifacts.Signature) == "" {
 		if !requestCtx.SuppressUnauthenticatedThinking {
@@ -5775,6 +5769,29 @@ func drainEmbeddedToolText(text string) (cleanText string, toolUses []KiroToolUs
 }
 
 func drainEmbeddedToolTextForRequest(text string, requestCtx KiroRequestContext) (cleanText string, toolUses []KiroToolUse, pending string) {
+	if requestCtx.NativeToolProgressRequired {
+		if legacyStart := legacyKiroToolEnvelopePendingStart(text); legacyStart >= 0 {
+			if len(text)-legacyStart <= kiroLegacyToolEnvelopeMaxBytes {
+				cleanText, toolUses, embeddedPending := drainEmbeddedToolTextWithoutLegacy(text[:legacyStart], requestCtx)
+				return cleanText, toolUses, embeddedPending + text[legacyStart:]
+			}
+		}
+	}
+	return drainEmbeddedToolTextWithoutLegacy(text, requestCtx)
+}
+
+func drainEmbeddedToolTextForRequestFinal(text string, requestCtx KiroRequestContext) (cleanText string, toolUses []KiroToolUse, pending string) {
+	if requestCtx.NativeToolProgressRequired {
+		if withoutEnvelope, recovered, ok := parseLegacyKiroToolEnvelopeSuffix(text, requestCtx); ok {
+			cleanText, toolUses, pending = drainEmbeddedToolTextWithoutLegacy(withoutEnvelope, requestCtx)
+			toolUses = append(toolUses, recovered...)
+			return cleanText, deduplicateToolUses(toolUses), pending
+		}
+	}
+	return drainEmbeddedToolTextWithoutLegacy(text, requestCtx)
+}
+
+func drainEmbeddedToolTextWithoutLegacy(text string, requestCtx KiroRequestContext) (cleanText string, toolUses []KiroToolUse, pending string) {
 	if hasCodexProtocolArtifactPrefix(text, requestCtx) && !hasCodexToolMarker(text, requestCtx) {
 		return "", nil, text
 	}
@@ -5792,6 +5809,137 @@ func drainEmbeddedToolTextForRequest(text string, requestCtx KiroRequestContext)
 	}
 	cleanText, toolUses = parseEmbeddedToolCallsForRequest(complete, requestCtx)
 	return cleanText, deduplicateToolUses(toolUses), pending
+}
+
+// legacyKiroToolEnvelopePendingStart returns the beginning of a full or
+// chunk-split legacy envelope at a line boundary. Streaming callers hold only
+// this suffix until EOF; ordinary text before it remains incremental.
+func legacyKiroToolEnvelopePendingStart(text string) int {
+	const minimumSplitPrefix = "Tool ca"
+	for searchFrom := 0; searchFrom < len(text); {
+		idx := strings.Index(text[searchFrom:], kiroLegacyToolCallsPrefix)
+		if idx < 0 {
+			break
+		}
+		idx += searchFrom
+		if idx == 0 || text[idx-1] == '\n' {
+			return idx
+		}
+		searchFrom = idx + 1
+	}
+	for length := len(kiroLegacyToolCallsPrefix) - 1; length >= len(minimumSplitPrefix); length-- {
+		if len(text) < length || !strings.HasSuffix(text, kiroLegacyToolCallsPrefix[:length]) {
+			continue
+		}
+		start := len(text) - length
+		if start == 0 || text[start-1] == '\n' {
+			return start
+		}
+	}
+	return -1
+}
+
+// parseLegacyKiroToolEnvelopeSuffix accepts only the exact representation
+// previously generated by narrateKiroToolUses: a line-boundary "Tool calls:"
+// header followed solely by one or more declared [Tool] JSON-object entries.
+// This is a migration bridge for already-polluted conversations, not a general
+// natural-language tool parser.
+func parseLegacyKiroToolEnvelopeSuffix(text string, requestCtx KiroRequestContext) (string, []KiroToolUse, bool) {
+	if len(requestCtx.ToolNameMap) == 0 && len(requestCtx.toolNameOwners) == 0 {
+		return text, nil, false
+	}
+	start := -1
+	for searchFrom := 0; searchFrom < len(text); {
+		idx := strings.Index(text[searchFrom:], kiroLegacyToolCallsPrefix)
+		if idx < 0 {
+			break
+		}
+		idx += searchFrom
+		if idx == 0 || text[idx-1] == '\n' {
+			start = idx
+		}
+		searchFrom = idx + 1
+	}
+	if start < 0 {
+		return text, nil, false
+	}
+	if len(text)-start > kiroLegacyToolEnvelopeMaxBytes {
+		return text, nil, false
+	}
+
+	pos := start + len(kiroLegacyToolCallsPrefix)
+	if pos >= len(text) || (text[pos] != '\n' && text[pos] != '\r') {
+		return text, nil, false
+	}
+	for pos < len(text) && unicode.IsSpace(rune(text[pos])) {
+		pos++
+	}
+	toolUses := make([]KiroToolUse, 0, 1)
+	for pos < len(text) {
+		if text[pos] != '[' {
+			return text, nil, false
+		}
+		nameEndRel := strings.IndexByte(text[pos+1:], ']')
+		if nameEndRel < 0 {
+			return text, nil, false
+		}
+		nameEnd := pos + 1 + nameEndRel
+		mappedName, ok := resolveLegacyKiroEnvelopeToolName(strings.TrimSpace(text[pos+1:nameEnd]), requestCtx)
+		if !ok {
+			return text, nil, false
+		}
+		pos = nameEnd + 1
+		for pos < len(text) && unicode.IsSpace(rune(text[pos])) {
+			pos++
+		}
+		if pos >= len(text) || text[pos] != '{' {
+			return text, nil, false
+		}
+		jsonEnd := findMatchingJSONBracket(text, pos)
+		if jsonEnd < 0 {
+			return text, nil, false
+		}
+		decoder := json.NewDecoder(strings.NewReader(text[pos : jsonEnd+1]))
+		decoder.UseNumber()
+		var input map[string]any
+		if err := decoder.Decode(&input); err != nil || input == nil {
+			return text, nil, false
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			return text, nil, false
+		}
+		tool := finalizeStructuredToolUse("toolu_"+GenerateToolUseID(), mappedName, input)
+		if !isEmittableToolUse(tool) {
+			return text, nil, false
+		}
+		toolUses = append(toolUses, tool)
+		pos = jsonEnd + 1
+		for pos < len(text) && unicode.IsSpace(rune(text[pos])) {
+			pos++
+		}
+	}
+	if len(toolUses) == 0 {
+		return text, nil, false
+	}
+	return text[:start], toolUses, true
+}
+
+func resolveLegacyKiroEnvelopeToolName(name string, requestCtx KiroRequestContext) (string, bool) {
+	if name == "" {
+		return "", false
+	}
+	for mapped, original := range requestCtx.ToolNameMap {
+		if name == mapped || name == original {
+			return mapped, true
+		}
+	}
+	for mapped, original := range requestCtx.toolNameOwners {
+		if name == mapped || name == original {
+			return mapped, true
+		}
+	}
+	return "", false
 }
 
 func hasCodexProtocolArtifactPrefix(text string, requestCtx KiroRequestContext) bool {

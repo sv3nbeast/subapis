@@ -1211,7 +1211,8 @@ func TestBuildKiroPayloadFlattensCompletedHistoryToolCyclesForKRS(t *testing.T) 
 	}
 	require.False(t, foundT1ToolUse)
 	require.True(t, foundT2ToolUse)
-	require.Contains(t, historyText.String(), `[exec_command] {"cmd":"make"}`)
+	require.NotContains(t, historyText.String(), "Tool calls:")
+	require.NotContains(t, historyText.String(), `{"cmd":"make"}`)
 	require.Contains(t, historyText.String(), "[exec_command] build ok")
 	require.Equal(t, "t2", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
 	require.Equal(t, "tests pass", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.content.0.text").String())
@@ -1246,12 +1247,35 @@ func TestBuildKiroPayloadAgeBoundsOnlyOldCompletedToolHistory(t *testing.T) {
 	require.True(t, result.Context.CompletedToolHistoryFlattened)
 	require.True(t, result.Context.OldCompletedToolHistoryCompacted)
 	payload := string(result.Payload)
-	require.Contains(t, payload, "Older completed tool input compacted")
+	require.NotContains(t, payload, "Tool calls:")
+	require.NotContains(t, payload, "Older completed tool input compacted")
 	require.Contains(t, payload, "Older completed tool result compacted")
-	require.Contains(t, payload, `recent-full-input-abcdefghijklmnopqrstuvwxyz`)
+	require.NotContains(t, payload, `recent-full-input-abcdefghijklmnopqrstuvwxyz`)
 	require.Contains(t, payload, `recent-full-result-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz`)
 	require.NotContains(t, payload, `"toolUseId":"old"`)
 	require.NotContains(t, payload, `"toolUseId":"recent"`)
+}
+
+func TestBuildKiroPayloadRemovesLegacyFlattenedToolEnvelopeFromAssistantHistory(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-5",
+		"max_tokens":128,
+		"tools":[{"name":"Bash","description":"run","input_schema":{"type":"object"}}],
+		"messages":[
+			{"role":"user","content":"inspect the workspace"},
+			{"role":"assistant","content":"I will inspect it.\n\nTool calls:\n\n[Bash] {\"command\":\"pwd\"}"},
+			{"role":"user","content":"continue"}
+		]
+	}`)
+
+	result, err := BuildKiroPayloadWithOptions(body, "claude-opus-5", "", nil, KiroPayloadOptions{
+		Origin:                      "AI_EDITOR",
+		FlattenCompletedToolHistory: true,
+	})
+	require.NoError(t, err)
+	require.Contains(t, string(result.Payload), "I will inspect it.")
+	require.NotContains(t, string(result.Payload), "Tool calls:")
+	require.NotContains(t, string(result.Payload), `\"command\":\"pwd\"`)
 }
 
 func TestBuildKiroPayloadPreservesCompletedHistoryToolCyclesForAmazonQ(t *testing.T) {
@@ -1820,6 +1844,100 @@ func TestParseNonStreamingEventStreamRecoversCodexNamespacedToolText(t *testing.
 	require.Equal(t, "functions__wait", gjson.GetBytes(result.ResponseBody, "content.1.name").String())
 	require.Equal(t, "133", gjson.GetBytes(result.ResponseBody, "content.1.input.cell_id").String())
 	require.NotContains(t, string(result.ResponseBody), "=functions.wait")
+}
+
+func TestParseNonStreamingEventStreamRecoversLegacyFlattenedToolEnvelope(t *testing.T) {
+	stream := bytes.NewBuffer(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{
+			"content": "I need to inspect the workspace.\n\nTool calls:\n\n[Bash] " +
+				`{"command":"pwd","description":"print cwd"}`,
+		},
+	}))
+	requestCtx := KiroRequestContext{
+		ToolNameMap:                map[string]string{"Bash": "Bash"},
+		NativeToolProgressRequired: true,
+	}
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-5", requestCtx)
+	require.NoError(t, err)
+	require.Equal(t, "tool_use", result.StopReason)
+	require.Equal(t, "I need to inspect the workspace.\n\n", gjson.GetBytes(result.ResponseBody, "content.0.text").String())
+	require.Equal(t, "tool_use", gjson.GetBytes(result.ResponseBody, "content.1.type").String())
+	require.Equal(t, "Bash", gjson.GetBytes(result.ResponseBody, "content.1.name").String())
+	require.Equal(t, "pwd", gjson.GetBytes(result.ResponseBody, "content.1.input.command").String())
+	require.NotContains(t, string(result.ResponseBody), "Tool calls:")
+}
+
+func TestStreamEventStreamAsAnthropicRecoversSplitLegacyFlattenedToolEnvelope(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	for _, content := range []string{
+		"I need to inspect the workspace.\n\nTool ca",
+		"lls:\n\n[Bash] {\"command\":\"pw",
+		"d\",\"description\":\"print cwd\"}",
+	} {
+		_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{"content": content},
+		}))
+	}
+	requestCtx := KiroRequestContext{
+		ToolNameMap:                map[string]string{"Bash": "Bash"},
+		NativeToolProgressRequired: true,
+	}
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 9, requestCtx)
+	require.NoError(t, err)
+	require.Equal(t, "tool_use", result.StopReason)
+	require.Contains(t, out.String(), `"name":"Bash"`)
+	require.Contains(t, out.String(), `"partial_json":"{\"command\":\"pwd\",\"description\":\"print cwd\"}"`)
+	require.NotContains(t, out.String(), "Tool calls:")
+	require.Equal(t, 1, strings.Count(out.String(), "event: message_stop"))
+}
+
+func TestParseNonStreamingEventStreamRecoversMultipleDeclaredLegacyToolCalls(t *testing.T) {
+	stream := bytes.NewBuffer(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{
+			"content": "Tool calls:\n\n[Bash] {\"command\":\"pwd\"}\n\n[Read] {\"file_path\":\"/tmp/a.txt\"}",
+		},
+	}))
+	requestCtx := KiroRequestContext{
+		ToolNameMap: map[string]string{
+			"Bash": "Bash",
+			"Read": "Read",
+		},
+		NativeToolProgressRequired: true,
+	}
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-5", requestCtx)
+	require.NoError(t, err)
+	require.Equal(t, "tool_use", result.StopReason)
+	require.Equal(t, "Bash", gjson.GetBytes(result.ResponseBody, "content.0.name").String())
+	require.Equal(t, "pwd", gjson.GetBytes(result.ResponseBody, "content.0.input.command").String())
+	require.Equal(t, "Read", gjson.GetBytes(result.ResponseBody, "content.1.name").String())
+	require.Equal(t, "/tmp/a.txt", gjson.GetBytes(result.ResponseBody, "content.1.input.file_path").String())
+	require.False(t, gjson.GetBytes(result.ResponseBody, "content.2").Exists())
+}
+
+func TestLegacyFlattenedToolEnvelopeRequiresDeclaredToolAndStrictJSON(t *testing.T) {
+	requestCtx := KiroRequestContext{
+		ToolNameMap:                map[string]string{"Bash": "Bash"},
+		NativeToolProgressRequired: true,
+	}
+	for _, content := range []string{
+		"Tool calls:\n\n[Unknown] {\"command\":\"pwd\"}",
+		"Tool calls:\n\n[Bash] not-json",
+		"The phrase Tool calls: is being discussed, not executed.",
+	} {
+		stream := bytes.NewBuffer(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{"content": content},
+		}))
+		var out bytes.Buffer
+		result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 9, requestCtx)
+		require.NoError(t, err)
+		require.Equal(t, "end_turn", result.StopReason)
+		require.Contains(t, out.String(), strings.Split(content, "\n")[0])
+		require.NotContains(t, out.String(), `"type":"tool_use"`)
+	}
 }
 
 func TestStreamEventStreamAsAnthropicDoesNotBufferOrdinaryAssistantText(t *testing.T) {
