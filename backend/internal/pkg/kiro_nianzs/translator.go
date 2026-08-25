@@ -230,11 +230,11 @@ type KiroRequestContext struct {
 	// completion with messageStop, an explicit stop reason, a stopped tool call,
 	// or final usage metadata depending on the endpoint/runtime version.
 	RequireTerminalEvent bool
-	// AcceptSemanticTailEOF is a KRS compatibility fallback. Some long-context
-	// turns end with response content followed by contextUsageEvent and a clean
-	// EventStream EOF, but omit metering/messageStop. That ordered tail is safe
-	// to finalize; a bare EOF, metadata-only turn, or EOF before context usage
-	// remains incomplete and retryable.
+	// AcceptSemanticTailEOF is a Kiro EventStream compatibility fallback. Some
+	// long-context turns end with response content followed by contextUsageEvent
+	// and a clean EventStream EOF, but omit metering/messageStop. That ordered
+	// tail is safe to finalize; a bare EOF, metadata-only turn, unfinished tool
+	// input, or EOF before context usage remains incomplete and retryable.
 	AcceptSemanticTailEOF        bool
 	forcedToolChoiceName         string
 	NativeToolProgressRequired   bool

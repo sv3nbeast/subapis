@@ -895,6 +895,13 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 					return nil, false, false, buildErr
 				}
 			}
+			// Both Amazon Q and KRS can finish a valid long-context turn with
+			// response frames followed by contextUsageEvent and a frame-aligned
+			// EOF, omitting the separate metering/messageStop frame. Configure
+			// every rebuilt request context, including post-refresh retries. The
+			// translator still rejects bare EOF, metadata-only tails, and
+			// unfinished tool input.
+			buildResult.Context.AcceptSemanticTailEOF = nianzsKiroEndpointSupportsSemanticTailEOF(endpoint.Name)
 			return buildResult, flattenCompletedToolHistory, compactOldCompletedToolHistory, nil
 		}
 		buildResult, flattenCompletedToolHistory, compactOldCompletedToolHistory, err := buildEndpointPayload()
@@ -903,10 +910,6 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 		}
 		payload := buildResult.Payload
 		requestCtx = buildResult.Context
-		// KRS can finish a valid long-context turn with response frames followed
-		// by contextUsageEvent and a frame-aligned EOF, omitting the separate
-		// metering/messageStop frame. Q endpoints retain strict terminal proof.
-		requestCtx.AcceptSemanticTailEOF = endpoint.Name == "KiroRuntime"
 		nianzsLogKiroStatelessReplay(account, buildResult.Payload, endpoint.Name, flattenCompletedToolHistory, compactOldCompletedToolHistory)
 
 		for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -1061,6 +1064,15 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 // nianzsKiroKRSEndpointURL 是 Kiro 自家前置网关（KRS = Kiro Runtime Service）的固定 URL。
 // KRS 仅支持 us-east-1 / eu-central-1 两个 region；这里固定走 us-east-1。
 const nianzsKiroKRSEndpointURL = "https://runtime.us-east-1.kiro.dev/generateAssistantResponse"
+
+func nianzsKiroEndpointSupportsSemanticTailEOF(endpointName string) bool {
+	switch endpointName {
+	case "AmazonQ", "KiroRuntime":
+		return true
+	default:
+		return false
+	}
+}
 
 func nianzsBuildKiroEndpoints(account *Account, mode string) []nianzsKiroEndpointConfig {
 	if mode == KiroEndpointModeKRS {

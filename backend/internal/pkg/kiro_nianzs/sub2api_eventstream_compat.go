@@ -239,11 +239,12 @@ type nianzsKiroEventDiagnosticState struct {
 	observedEventTypes      map[string]struct{}
 }
 
-// nianzsKiroSemanticTailState recognizes the completion shape emitted by KRS
-// for some long-context turns: at least one assistant/tool response frame,
-// followed by contextUsageEvent, followed by a frame-aligned clean EOF. The
-// context-usage marker must occur after the last response frame so an earlier
-// progress update cannot turn a later truncated response into a success.
+// nianzsKiroSemanticTailState recognizes the completion shape emitted by both
+// Amazon Q and KRS for some long-context turns: at least one assistant or
+// enabled-reasoning response frame, followed by contextUsageEvent, followed by
+// a frame-aligned clean EOF. The context-usage marker must occur after the last
+// response frame so an earlier progress update cannot turn a later truncated
+// response into a success.
 type nianzsKiroSemanticTailState struct {
 	sawResponseCandidate        bool
 	contextUsageAfterLastOutput bool
@@ -294,7 +295,10 @@ func nianzsKiroSemanticTailResponseCandidate(eventType string, event map[string]
 		}
 		return getString(assistant, "content") != "" || len(readToolUses(assistant, event)) > 0
 	case "toolUseEvent":
-		return true
+		// A stopped toolUseEvent is already explicit completion evidence. Never
+		// promote an unfinished streaming tool fragment merely because context
+		// usage follows it; doing so could synthesize a truncated tool call.
+		return false
 	case "reasoningContentEvent":
 		if !allowReasoning {
 			return false

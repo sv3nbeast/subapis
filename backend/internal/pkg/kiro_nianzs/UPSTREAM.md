@@ -22,7 +22,8 @@ Documented compatibility hook points:
 - Request construction flattens completed historical tool cycles before KRS.
   KRS can otherwise return only metadata/context usage and no assistant output;
   the active final tool/result pair remains structured.
-- KRS long-context responses may omit metering/messageStop after emitting
-  assistant output and a trailing contextUsageEvent. The compatibility layer
-  accepts only that ordered, frame-aligned clean-EOF shape; Q endpoints, bare
-  EOF, metadata-only turns, and output after context usage stay strict.
+- Amazon Q and KRS long-context responses may omit metering/messageStop after
+  emitting assistant output and a trailing contextUsageEvent. The compatibility
+  layer accepts only that ordered, frame-aligned clean-EOF shape; bare EOF,
+  metadata-only turns, unfinished tool input, and output after context usage
+  stay strict.
