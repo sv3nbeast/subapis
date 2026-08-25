@@ -1227,9 +1227,15 @@ func TestBuildKiroPayloadAgeBoundsOnlyOldCompletedToolHistory(t *testing.T) {
 		"tools":[{"name":"exec_command","description":"run","input_schema":{"type":"object"}}],
 		"messages":[
 			{"role":"user","content":"run checks"},
-			{"role":"assistant","content":[{"type":"tool_use","id":"old","name":"exec_command","input":{"cmd":"old-input-abcdefghijklmnopqrstuvwxyz"}}]},
+			{"role":"assistant","content":[
+				{"type":"text","text":"old tool turn prelude"},
+				{"type":"tool_use","id":"old","name":"exec_command","input":{"cmd":"old-input-abcdefghijklmnopqrstuvwxyz"}}
+			]},
 			{"role":"user","content":[{"type":"tool_result","tool_use_id":"old","content":"old-result-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz"}]},
-			{"role":"assistant","content":[{"type":"tool_use","id":"recent","name":"exec_command","input":{"cmd":"recent-full-input-abcdefghijklmnopqrstuvwxyz"}}]},
+			{"role":"assistant","content":[
+				{"type":"text","text":"recent native tool prelude"},
+				{"type":"tool_use","id":"recent","name":"exec_command","input":{"cmd":"recent-full-input-abcdefghijklmnopqrstuvwxyz"}}
+			]},
 			{"role":"user","content":[{"type":"tool_result","tool_use_id":"recent","content":"recent-full-result-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz"}]},
 			{"role":"assistant","content":"checks completed"},
 			{"role":"user","content":"summarize"}
@@ -1250,10 +1256,76 @@ func TestBuildKiroPayloadAgeBoundsOnlyOldCompletedToolHistory(t *testing.T) {
 	require.NotContains(t, payload, "Tool calls:")
 	require.NotContains(t, payload, "Older completed tool input compacted")
 	require.Contains(t, payload, "Older completed tool result compacted")
-	require.NotContains(t, payload, `recent-full-input-abcdefghijklmnopqrstuvwxyz`)
+	require.NotContains(t, payload, "old tool turn prelude")
+	require.Contains(t, payload, "recent native tool prelude")
+	require.Contains(t, payload, `recent-full-input-abcdefghijklmnopqrstuvwxyz`)
 	require.Contains(t, payload, `recent-full-result-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz`)
 	require.NotContains(t, payload, `"toolUseId":"old"`)
-	require.NotContains(t, payload, `"toolUseId":"recent"`)
+	require.Contains(t, payload, `"toolUseId":"recent"`)
+
+	foundRecentToolUse := false
+	foundRecentToolResult := false
+	for _, message := range gjson.GetBytes(result.Payload, "conversationState.history").Array() {
+		if message.Get("assistantResponseMessage.toolUses.0.toolUseId").String() == "recent" {
+			foundRecentToolUse = true
+		}
+		if message.Get("userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String() == "recent" {
+			foundRecentToolResult = true
+		}
+	}
+	require.True(t, foundRecentToolUse)
+	require.True(t, foundRecentToolResult)
+}
+
+func TestBuildKiroPayloadAgeBoundDoesNotSplitParallelToolTurn(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-5",
+		"tools":[{"name":"exec_command","description":"run","input_schema":{"type":"object"}}],
+		"messages":[
+			{"role":"user","content":"run checks"},
+			{"role":"assistant","content":[
+				{"type":"text","text":"old turn"},
+				{"type":"tool_use","id":"old","name":"exec_command","input":{"cmd":"old"}}
+			]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"old","content":"old result that will be compacted"}]},
+			{"role":"assistant","content":[
+				{"type":"text","text":"parallel recent turn"},
+				{"type":"tool_use","id":"parallel-a","name":"exec_command","input":{"cmd":"a"}},
+				{"type":"tool_use","id":"parallel-b","name":"exec_command","input":{"cmd":"b"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"parallel-a","content":"a ok"},
+				{"type":"tool_result","tool_use_id":"parallel-b","content":"b ok"}
+			]},
+			{"role":"assistant","content":"checks completed"},
+			{"role":"user","content":"start a new task"}
+		]
+	}`)
+
+	result, err := BuildKiroPayloadWithOptions(body, "claude-opus-5", "", nil, KiroPayloadOptions{
+		Origin:                                 "AI_EDITOR",
+		FlattenCompletedToolHistory:            true,
+		CompletedToolHistoryKeepRecentToolUses: 1,
+		CompletedToolHistoryOldInputLimit:      16,
+		CompletedToolHistoryOldResultLimit:     16,
+	})
+	require.NoError(t, err)
+	require.NotContains(t, string(result.Payload), `"toolUseId":"old"`)
+	require.NotContains(t, string(result.Payload), "old turn")
+
+	structuredToolUses := make(map[string]bool)
+	structuredToolResults := make(map[string]bool)
+	for _, message := range gjson.GetBytes(result.Payload, "conversationState.history").Array() {
+		for _, toolUse := range message.Get("assistantResponseMessage.toolUses").Array() {
+			structuredToolUses[toolUse.Get("toolUseId").String()] = true
+		}
+		for _, toolResult := range message.Get("userInputMessage.userInputMessageContext.toolResults").Array() {
+			structuredToolResults[toolResult.Get("toolUseId").String()] = true
+		}
+	}
+	require.Equal(t, map[string]bool{"parallel-a": true, "parallel-b": true}, structuredToolUses)
+	require.Equal(t, structuredToolUses, structuredToolResults)
+	require.Contains(t, string(result.Payload), "parallel recent turn")
 }
 
 func TestBuildKiroPayloadRemovesLegacyFlattenedToolEnvelopeFromAssistantHistory(t *testing.T) {

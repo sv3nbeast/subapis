@@ -1215,6 +1215,42 @@ func nianzsLongToolHistoryRequestBody(t *testing.T, stream bool) ([]byte, string
 	return body, fmt.Sprintf("long-tool-%d", longToolUses-1)
 }
 
+func nianzsLongToolHistoryFreshTaskRequestBody(t *testing.T, stream bool) []byte {
+	t.Helper()
+	const longToolUses = 300
+	messages := make([]any, 0, longToolUses*2+3)
+	messages = append(messages, map[string]any{"role": "user", "content": "run the checks"})
+	for i := 0; i < longToolUses; i++ {
+		toolID := fmt.Sprintf("fresh-tool-%d", i)
+		messages = append(messages,
+			map[string]any{"role": "assistant", "content": []any{
+				map[string]any{"type": "text", "text": fmt.Sprintf("running check %d", i)},
+				map[string]any{
+					"type": "tool_use", "id": toolID, "name": "exec_command", "input": map[string]any{"cmd": fmt.Sprintf("check-%d", i)},
+				},
+			}},
+			map[string]any{"role": "user", "content": []any{map[string]any{
+				"type": "tool_result", "tool_use_id": toolID, "content": fmt.Sprintf("result-%d-%s", i, strings.Repeat("x", 8_000)),
+			}}},
+		)
+	}
+	messages = append(messages,
+		map[string]any{"role": "assistant", "content": "all prior checks completed"},
+		map[string]any{"role": "user", "content": "modify the deployment"},
+	)
+	body, err := json.Marshal(map[string]any{
+		"model":      "claude-opus-5",
+		"max_tokens": 128,
+		"stream":     stream,
+		"tools": []any{map[string]any{
+			"name": "exec_command", "description": "run", "input_schema": map[string]any{"type": "object"},
+		}},
+		"messages": messages,
+	})
+	require.NoError(t, err)
+	return body
+}
+
 func TestNianzsMessagesForwardCompactsLongAmazonQToolHistory(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, stream := range []bool{false, true} {
@@ -1251,6 +1287,62 @@ func TestNianzsMessagesForwardCompactsLongAmazonQToolHistory(t *testing.T) {
 			history := gjson.GetBytes(payload, "conversationState.history").Array()
 			require.NotEmpty(t, history)
 			require.Equal(t, lastToolID, history[len(history)-1].Get("assistantResponseMessage.toolUses.0.toolUseId").String())
+			if stream {
+				require.Equal(t, 1, strings.Count(recorder.Body.String(), "event: message_stop"))
+			} else {
+				require.Equal(t, "continued", gjson.GetBytes(recorder.Body.Bytes(), "content.0.text").String())
+			}
+		})
+	}
+}
+
+func TestNianzsMessagesLongAmazonQFreshTaskKeepsRecentNativeToolCycles(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, stream := range []bool{false, true} {
+		stream := stream
+		t.Run(fmt.Sprintf("stream_%t", stream), func(t *testing.T) {
+			body := nianzsLongToolHistoryFreshTaskRequestBody(t, stream)
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+			require.NoError(t, err)
+			groupID := int64(29)
+			parsed.GroupID = &groupID
+			parsed.Group = &Group{ID: groupID, Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeQ}
+			svc, upstream, account := newNianzsKiroRouteTestRuntime(t, kiroEventStreamResponse(t, "continued", 64, 5))
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+			result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+
+			require.NoError(t, forwardErr)
+			require.NotNil(t, result)
+			require.Len(t, upstream.requests, 1)
+			payload := upstream.lastBody
+			require.Less(t, len(payload), nianzsKiroLongContextPayloadSoftLimitBytes)
+			require.NotContains(t, string(payload), `"toolUseId":"fresh-tool-235"`)
+			require.NotContains(t, string(payload), "running check 235")
+			require.Contains(t, string(payload), `"toolUseId":"fresh-tool-236"`)
+			require.Contains(t, string(payload), "running check 236")
+			require.Contains(t, string(payload), "Older completed tool result compacted")
+			require.NotContains(t, string(payload), "Tool calls:")
+
+			structuredToolUses := make(map[string]bool)
+			structuredToolResults := make(map[string]bool)
+			for _, message := range gjson.GetBytes(payload, "conversationState.history").Array() {
+				for _, toolUse := range message.Get("assistantResponseMessage.toolUses").Array() {
+					structuredToolUses[toolUse.Get("toolUseId").String()] = true
+				}
+				for _, toolResult := range message.Get("userInputMessage.userInputMessageContext.toolResults").Array() {
+					structuredToolResults[toolResult.Get("toolUseId").String()] = true
+				}
+			}
+			require.Len(t, structuredToolUses, nianzsKiroLongContextKeepRecentToolUses)
+			require.Len(t, structuredToolResults, nianzsKiroLongContextKeepRecentToolUses)
+			require.Equal(t, structuredToolUses, structuredToolResults)
+			require.True(t, structuredToolUses["fresh-tool-236"])
+			require.True(t, structuredToolUses["fresh-tool-299"])
+			require.Equal(t, "modify the deployment", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
+			require.Empty(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults").Array())
 			if stream {
 				require.Equal(t, 1, strings.Count(recorder.Body.String(), "event: message_stop"))
 			} else {

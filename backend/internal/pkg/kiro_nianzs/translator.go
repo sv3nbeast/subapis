@@ -278,16 +278,16 @@ type KiroPayloadOptions struct {
 	RequireNativeToolProgress    bool
 	RequireNativeToolCallMarker  bool
 	RequireNativeToolTextPrelude bool
-	// FlattenCompletedToolHistory keeps only the active final tool turn
-	// structured, drops older completed tool-call envelopes, and retains their
-	// bounded results as ordinary user-side history. Besides KRS compatibility,
-	// this avoids making Kiro count the verbose tool protocol envelope again on
-	// every stateless replay without teaching it a textual tool-call syntax.
+	// FlattenCompletedToolHistory compacts completed tool cycles according to
+	// the recent window below. Without a window, only the active final tool turn
+	// stays structured for KRS compatibility. Flattened results remain bounded
+	// ordinary user-side history without teaching a textual tool-call syntax.
 	FlattenCompletedToolHistory bool
-	// CompletedToolHistoryKeepRecentToolUses keeps this many newest completed
-	// tool uses and their results verbatim. Older completed tool inputs/results
-	// are bounded by the byte limits below after history flattening. Zero limits
-	// disable age-bounded content compaction.
+	// CompletedToolHistoryKeepRecentToolUses keeps at least this many newest
+	// completed tool uses and their results verbatim. A parallel tool turn is
+	// never split at the boundary. Older completed tool results are bounded by
+	// the byte limits below after history flattening. Zero limits disable
+	// age-bounded content compaction.
 	CompletedToolHistoryKeepRecentToolUses int
 	CompletedToolHistoryOldInputLimit      int
 	CompletedToolHistoryOldResultLimit     int
@@ -3478,10 +3478,13 @@ func collectKiroHistoryToolNames(history []KiroHistoryMessage, requestCtx KiroRe
 }
 
 // KRS accepts older completed tool cycles but can answer with only metadata
-// and context usage. When flattenCompletedToolHistory is enabled, keep only
-// the active final tool turn structured, discard older call envelopes, and
-// preserve their outputs as ordinary user-side conversation text. Endpoint
-// selection decides whether the rewrite is required; empty/orphan history
+// and context usage. When flattenCompletedToolHistory is enabled without an
+// age-bounded window, keep only the active final tool turn structured. The
+// long-context Amazon Q path additionally preserves the configured newest
+// completed tool cycles as native tool_use/tool_result pairs and flattens only
+// older cycles. This prevents compaction from rewriting a tool turn into a
+// standalone assistant prelude followed by an orphan-looking user result.
+// Endpoint selection decides which form is required; empty/orphan history
 // cleanup remains neutral.
 func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs map[string]bool, requestCtx KiroRequestContext, options KiroPayloadOptions) []KiroHistoryMessage {
 	if len(history) == 0 {
@@ -3496,21 +3499,57 @@ func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs 
 		activeAssistantIdx = len(history) - 1
 	}
 	oldToolUseIDs := collectOldCompletedKiroToolUseIDs(history, activeAssistantIdx, options.CompletedToolHistoryKeepRecentToolUses, options.CompletedToolHistoryOldInputLimit, options.CompletedToolHistoryOldResultLimit)
+	preserveRecentCompletedToolHistory := flattenCompletedToolHistory &&
+		options.CompletedToolHistoryKeepRecentToolUses > 0 &&
+		options.CompletedToolHistoryOldInputLimit > 0 &&
+		options.CompletedToolHistoryOldResultLimit > 0
 
 	for i := range history {
 		msg := &history[i]
 		if msg.AssistantResponseMessage != nil {
 			msg.AssistantResponseMessage.Content = stripKiroPollutedToolCallTextForRequest(msg.AssistantResponseMessage.Content, requestCtx)
 			if flattenCompletedToolHistory && len(msg.AssistantResponseMessage.ToolUses) > 0 && i != activeAssistantIdx {
-				msg.AssistantResponseMessage.ToolUses = nil
+				if !preserveRecentCompletedToolHistory {
+					msg.AssistantResponseMessage.ToolUses = nil
+				} else {
+					kept := msg.AssistantResponseMessage.ToolUses[:0:0]
+					for _, toolUse := range msg.AssistantResponseMessage.ToolUses {
+						if toolUse.ToolUseID != "" && !oldToolUseIDs[toolUse.ToolUseID] {
+							kept = append(kept, toolUse)
+						}
+					}
+					msg.AssistantResponseMessage.ToolUses = kept
+					if len(kept) == 0 {
+						// The text belonged to a tool_use turn. Once its old call is
+						// compacted away, retaining that text would falsely teach the
+						// provider that a prelude is a complete assistant end_turn.
+						msg.AssistantResponseMessage.Content = ""
+					}
+				}
 			}
 		}
 		if msg.UserInputMessage != nil && msg.UserInputMessage.UserInputMessageContext != nil {
 			ctx := msg.UserInputMessage.UserInputMessageContext
 			if flattenCompletedToolHistory && len(ctx.ToolResults) > 0 {
-				msg.UserInputMessage.Content = joinKiroHistoryText(msg.UserInputMessage.Content, narrateKiroToolResults(ctx.ToolResults, toolNames, oldToolUseIDs, options.CompletedToolHistoryOldResultLimit))
-				flattenedToolMessages[msg.UserInputMessage] = true
-				ctx.ToolResults = nil
+				flattened := ctx.ToolResults
+				if preserveRecentCompletedToolHistory {
+					flattened = nil
+					kept := ctx.ToolResults[:0:0]
+					for _, result := range ctx.ToolResults {
+						if result.ToolUseID != "" && !oldToolUseIDs[result.ToolUseID] {
+							kept = append(kept, result)
+						} else {
+							flattened = append(flattened, result)
+						}
+					}
+					ctx.ToolResults = kept
+				} else {
+					ctx.ToolResults = nil
+				}
+				if len(flattened) > 0 {
+					msg.UserInputMessage.Content = joinKiroHistoryText(msg.UserInputMessage.Content, narrateKiroToolResults(flattened, toolNames, oldToolUseIDs, options.CompletedToolHistoryOldResultLimit))
+					flattenedToolMessages[msg.UserInputMessage] = true
+				}
 			}
 			ctx.Tools = nil
 			if len(ctx.Tools) == 0 && len(ctx.ToolResults) == 0 {
@@ -3551,24 +3590,28 @@ func collectOldCompletedKiroToolUseIDs(history []KiroHistoryMessage, activeAssis
 	if keepRecent < 0 || inputLimit <= 0 || resultLimit <= 0 {
 		return nil
 	}
-	toolUseIDs := make([]string, 0)
-	for index, message := range history {
-		if index == activeAssistantIdx || message.AssistantResponseMessage == nil {
+	remainingRecent := keepRecent
+	old := make(map[string]bool)
+	for index := len(history) - 1; index >= 0; index-- {
+		if index == activeAssistantIdx || history[index].AssistantResponseMessage == nil {
 			continue
 		}
-		for _, toolUse := range message.AssistantResponseMessage.ToolUses {
+		toolUses := history[index].AssistantResponseMessage.ToolUses
+		if len(toolUses) == 0 {
+			continue
+		}
+		if remainingRecent > 0 {
+			remainingRecent -= len(toolUses)
+			continue
+		}
+		for _, toolUse := range toolUses {
 			if toolUse.ToolUseID != "" {
-				toolUseIDs = append(toolUseIDs, toolUse.ToolUseID)
+				old[toolUse.ToolUseID] = true
 			}
 		}
 	}
-	compactCount := len(toolUseIDs) - keepRecent
-	if compactCount <= 0 {
+	if len(old) == 0 {
 		return nil
-	}
-	old := make(map[string]bool, compactCount)
-	for _, toolUseID := range toolUseIDs[:compactCount] {
-		old[toolUseID] = true
 	}
 	return old
 }
