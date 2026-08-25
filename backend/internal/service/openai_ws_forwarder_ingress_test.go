@@ -277,6 +277,72 @@ func TestStripOpenAIImageGenerationToolsFromRawPayload(t *testing.T) {
 	})
 }
 
+func TestStripOpenAIHostedImageGenerationToolsFromRawPayload(t *testing.T) {
+	t.Run("namespace only is unchanged", func(t *testing.T) {
+		payload := []byte(`{
+			"type":"response.create",
+			"model":"gpt-5.5",
+			"input":[
+				{"type":"message","role":"user","content":"draw a cat"},
+				{"type":"additional_tools","tools":[{"type":"namespace","name":"image_gen","tools":[{"type":"function","name":"imagegen"}]}]}
+			],
+			"tool_choice":{"type":"namespace","name":"image_gen"}
+		}`)
+
+		updated, changed, err := stripOpenAIHostedImageGenerationToolsFromRawPayload(payload)
+
+		require.NoError(t, err)
+		require.False(t, changed)
+		require.Equal(t, payload, updated)
+	})
+
+	t.Run("hosted tool is removed while namespace remains", func(t *testing.T) {
+		payload := []byte(`{
+			"type":"response.create",
+			"model":"gpt-5.5",
+			"tools":[
+				{"type":"function","name":"shell"},
+				{"type":"image_generation","output_format":"png"}
+			],
+			"input":[
+				{"type":"message","role":"user","content":"draw a cat"},
+				{"type":"additional_tools","tools":[{"type":"namespace","name":"image_gen","tools":[{"type":"function","name":"imagegen"}]}]}
+			],
+			"tool_choice":{"type":"namespace","name":"image_gen"}
+		}`)
+
+		updated, changed, err := stripOpenAIHostedImageGenerationToolsFromRawPayload(payload)
+
+		require.NoError(t, err)
+		require.True(t, changed)
+		require.False(t, gjson.GetBytes(updated, `tools.#(type=="image_generation")`).Exists())
+		require.True(t, gjson.GetBytes(updated, `tools.#(type=="function")`).Exists())
+		require.Equal(t, "image_gen", gjson.GetBytes(updated, `input.#(type=="additional_tools").tools.0.name`).String())
+		require.Equal(t, "namespace", gjson.GetBytes(updated, "tool_choice.type").String())
+		require.Equal(t, "image_gen", gjson.GetBytes(updated, "tool_choice.name").String())
+	})
+
+	t.Run("hosted choice is removed while namespace remains", func(t *testing.T) {
+		payload := []byte(`{
+			"type":"response.create",
+			"model":"gpt-5.5",
+			"tools":[
+				{"type":"image_generation","output_format":"png"},
+				{"type":"namespace","name":"image_gen","tools":[{"type":"function","name":"imagegen"}]}
+			],
+			"tool_choice":{"type":"image_generation"}
+		}`)
+
+		updated, changed, err := stripOpenAIHostedImageGenerationToolsFromRawPayload(payload)
+
+		require.NoError(t, err)
+		require.True(t, changed)
+		require.False(t, gjson.GetBytes(updated, `tools.#(type=="image_generation")`).Exists())
+		require.Equal(t, "image_gen", gjson.GetBytes(updated, `tools.#(type=="namespace").name`).String())
+		require.False(t, gjson.GetBytes(updated, "tool_choice").Exists())
+	})
+}
+
 func TestAlignStoreDisabledPreviousResponseID(t *testing.T) {
 	t.Parallel()
 

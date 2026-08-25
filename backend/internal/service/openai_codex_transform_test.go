@@ -1125,6 +1125,56 @@ func TestStripOpenAIImageGenerationTools_StripsNamespaceFormats(t *testing.T) {
 	require.False(t, stripOpenAIImageGenerationTools(reqBody), "stripping should be idempotent")
 }
 
+func TestStripOpenAIHostedImageGenerationTools_PreservesCodexNamespace(t *testing.T) {
+	imageNamespace := func() map[string]any {
+		return map[string]any{
+			"type": "namespace",
+			"name": "image_gen",
+			"tools": []any{
+				map[string]any{"type": "function", "name": "imagegen"},
+			},
+		}
+	}
+
+	reqBody := map[string]any{
+		"model": "gpt-5.5",
+		"tools": []any{
+			map[string]any{"type": "function", "name": "shell"},
+			map[string]any{"type": "image_generation", "output_format": "png"},
+			imageNamespace(),
+		},
+		"input": []any{
+			map[string]any{"type": "message", "role": "user", "content": "draw a cat"},
+			map[string]any{
+				"type": "additional_tools",
+				"tools": []any{
+					map[string]any{"type": "image_generation"},
+					imageNamespace(),
+				},
+			},
+		},
+		"tool_choice": map[string]any{"type": "namespace", "name": "image_gen"},
+	}
+
+	require.True(t, stripOpenAIHostedImageGenerationTools(reqBody))
+	require.True(t, hasOpenAIImageGenerationTool(reqBody), "client image_gen namespace must remain available")
+	require.Equal(t, map[string]any{"type": "namespace", "name": "image_gen"}, reqBody["tool_choice"])
+
+	tools, ok := reqBody["tools"].([]any)
+	require.True(t, ok)
+	require.Len(t, tools, 2)
+	require.Equal(t, "shell", tools[0].(map[string]any)["name"])
+	require.Equal(t, "image_gen", tools[1].(map[string]any)["name"])
+
+	input, ok := reqBody["input"].([]any)
+	require.True(t, ok)
+	require.Len(t, input, 2)
+	additionalTools := input[1].(map[string]any)["tools"].([]any)
+	require.Len(t, additionalTools, 1)
+	require.Equal(t, "image_gen", additionalTools[0].(map[string]any)["name"])
+	require.False(t, stripOpenAIHostedImageGenerationTools(reqBody), "hosted-only stripping should be idempotent")
+}
+
 func TestStripOpenAIImageGenerationTools_KeepsNonImageNamespaces(t *testing.T) {
 	reqBody := map[string]any{
 		"tools": []any{

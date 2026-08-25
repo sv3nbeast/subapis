@@ -66,6 +66,42 @@ func TestOpenAIGatewayService_OAuthPreservesCodexNamespaceTools(t *testing.T) {
 	require.Empty(t, openAIResponsesNamespaceNames(c))
 }
 
+func TestOpenAIGatewayService_OAuthResponsesLiteStripsHostedImageToolAndPreservesCodexNamespace(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.6-terra",
+		"stream":false,
+		"instructions":"test",
+		"tools":[
+			{"type":"function","name":"shell","parameters":{"type":"object"}},
+			{"type":"image_generation","output_format":"png"}
+		],
+		"input":[
+			{"type":"message","role":"user","content":"draw a cat"},
+			{"type":"additional_tools","tools":[{"type":"namespace","name":"image_gen","tools":[{"type":"function","name":"imagegen","parameters":{"type":"object"}}]}]}
+		],
+		"tool_choice":{"type":"namespace","name":"image_gen"}
+	}`)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		newOpenAIRejectedFieldTestResponse(http.StatusOK, namespaceForwardOKResponse),
+	}}
+	c := newOpenAIRejectedFieldTestContext(body)
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.144.1")
+
+	result, err := newOpenAIRejectedFieldTestService(upstream).Forward(
+		context.Background(), c, newOpenAIOAuthNamespaceTestAccount(), body,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.bodies, 1)
+	forwarded := upstream.bodies[0]
+	require.False(t, gjson.GetBytes(forwarded, `tools.#(type=="image_generation")`).Exists())
+	require.True(t, gjson.GetBytes(forwarded, `tools.#(type=="function")`).Exists())
+	require.Equal(t, "image_gen", gjson.GetBytes(forwarded, `input.#(type=="additional_tools").tools.0.name`).String())
+	require.Equal(t, "namespace", gjson.GetBytes(forwarded, "tool_choice.type").String())
+	require.Equal(t, "image_gen", gjson.GetBytes(forwarded, "tool_choice.name").String())
+}
+
 // compact 端点 schema 更窄：input[].namespace 会 400 Unknown parameter（issue #4761），
 // 且没有证据表明它接受 namespace 工具声明。compact 只做历史摘要、不需要模型寻址工具，
 // 因此保持既有的摊平 + 全量清理行为，不随默认值翻转扩大风险面。

@@ -3583,15 +3583,15 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	// A Codex client can still explicitly advertise image_generation even though
 	// we do not inject it above. Responses-Lite rejects that hosted tool as well;
-	// retain supported function tools and drop only the incompatible tool/choice.
+	// retain client-executed image_gen tools and drop only the hosted tool/choice.
 	if codexResponsesLite && openAIRequestBodyHasImageGenerationDeclaration(body) {
 		decoded, decodeErr := ensureReqBody()
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
-		if stripOpenAIImageGenerationTools(decoded) {
+		if stripOpenAIHostedImageGenerationTools(decoded) {
 			markDecodedModified()
-			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Stripped /responses image_generation tool for Codex Responses-Lite")
+			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Stripped hosted /responses image_generation tool for Codex Responses-Lite")
 		}
 	}
 

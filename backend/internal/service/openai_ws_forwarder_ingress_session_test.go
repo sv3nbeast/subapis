@@ -372,7 +372,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_FollowupCreateCa
 	require.Equal(t, "resp_omit_model_1", gjson.Get(requestToJSONString(captureConn.writes[1]), "previous_response_id").String())
 }
 
-func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StripsCodexResponsesLiteImageTool(t *testing.T) {
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StripsHostedImageToolAndPreservesCodexNamespace(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	cfg := &config.Config{}
@@ -485,12 +485,15 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StripsCodexRespo
 		"type":"response.create",
 		"model":"gpt-5.5",
 		"stream":false,
-		"input":"draw a cat",
+		"input":[
+			{"type":"message","role":"user","content":"draw a cat"},
+			{"type":"additional_tools","tools":[{"type":"namespace","name":"image_gen","tools":[{"type":"function","name":"imagegen","parameters":{"type":"object"}}]}]}
+		],
 		"tools":[
 			{"type":"function","name":"shell","parameters":{"type":"object"}},
 			{"type":"image_generation","output_format":"png"}
 		],
-		"tool_choice":{"type":"image_generation"}
+		"tool_choice":{"type":"namespace","name":"image_gen"}
 	}`))
 	cancelWrite()
 	require.NoError(t, err)
@@ -515,7 +518,9 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StripsCodexRespo
 	upstreamPayload := requestToJSONString(captureConn.writes[0])
 	require.True(t, gjson.Get(upstreamPayload, `tools.#(type=="function")`).Exists())
 	require.False(t, gjson.Get(upstreamPayload, `tools.#(type=="image_generation")`).Exists())
-	require.False(t, gjson.Get(upstreamPayload, "tool_choice").Exists())
+	require.Equal(t, "image_gen", gjson.Get(upstreamPayload, `input.#(type=="additional_tools").tools.0.name`).String())
+	require.Equal(t, "namespace", gjson.Get(upstreamPayload, "tool_choice.type").String())
+	require.Equal(t, "image_gen", gjson.Get(upstreamPayload, "tool_choice.name").String())
 	require.NotContains(t, gjson.Get(upstreamPayload, "instructions").String(), "image_generation")
 }
 

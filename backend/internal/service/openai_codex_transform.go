@@ -742,6 +742,10 @@ func isOpenAIImageGenerationToolMap(tool map[string]any) bool {
 		isImageGenNamespaceToolMap(tool)
 }
 
+func isOpenAIHostedImageGenerationToolMap(tool map[string]any) bool {
+	return isOpenAIImageGenerationType(firstNonEmptyString(tool["type"]))
+}
+
 func isImageGenNamespaceToolMap(tool map[string]any) bool {
 	return strings.TrimSpace(firstNonEmptyString(tool["type"])) == "namespace" &&
 		isOpenAIImageGenNamespaceName(firstNonEmptyString(tool["name"]))
@@ -770,21 +774,48 @@ func inputContainsImageGenerationTool(rawInput any) bool {
 // stripOpenAIImageGenerationTools keeps account-level strip policy symmetric
 // across standard Responses tools, Responses Lite additional_tools, and tool_choice.
 func stripOpenAIImageGenerationTools(reqBody map[string]any) bool {
+	return stripOpenAIImageGenerationToolsMatching(
+		reqBody,
+		isOpenAIImageGenerationToolMap,
+		openAIAnyToolChoiceSelectsImageGeneration,
+	)
+}
+
+// stripOpenAIHostedImageGenerationTools removes only the hosted Responses
+// image_generation tool. It preserves Codex's client-executed image_gen
+// namespace/function tools, which remain valid on Responses-Lite.
+func stripOpenAIHostedImageGenerationTools(reqBody map[string]any) bool {
+	return stripOpenAIImageGenerationToolsMatching(
+		reqBody,
+		isOpenAIHostedImageGenerationToolMap,
+		openAIAnyToolChoiceSelectsHostedImageGeneration,
+	)
+}
+
+func stripOpenAIImageGenerationToolsMatching(
+	reqBody map[string]any,
+	toolMatcher func(map[string]any) bool,
+	toolChoiceMatcher func(any) bool,
+) bool {
 	if reqBody == nil {
 		return false
 	}
-	modified := stripOpenAIImageGenerationToolList(reqBody, "tools")
-	if stripOpenAIImageGenerationToolsFromInput(reqBody) {
+	modified := stripOpenAIImageGenerationToolListMatching(reqBody, "tools", toolMatcher)
+	if stripOpenAIImageGenerationToolsFromInputMatching(reqBody, toolMatcher) {
 		modified = true
 	}
-	if openAIAnyToolChoiceSelectsImageGeneration(reqBody["tool_choice"]) {
+	if toolChoiceMatcher(reqBody["tool_choice"]) {
 		delete(reqBody, "tool_choice")
 		modified = true
 	}
 	return modified
 }
 
-func stripOpenAIImageGenerationToolList(container map[string]any, key string) bool {
+func stripOpenAIImageGenerationToolListMatching(
+	container map[string]any,
+	key string,
+	toolMatcher func(map[string]any) bool,
+) bool {
 	rawTools, ok := container[key]
 	if !ok || rawTools == nil {
 		return false
@@ -796,7 +827,7 @@ func stripOpenAIImageGenerationToolList(container map[string]any, key string) bo
 	filtered := make([]any, 0, len(tools))
 	removed := false
 	for _, rawTool := range tools {
-		if toolMap, ok := rawTool.(map[string]any); ok && isOpenAIImageGenerationToolMap(toolMap) {
+		if toolMap, ok := rawTool.(map[string]any); ok && toolMatcher(toolMap) {
 			removed = true
 			continue
 		}
@@ -813,7 +844,10 @@ func stripOpenAIImageGenerationToolList(container map[string]any, key string) bo
 	return true
 }
 
-func stripOpenAIImageGenerationToolsFromInput(reqBody map[string]any) bool {
+func stripOpenAIImageGenerationToolsFromInputMatching(
+	reqBody map[string]any,
+	toolMatcher func(map[string]any) bool,
+) bool {
 	input, ok := reqBody["input"].([]any)
 	if !ok {
 		return false
@@ -827,7 +861,7 @@ func stripOpenAIImageGenerationToolsFromInput(reqBody map[string]any) bool {
 			filteredInput = append(filteredInput, rawItem)
 			continue
 		}
-		if !stripOpenAIImageGenerationToolList(item, "tools") {
+		if !stripOpenAIImageGenerationToolListMatching(item, "tools", toolMatcher) {
 			filteredInput = append(filteredInput, rawItem)
 			continue
 		}
@@ -847,6 +881,17 @@ func stripOpenAIImageGenerationToolsFromInput(reqBody map[string]any) bool {
 // stripOpenAIImageGenerationToolsFromRawPayload is the shared adapter for paths
 // that forward raw HTTP or WebSocket payloads without the normal request map.
 func stripOpenAIImageGenerationToolsFromRawPayload(payload []byte) ([]byte, bool, error) {
+	return stripOpenAIImageGenerationToolsFromRawPayloadMatching(payload, stripOpenAIImageGenerationTools)
+}
+
+func stripOpenAIHostedImageGenerationToolsFromRawPayload(payload []byte) ([]byte, bool, error) {
+	return stripOpenAIImageGenerationToolsFromRawPayloadMatching(payload, stripOpenAIHostedImageGenerationTools)
+}
+
+func stripOpenAIImageGenerationToolsFromRawPayloadMatching(
+	payload []byte,
+	stripper func(map[string]any) bool,
+) ([]byte, bool, error) {
 	if !openAIRequestBodyHasImageGenerationDeclaration(payload) {
 		if json.Valid(payload) {
 			return payload, false, nil
@@ -858,7 +903,7 @@ func stripOpenAIImageGenerationToolsFromRawPayload(payload []byte) ([]byte, bool
 	if err := json.Unmarshal(payload, &payloadMap); err != nil {
 		return payload, false, err
 	}
-	if !stripOpenAIImageGenerationTools(payloadMap) {
+	if !stripper(payloadMap) {
 		return payload, false, nil
 	}
 	rebuilt, err := json.Marshal(payloadMap)

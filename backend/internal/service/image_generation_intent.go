@@ -394,6 +394,27 @@ func openAIAnyToolChoiceSelectsImageGeneration(choice any) bool {
 	return false
 }
 
+// openAIAnyToolChoiceSelectsHostedImageGeneration matches only the Responses
+// hosted image_generation tool. Codex's client-executed image_gen namespace is
+// intentionally excluded because Responses-Lite supports that private tool.
+func openAIAnyToolChoiceSelectsHostedImageGeneration(choice any) bool {
+	switch v := choice.(type) {
+	case string:
+		return isOpenAIImageGenerationType(v)
+	case map[string]any:
+		if isOpenAIImageGenerationType(firstNonEmptyString(v["type"])) {
+			return true
+		}
+		if tool, ok := v["tool"].(map[string]any); ok && openAIAnyToolChoiceSelectsHostedImageGeneration(tool) {
+			return true
+		}
+		if fn, ok := v["function"].(map[string]any); ok && isOpenAIImageGenerationType(firstNonEmptyString(fn["name"])) {
+			return true
+		}
+	}
+	return false
+}
+
 func getAPIKeyFromContext(c interface{ Get(string) (any, bool) }) *APIKey {
 	if c == nil {
 		return nil
