@@ -558,6 +558,74 @@ func TestUpdateAccountExplicitProbeDisableUsesDedicatedExtraUpdate(t *testing.T)
 	require.Equal(t, false, repo.updates[accountID][0][UpstreamBillingRateSyncEnabledExtraKey])
 }
 
+func TestUpdateAccountTopLevelProbeSettingOverridesStaleManagedExtra(t *testing.T) {
+	accountID := int64(157)
+	initialRate := 0.25
+	repo := &accountBillingSettingsAdminRepo{
+		upstreamBillingProbeAccountRepo: &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{
+			accountID: {
+				ID:             accountID,
+				Platform:       PlatformAnthropic,
+				Type:           AccountTypeAPIKey,
+				Status:         StatusActive,
+				RateMultiplier: &initialRate,
+				Extra: map[string]any{
+					UpstreamBillingProbeEnabledExtraKey:    true,
+					UpstreamBillingRateSyncEnabledExtraKey: false,
+					UpstreamBillingProbeExtraKey:           map[string]any{"status": "failed"},
+				},
+			},
+		}},
+	}
+	disabled := false
+	manualRate := 1.0
+
+	updated, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
+		Extra: map[string]any{
+			// A full-form client can echo the values loaded before the user toggled
+			// the dedicated controls. They must not override explicit top-level intent.
+			UpstreamBillingProbeEnabledExtraKey:    true,
+			UpstreamBillingRateSyncEnabledExtraKey: false,
+			UpstreamBillingProbeExtraKey:           map[string]any{"status": "failed"},
+			"custom":                               "preserved",
+		},
+		ProbeEnabled:    &disabled,
+		RateSyncEnabled: &disabled,
+		RateMultiplier:  &manualRate,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, repo.updateCalls)
+	require.Equal(t, false, updated.Extra[UpstreamBillingProbeEnabledExtraKey])
+	require.Equal(t, false, updated.Extra[UpstreamBillingRateSyncEnabledExtraKey])
+	require.Equal(t, "preserved", updated.Extra["custom"])
+	require.NotNil(t, updated.RateMultiplier)
+	require.Equal(t, manualRate, *updated.RateMultiplier)
+}
+
+func TestUpdateAccountTopLevelProbeSettingIgnoresMalformedLegacyDuplicate(t *testing.T) {
+	accountID := int64(158)
+	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{
+		accountID: {
+			ID:       accountID,
+			Platform: PlatformAnthropic,
+			Type:     AccountTypeAPIKey,
+			Status:   StatusActive,
+			Extra:    map[string]any{UpstreamBillingProbeEnabledExtraKey: true},
+		},
+	}}
+	disabled := false
+
+	updated, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
+		Extra:        map[string]any{UpstreamBillingProbeEnabledExtraKey: "stale-invalid-value"},
+		ProbeEnabled: &disabled,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, false, updated.Extra[UpstreamBillingProbeEnabledExtraKey])
+	require.Equal(t, false, updated.Extra[UpstreamBillingRateSyncEnabledExtraKey])
+}
+
 func TestUpdateAccountExplicitUnchangedProbeEnabledStillUsesDedicatedExtraUpdate(t *testing.T) {
 	accountID := int64(114)
 	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{

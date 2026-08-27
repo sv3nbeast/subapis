@@ -5461,6 +5461,18 @@ const handleSubmit = async () => {
       updatePayload.extra = newExtra
     }
 
+    // Probe switches and snapshots are backend-managed fields. Account-specific
+    // editors above rebuild extra from the currently loaded account, so without
+    // this final scrub a toggle change can submit the old value in extra and the
+    // new value in the dedicated top-level field at the same time.
+    if (props.account.type === 'apikey' && updatePayload.extra) {
+      const newExtra = { ...(updatePayload.extra as Record<string, unknown>) }
+      delete newExtra.upstream_billing_probe_enabled
+      delete newExtra.upstream_billing_rate_sync_enabled
+      delete newExtra.upstream_billing_probe
+      updatePayload.extra = newExtra
+    }
+
     const canContinue = await ensureAntigravityMixedChannelConfirmed(async () => {
       await submitUpdateAccount(accountID, updatePayload)
     })

@@ -751,9 +751,17 @@ describe('EditAccountModal', () => {
 
   it('disabling probing also disables rate sync and restores manual rate editing', async () => {
     const account = buildAccount()
+    account.platform = 'anthropic'
+    account.name = 'Anthropic API Key'
+    account.credentials = {
+      api_key: 'sk-ant-test',
+      base_url: 'https://api.anthropic.com'
+    }
     account.extra = {
       upstream_billing_probe_enabled: true,
-      upstream_billing_rate_sync_enabled: true
+      upstream_billing_rate_sync_enabled: true,
+      upstream_billing_probe: { status: 'ok' },
+      custom_setting: 'preserved'
     }
     updateAccountMock.mockReset()
     checkMixedChannelRiskMock.mockReset()
@@ -777,6 +785,10 @@ describe('EditAccountModal', () => {
     expect(payload?.upstream_billing_probe_enabled).toBe(false)
     expect(payload?.upstream_billing_rate_sync_enabled).toBe(false)
     expect(payload?.rate_multiplier).toBe(1)
+    expect(payload?.extra?.custom_setting).toBe('preserved')
+    expect(payload?.extra).not.toHaveProperty('upstream_billing_probe_enabled')
+    expect(payload?.extra).not.toHaveProperty('upstream_billing_rate_sync_enabled')
+    expect(payload?.extra).not.toHaveProperty('upstream_billing_probe')
   })
 
   it('disabling only rate sync keeps automatic probing enabled', async () => {

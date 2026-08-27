@@ -3610,13 +3610,14 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	requestedRateSyncEnabledUpdate := input.RateSyncEnabled
 	if input.Extra != nil {
 		requestedProbeEnabled, hasRequestedProbeEnabled := normalizedExtra[UpstreamBillingProbeEnabledExtraKey]
-		if hasRequestedProbeEnabled {
+		// The dedicated top-level field is the current API contract and expresses
+		// the user's explicit update intent. Full-form clients can still echo the
+		// previously loaded managed value in extra, so only consult the legacy
+		// extra field when no top-level value was supplied.
+		if hasRequestedProbeEnabled && requestedProbeEnabledUpdate == nil {
 			enabled, ok := requestedProbeEnabled.(bool)
 			if !ok {
 				return nil, infraerrors.BadRequest("INVALID_UPSTREAM_BILLING_PROBE_ENABLED", "upstream_billing_probe_enabled must be a boolean")
-			}
-			if requestedProbeEnabledUpdate != nil && *requestedProbeEnabledUpdate != enabled {
-				return nil, infraerrors.BadRequest("CONFLICTING_UPSTREAM_BILLING_PROBE_ENABLED", "conflicting upstream_billing_probe_enabled values")
 			}
 			requestedProbeEnabledUpdate = &enabled
 		}
