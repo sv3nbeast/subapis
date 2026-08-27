@@ -442,9 +442,13 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 		body, _ := io.ReadAll(resp.Body)
 		errMsg := fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body))
 
-		// 403 表示账号被上游封禁，标记为 error 状态
-		if resp.StatusCode == http.StatusForbidden {
-			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
+		// 403 表示账号被上游封禁。Native Claude API 对确定性的 OAuth
+		// 撤销/刷新失败返回 401；此时继续调度只会重复携带失效凭据。未知
+		// 401 保持可调度，避免把瞬时认证或兼容性错误永久化。
+		if shouldDisableClaudeAccountAfterTestResponse(account, resp.StatusCode, body) {
+			if err := s.accountRepo.SetError(ctx, account.ID, errMsg); err != nil {
+				log.Printf("failed to mark Claude account %d as error after connectivity test: %v", account.ID, err)
+			}
 		}
 
 		return s.sendErrorAndEnd(c, errMsg)
@@ -452,6 +456,24 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 
 	// Process SSE stream
 	return s.processClaudeStream(c, resp.Body)
+}
+
+func shouldDisableClaudeAccountAfterTestResponse(account *Account, statusCode int, body []byte) bool {
+	if statusCode == http.StatusForbidden {
+		return true
+	}
+	if statusCode != http.StatusUnauthorized || account == nil ||
+		account.Type != AccountTypeAPIKey || !account.IsAnthropicAPIKeyPassthroughEnabled() {
+		return false
+	}
+
+	msg := strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessage(body)))
+	if msg == "" {
+		msg = strings.ToLower(strings.TrimSpace(string(body)))
+	}
+	return strings.Contains(msg, "oauth access token has expired") ||
+		strings.Contains(msg, "oauth authentication could not be refreshed") ||
+		strings.Contains(msg, "re-authenticate to continue")
 }
 
 func (s *AccountTestService) testClaudeVertexServiceAccountConnection(c *gin.Context, ctx context.Context, account *Account, testModelID string) error {

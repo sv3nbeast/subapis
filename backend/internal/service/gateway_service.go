@@ -10213,19 +10213,19 @@ func (s *GatewayService) shouldFailoverOn400(respBody []byte) bool {
 		return false
 	}
 
-	// 缺少/错误的 beta header：换账号/链路可能成功（尤其是混合调度时）。
-	// 更精确匹配 beta 相关的兼容性问题，避免误触发切换。
-	if strings.Contains(msg, "anthropic-beta") ||
-		strings.Contains(msg, "beta feature") ||
-		strings.Contains(msg, "requires beta") {
+	// 仅白名单允许明确的 beta 能力/请求头兼容性错误。thinking、签名、
+	// tool history 等确定性请求错误切换账号也不会成功，且会放大无效请求。
+	if strings.Contains(msg, "anthropic-beta") &&
+		(strings.Contains(msg, "required") || strings.Contains(msg, "missing") ||
+			strings.Contains(msg, "invalid") || strings.Contains(msg, "unsupported")) {
 		return true
 	}
-
-	// thinking/tool streaming 等兼容性约束（常见于中间转换链路）
-	if strings.Contains(msg, "thinking") || strings.Contains(msg, "thought_signature") || strings.Contains(msg, "signature") {
+	if strings.Contains(msg, "requires beta header") {
 		return true
 	}
-	if strings.Contains(msg, "tool_use") || strings.Contains(msg, "tool_result") || strings.Contains(msg, "tools") {
+	if strings.Contains(msg, "beta feature") &&
+		(strings.Contains(msg, "not enabled") || strings.Contains(msg, "not available") ||
+			strings.Contains(msg, "unsupported")) {
 		return true
 	}
 
