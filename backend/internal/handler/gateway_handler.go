@@ -951,6 +951,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			fs.SameAccountRetryCount = make(map[int64]int)
 			fs.AnthropicSoft429Retries = make(map[int64]int)
 			fs.AnthropicSoft429Accounts = make(map[int64]struct{})
+			fs.KiroMetadataOnlyEOFAccounts = make(map[int64]struct{})
 			fs.SwitchCount = 0
 			fs.ForceAccountID = 0
 			fs.LastFailoverErr = nil

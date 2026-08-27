@@ -58,6 +58,10 @@ const (
 	singleAccountBackoffDelay = 2 * time.Second
 	// maxProfitVetoAttempts limits request-scoped retries rejected by group profit control.
 	maxProfitVetoAttempts = 10
+	// A context-usage-only EOF is driven by the translated conversation shape,
+	// not credential health. Probe at most one peer account to distinguish an
+	// account-local anomaly, then stop instead of scanning the entire pool.
+	kiroMetadataOnlyEOFMaxAccounts = 2
 
 	// Legacy Kiro behavior is retained behind off/observe so rollout can be
 	// reverted without a binary rollback. Enforce mode never enters this path.
@@ -101,6 +105,7 @@ type FailoverState struct {
 	AnthropicSoft429Retries      map[int64]int
 	AnthropicSoft429Accounts     map[int64]struct{}
 	AntigravityQuota429Accounts  map[int64]struct{}
+	KiroMetadataOnlyEOFAccounts  map[int64]struct{}
 	Kiro429RetryCount            map[int64]int
 	Kiro429SoftExcludedIDs       map[int64]struct{}
 	Kiro429LastSoftExcluded      int64
@@ -135,6 +140,7 @@ func NewFailoverState(maxSwitches int, hasBoundSession bool) *FailoverState {
 		AnthropicSoft429Retries:     make(map[int64]int),
 		AnthropicSoft429Accounts:    make(map[int64]struct{}),
 		AntigravityQuota429Accounts: make(map[int64]struct{}),
+		KiroMetadataOnlyEOFAccounts: make(map[int64]struct{}),
 		Kiro429RetryCount:           make(map[int64]int),
 		Kiro429SoftExcludedIDs:      make(map[int64]struct{}),
 		AvoidEmailDomainSuffixes:    make(map[string]struct{}),
@@ -253,6 +259,9 @@ func (s *FailoverState) HandleFailoverError(
 	if platform == service.PlatformAntigravity && failoverErr.AntigravityQuota429 {
 		return s.handleAntigravityQuota429(ctx, accountID, failoverErr)
 	}
+	if platform == service.PlatformKiro && failoverErr.Reason == service.GatewayFailureReasonKiroMetadataOnlyEOF {
+		return s.handleKiroMetadataOnlyEOF(ctx, accountID, failoverErr)
+	}
 
 	if isKiro429Failover(platform, failoverErr) {
 		if !s.KiroResilienceEnforced {
@@ -331,6 +340,43 @@ func (s *FailoverState) HandleFailoverError(
 		zap.Int64("retry_after_ms", failoverErr.RetryAfter.Milliseconds()),
 	)
 
+	return FailoverContinue
+}
+
+func (s *FailoverState) handleKiroMetadataOnlyEOF(ctx context.Context, accountID int64, failoverErr *service.UpstreamFailoverError) FailoverAction {
+	if s.KiroMetadataOnlyEOFAccounts == nil {
+		s.KiroMetadataOnlyEOFAccounts = make(map[int64]struct{})
+	}
+	s.KiroAttempted = true
+	if _, repeated := s.KiroMetadataOnlyEOFAccounts[accountID]; repeated {
+		return FailoverExhausted
+	}
+	s.KiroMetadataOnlyEOFAccounts[accountID] = struct{}{}
+	s.FailedAccountIDs[accountID] = struct{}{}
+	failoverErr.RetryableOnSameAccount = false
+	failoverErr.RequestScopedTransient = true
+	failoverErr.SuppressTempUnschedule = true
+
+	if len(s.KiroMetadataOnlyEOFAccounts) >= kiroMetadataOnlyEOFMaxAccounts || s.SwitchCount >= s.MaxSwitches {
+		logger.FromContext(ctx).Warn("gateway.kiro_metadata_only_eof_exhausted",
+			zap.String("request_id", requestIDFromContext(ctx)),
+			zap.Int64("account_id", accountID),
+			zap.Int("attempted_account_count", len(s.KiroMetadataOnlyEOFAccounts)),
+			zap.Int("max_account_count", kiroMetadataOnlyEOFMaxAccounts),
+			zap.Int("switch_count", s.SwitchCount),
+		)
+		return FailoverExhausted
+	}
+
+	s.SwitchCount++
+	logger.FromContext(ctx).Warn("gateway.kiro_metadata_only_eof_switch_peer",
+		zap.String("request_id", requestIDFromContext(ctx)),
+		zap.Int64("account_id", accountID),
+		zap.Int("attempted_account_count", len(s.KiroMetadataOnlyEOFAccounts)),
+		zap.Int("max_account_count", kiroMetadataOnlyEOFMaxAccounts),
+		zap.Int("switch_count", s.SwitchCount),
+		zap.Int("max_switches", s.MaxSwitches),
+	)
 	return FailoverContinue
 }
 
@@ -524,6 +570,13 @@ func (s *FailoverState) recordKiro429Failover(ctx context.Context, accountID int
 // 返回 FailoverCanceled 时，调用方应直接 return。
 func (s *FailoverState) HandleSelectionExhausted(ctx context.Context, selectionErrs ...error) FailoverAction {
 	s.recordKiroSelectionCooldown(selectionErrs...)
+	// Never clear the exclusion set and replay a metadata-only EOF on the same
+	// sole credential. That response already proves the request was accepted and
+	// classified without producing semantics; repeating the identical payload is
+	// deterministic and defeats the two-account request budget above.
+	if s.LastFailoverErr != nil && s.LastFailoverErr.Reason == service.GatewayFailureReasonKiroMetadataOnlyEOF {
+		return FailoverExhausted
+	}
 	if s.KiroResilienceEnforced && s.KiroAttempted && s.LastNonRateLimitErr != nil {
 		s.LastFailoverErr = s.LastNonRateLimitErr
 		if s.lastNonRateLimitWasKiro {

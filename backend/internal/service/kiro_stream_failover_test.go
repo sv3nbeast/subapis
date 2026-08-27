@@ -650,6 +650,26 @@ func TestGatewayServiceKiroIncompleteStreamIsRetryableFailover(t *testing.T) {
 	require.Contains(t, ExtractUpstreamErrorMessage(failoverErr.ResponseBody), "incomplete kiro event stream")
 }
 
+func TestGatewayServiceKiroMetadataOnlyEOFIsRequestScopedPeerFailover(t *testing.T) {
+	svc := &GatewayService{kiroCooldownStore: &kiroStreamFailoverCooldownStore{}}
+	account := &Account{ID: 2596, Platform: PlatformKiro, Type: AccountTypeOAuth}
+	err := fmt.Errorf("stream read error: %w", &nianzskiro.IncompleteStreamError{
+		Message: "incomplete upstream event stream: missing completion evidence",
+		Reason:  nianzskiro.IncompleteStreamReasonMetadataOnlyEOF,
+	})
+
+	failoverErr := svc.kiroStreamErrorToFailover(context.Background(), account, err)
+
+	require.NotNil(t, failoverErr)
+	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.Equal(t, UpstreamFailureIncompleteStream, failoverErr.FailureKind)
+	require.Equal(t, GatewayFailureReasonKiroMetadataOnlyEOF, failoverErr.Reason)
+	require.Equal(t, GatewayFailureScopeRequest, failoverErr.Scope)
+	require.True(t, failoverErr.RequestScopedTransient)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.True(t, failoverErr.SuppressTempUnschedule)
+}
+
 func TestGatewayServiceKiroEmptyStreamWrappedFailoverKeepsKiroClassification(t *testing.T) {
 	svc := &GatewayService{kiroCooldownStore: &kiroStreamFailoverCooldownStore{}}
 	account := &Account{ID: 1459, Platform: PlatformKiro, Type: AccountTypeOAuth}

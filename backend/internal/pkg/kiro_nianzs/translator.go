@@ -42,6 +42,7 @@ const (
 	kiroLegacyToolCallsPrefix      = "Tool calls:"
 	kiroLegacyToolEnvelopeMaxBytes = 128 << 10
 	kiroToolResultsPrefix          = "Tool results:"
+	kiroInterruptedToolNameLimit   = 8
 	kiroToolResultCompactLimit     = 12000
 	kiroToolResultKeepHead         = 4000
 	kiroToolResultKeepTail         = 2000
@@ -149,10 +150,22 @@ type ParseResult struct {
 	StopReason   string
 }
 
+type IncompleteStreamReason string
+
+const (
+	IncompleteStreamReasonUnknown         IncompleteStreamReason = "unknown"
+	IncompleteStreamReasonEmptyEOF        IncompleteStreamReason = "empty_eof"
+	IncompleteStreamReasonMetadataOnlyEOF IncompleteStreamReason = "metadata_only_eof"
+	IncompleteStreamReasonMissingTerminal IncompleteStreamReason = "missing_terminal"
+)
+
 // IncompleteStreamError means the upstream Event Stream ended before Kiro
 // supplied evidence that the model turn completed. Callers may safely retry or
 // fail over only when no semantic response has been committed downstream.
-type IncompleteStreamError struct{ Message string }
+type IncompleteStreamError struct {
+	Message string
+	Reason  IncompleteStreamReason
+}
 
 func (e *IncompleteStreamError) Error() string {
 	if e == nil || strings.TrimSpace(e.Message) == "" {
@@ -164,6 +177,11 @@ func (e *IncompleteStreamError) Error() string {
 func IsIncompleteStream(err error) bool {
 	var target *IncompleteStreamError
 	return errors.As(err, &target)
+}
+
+func IsMetadataOnlyIncompleteStream(err error) bool {
+	var target *IncompleteStreamError
+	return errors.As(err, &target) && target != nil && target.Reason == IncompleteStreamReasonMetadataOnlyEOF
 }
 
 type NativeToolProgressStalledError struct{ KiroCredits float64 }
@@ -669,6 +687,17 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 
 	history, currentUserMsg, currentToolResults := processMessages(normalizedMessages, modelID, normalizeOrigin(origin), &requestCtx)
 	history = prependSystemHistory(history, systemPrompt, modelID, normalizeOrigin(origin))
+	if currentUserMsg != nil && len(currentToolResults) > 0 {
+		currentUserMsg.UserInputMessageContext = &KiroUserInputMessageContext{ToolResults: currentToolResults}
+	}
+	// Normalize the complete conversation, including the history/current-message
+	// boundary, before deriving placeholder tools. Interrupted clients can leave
+	// a tool_use without a tool_result (or the reverse). Forwarding either block
+	// as structured protocol makes Amazon Q/KRS reject the entire turn with a
+	// metadata-only EOF. Preserve valid pairs exactly and downgrade only the
+	// unpaired fragments to bounded ordinary history text.
+	history = normalizeKiroConversationProtocol(history, currentUserMsg)
+	currentToolResults = kiroUserToolResults(currentUserMsg)
 	var tools gjson.Result
 	if !isToolChoiceNone(claudeBody) {
 		tools = gjson.GetBytes(claudeBody, "tools")
@@ -680,8 +709,6 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 	if requestCtx.forcedToolChoiceName != "" {
 		kiroTools = filterKiroToolsForForcedChoice(kiroTools, requestCtx.forcedToolChoiceName)
 	}
-	currentToolResults, orphanedToolUseIDs := validateToolPairing(history, currentToolResults)
-	removeOrphanedToolUses(history, orphanedToolUseIDs)
 	kiroTools = appendMissingPlaceholderTools(kiroTools, collectHistoryToolNames(history))
 	requestCtx.NativeToolProgressRequired = options.RequireNativeToolProgress && len(kiroTools) > 0
 	requestCtx.NativeToolCallMarkerRequired = requestCtx.NativeToolProgressRequired && options.RequireNativeToolCallMarker
@@ -712,21 +739,31 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 				Tools:       kiroTools,
 				ToolResults: currentToolResults,
 			}
+		} else {
+			currentUserMsg.UserInputMessageContext = nil
 		}
 	} else {
 		history = sanitizeKiroToolHistory(history, nil, requestCtx, options)
 	}
 
-	var currentMessage KiroCurrentMessage
-	if currentUserMsg != nil {
-		currentMessage = KiroCurrentMessage{UserInputMessage: *currentUserMsg}
-	} else {
-		currentMessage = KiroCurrentMessage{UserInputMessage: KiroUserInputMessage{
+	if currentUserMsg == nil {
+		currentUserMsg = &KiroUserInputMessage{
 			Content: buildFinalContent("", nil),
 			ModelID: modelID,
 			Origin:  normalizeOrigin(origin),
-		}}
+		}
 	}
+	// sanitizeKiroToolHistory may flatten an old tool cycle and remove its now
+	// empty assistant turn. Re-run the general normalizer only for that endpoint
+	// mode or when cleanup changed role adjacency; the common Q hot path avoids a
+	// redundant history rewrite.
+	if options.FlattenCompletedToolHistory || !kiroConversationRolesAlternate(history, currentUserMsg) {
+		history = normalizeKiroConversationProtocol(history, currentUserMsg)
+	}
+	if err := validateKiroConversationProtocol(history, currentUserMsg); err != nil {
+		return nil, err
+	}
+	currentMessage := KiroCurrentMessage{UserInputMessage: *currentUserMsg}
 
 	var inferenceConfig *KiroInferenceConfig
 	if maxTokens > 0 || hasTemperature || hasTopP {
@@ -860,6 +897,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	sawCompletionEvidence := false
 	eventDiagnostics := newNianzsKiroEventDiagnosticState(requestCtx)
 	semanticTailState := newNianzsKiroSemanticTailState(requestCtx)
+	incompleteStreamState := &nianzsKiroIncompleteStreamState{}
 	protocolPingSent := false
 	claudeCodeFirstTextDeltaSent := false
 	pendingClaudeProtocolText := ""
@@ -1843,6 +1881,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		event, decodeStatus := decodeNianzsKiroEventPayload(msg.Payload)
 		if decodeStatus != "decoded" {
 			semanticTailState.observe(msg, nil, decodeStatus)
+			incompleteStreamState.observe(msg, nil, decodeStatus)
 			eventDiagnostics.observe(msg, nil, decodeStatus, false)
 			continue
 		}
@@ -1853,6 +1892,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 		completionEvidence := kiroEventProvidesCompletionEvidence(msg.EventType, event)
 		semanticTailState.observe(msg, event, "decoded")
+		incompleteStreamState.observe(msg, event, "decoded")
 		eventDiagnostics.observe(msg, event, "decoded", completionEvidence)
 		if completionEvidence {
 			sawCompletionEvidence = true
@@ -1892,7 +1932,10 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 	}
 	if requestCtx.RequireTerminalEvent && !sawCompletionEvidence {
-		return nil, &IncompleteStreamError{Message: "incomplete kiro event stream: missing completion evidence"}
+		return nil, &IncompleteStreamError{
+			Message: "incomplete upstream event stream: missing completion evidence",
+			Reason:  incompleteStreamState.reason(),
+		}
 	}
 
 	if err := closeOpenStreamingTool(); err != nil {
@@ -3356,55 +3399,348 @@ func processMessages(messages []gjson.Result, modelID, origin string, requestCtx
 	return history, currentUserMsg, currentToolResults
 }
 
-func validateToolPairing(history []KiroHistoryMessage, currentToolResults []KiroToolResult) ([]KiroToolResult, map[string]bool) {
-	allToolUseIDs := make(map[string]bool)
-	pairedToolUseIDs := make(map[string]bool)
-	for _, h := range history {
-		if h.AssistantResponseMessage != nil {
-			for _, tu := range h.AssistantResponseMessage.ToolUses {
-				allToolUseIDs[tu.ToolUseID] = true
-			}
-		}
-		if h.UserInputMessage != nil && h.UserInputMessage.UserInputMessageContext != nil {
-			for _, tr := range h.UserInputMessage.UserInputMessageContext.ToolResults {
-				pairedToolUseIDs[tr.ToolUseID] = true
-			}
-		}
-	}
+// normalizeKiroConversationProtocol converts the client conversation into the
+// strict alternating protocol accepted by Amazon Q and KRS. It is deliberately
+// endpoint- and model-agnostic: valid tool cycles remain structured byte-for-
+// byte, while only incomplete/ambiguous fragments are downgraded to ordinary
+// history text. This avoids overfitting the repair to a specific tool name,
+// client version, endpoint, or streaming mode.
+func normalizeKiroConversationProtocol(history []KiroHistoryMessage, currentUser *KiroUserInputMessage) []KiroHistoryMessage {
+	history = compactAdjacentKiroHistoryRoles(history, currentUser)
 
-	filtered := currentToolResults[:0]
-	for _, tr := range currentToolResults {
-		if allToolUseIDs[tr.ToolUseID] && !pairedToolUseIDs[tr.ToolUseID] {
-			filtered = append(filtered, tr)
-			pairedToolUseIDs[tr.ToolUseID] = true
-		}
-	}
-	orphaned := make(map[string]bool)
-	for toolUseID := range allToolUseIDs {
-		if !pairedToolUseIDs[toolUseID] {
-			orphaned[toolUseID] = true
-		}
-	}
-	return filtered, orphaned
-}
-
-func removeOrphanedToolUses(history []KiroHistoryMessage, orphaned map[string]bool) {
-	if len(orphaned) == 0 {
-		return
-	}
+	// A structured tool result is valid only in the user turn immediately after
+	// the assistant turn that declared the same unique tool_use ID. A global
+	// search is too permissive: it can bind a stale result across an intervening
+	// natural-language turn and still produce an upstream-invalid transcript.
+	expectedResults := make(map[*KiroUserInputMessage]map[string]struct{})
+	seenToolUseIDs := make(map[string]struct{})
 	for i := range history {
-		msg := history[i].AssistantResponseMessage
-		if msg == nil || len(msg.ToolUses) == 0 {
+		assistant := history[i].AssistantResponseMessage
+		if assistant == nil || len(assistant.ToolUses) == 0 {
 			continue
 		}
-		filtered := msg.ToolUses[:0]
-		for _, toolUse := range msg.ToolUses {
-			if !orphaned[toolUse.ToolUseID] {
-				filtered = append(filtered, toolUse)
+
+		var nextUser *KiroUserInputMessage
+		if i+1 < len(history) {
+			nextUser = history[i+1].UserInputMessage
+		} else {
+			nextUser = currentUser
+		}
+		availableResults := kiroToolResultIndex(nextUser)
+		kept := make([]KiroToolUse, 0, len(assistant.ToolUses))
+		interrupted := make([]KiroToolUse, 0)
+		for _, toolUse := range assistant.ToolUses {
+			toolUseID := strings.TrimSpace(toolUse.ToolUseID)
+			name := strings.TrimSpace(toolUse.Name)
+			_, duplicateID := seenToolUseIDs[toolUseID]
+			_, hasResult := availableResults[toolUseID]
+			if toolUseID == "" || name == "" || duplicateID || nextUser == nil || !hasResult {
+				interrupted = append(interrupted, toolUse)
+				continue
+			}
+			seenToolUseIDs[toolUseID] = struct{}{}
+			kept = append(kept, toolUse)
+			if expectedResults[nextUser] == nil {
+				expectedResults[nextUser] = make(map[string]struct{})
+			}
+			expectedResults[nextUser][toolUseID] = struct{}{}
+		}
+		assistant.ToolUses = kept
+		if len(interrupted) > 0 {
+			assistant.Content = appendTextBlock(assistant.Content, narrateInterruptedKiroToolUses(interrupted))
+		}
+	}
+
+	for i := range history {
+		if user := history[i].UserInputMessage; user != nil {
+			normalizeKiroUserToolResults(user, expectedResults[user])
+		}
+	}
+	if currentUser != nil {
+		normalizeKiroUserToolResults(currentUser, expectedResults[currentUser])
+	}
+	return history
+}
+
+func compactAdjacentKiroHistoryRoles(history []KiroHistoryMessage, currentUser *KiroUserInputMessage) []KiroHistoryMessage {
+	if len(history) == 0 {
+		return history
+	}
+	compacted := make([]KiroHistoryMessage, 0, len(history))
+	for _, message := range history {
+		if message.UserInputMessage == nil && message.AssistantResponseMessage == nil {
+			continue
+		}
+		if len(compacted) == 0 {
+			compacted = append(compacted, message)
+			continue
+		}
+		last := &compacted[len(compacted)-1]
+		switch {
+		case last.UserInputMessage != nil && message.UserInputMessage != nil:
+			mergeKiroUserMessages(last.UserInputMessage, message.UserInputMessage, false)
+		case last.AssistantResponseMessage != nil && message.AssistantResponseMessage != nil:
+			mergeKiroAssistantMessages(last.AssistantResponseMessage, message.AssistantResponseMessage)
+		default:
+			compacted = append(compacted, message)
+		}
+	}
+	if currentUser != nil && len(compacted) > 0 {
+		last := compacted[len(compacted)-1]
+		if last.UserInputMessage != nil {
+			mergeKiroUserMessages(currentUser, last.UserInputMessage, true)
+			compacted = compacted[:len(compacted)-1]
+		}
+	}
+	return compacted
+}
+
+func mergeKiroUserMessages(dst, src *KiroUserInputMessage, prepend bool) {
+	if dst == nil || src == nil {
+		return
+	}
+	if prepend {
+		dst.Content = joinKiroHistoryText(src.Content, dst.Content)
+		dst.Images = append(append([]KiroImage(nil), src.Images...), dst.Images...)
+	} else {
+		dst.Content = joinKiroHistoryText(dst.Content, src.Content)
+		dst.Images = append(dst.Images, src.Images...)
+		if strings.TrimSpace(src.ModelID) != "" {
+			dst.ModelID = src.ModelID
+		}
+		if strings.TrimSpace(src.Origin) != "" {
+			dst.Origin = src.Origin
+		}
+	}
+
+	if src.UserInputMessageContext == nil {
+		return
+	}
+	if dst.UserInputMessageContext == nil {
+		dst.UserInputMessageContext = &KiroUserInputMessageContext{}
+	}
+	if prepend {
+		dst.UserInputMessageContext.ToolResults = append(append([]KiroToolResult(nil), src.UserInputMessageContext.ToolResults...), dst.UserInputMessageContext.ToolResults...)
+		dst.UserInputMessageContext.Tools = mergeKiroTools(src.UserInputMessageContext.Tools, dst.UserInputMessageContext.Tools)
+	} else {
+		dst.UserInputMessageContext.ToolResults = append(dst.UserInputMessageContext.ToolResults, src.UserInputMessageContext.ToolResults...)
+		dst.UserInputMessageContext.Tools = mergeKiroTools(dst.UserInputMessageContext.Tools, src.UserInputMessageContext.Tools)
+	}
+}
+
+func mergeKiroAssistantMessages(dst, src *KiroAssistantResponseMessage) {
+	if dst == nil || src == nil {
+		return
+	}
+	dst.Content = joinKiroHistoryText(dst.Content, src.Content)
+	dst.ToolUses = append(dst.ToolUses, src.ToolUses...)
+}
+
+func mergeKiroTools(left, right []KiroToolWrapper) []KiroToolWrapper {
+	if len(left) == 0 {
+		return append([]KiroToolWrapper(nil), right...)
+	}
+	merged := append([]KiroToolWrapper(nil), left...)
+	seen := make(map[string]struct{}, len(merged))
+	for _, tool := range merged {
+		seen[strings.ToLower(strings.TrimSpace(tool.ToolSpecification.Name))] = struct{}{}
+	}
+	for _, tool := range right {
+		name := strings.ToLower(strings.TrimSpace(tool.ToolSpecification.Name))
+		if _, ok := seen[name]; ok && name != "" {
+			continue
+		}
+		seen[name] = struct{}{}
+		merged = append(merged, tool)
+	}
+	return merged
+}
+
+func kiroToolResultIndex(user *KiroUserInputMessage) map[string]struct{} {
+	if user == nil || user.UserInputMessageContext == nil {
+		return nil
+	}
+	results := make(map[string]struct{}, len(user.UserInputMessageContext.ToolResults))
+	for _, result := range user.UserInputMessageContext.ToolResults {
+		if id := strings.TrimSpace(result.ToolUseID); id != "" {
+			results[id] = struct{}{}
+		}
+	}
+	return results
+}
+
+func normalizeKiroUserToolResults(user *KiroUserInputMessage, expected map[string]struct{}) {
+	if user == nil || user.UserInputMessageContext == nil || len(user.UserInputMessageContext.ToolResults) == 0 {
+		return
+	}
+	ctx := user.UserInputMessageContext
+	kept := make([]KiroToolResult, 0, len(ctx.ToolResults))
+	orphaned := make([]KiroToolResult, 0)
+	seen := make(map[string]struct{}, len(ctx.ToolResults))
+	for _, result := range ctx.ToolResults {
+		id := strings.TrimSpace(result.ToolUseID)
+		_, wanted := expected[id]
+		_, duplicate := seen[id]
+		if id == "" || !wanted || duplicate {
+			orphaned = append(orphaned, result)
+			continue
+		}
+		seen[id] = struct{}{}
+		kept = append(kept, result)
+	}
+	ctx.ToolResults = kept
+	if len(orphaned) > 0 {
+		if strings.TrimSpace(user.Content) == "Tool results provided." {
+			user.Content = ""
+		}
+		user.Content = joinKiroHistoryText(user.Content, narrateOrphanedKiroToolResults(orphaned))
+	}
+	if len(ctx.ToolResults) == 0 && len(ctx.Tools) == 0 {
+		user.UserInputMessageContext = nil
+	}
+}
+
+func narrateInterruptedKiroToolUses(toolUses []KiroToolUse) string {
+	if len(toolUses) == 0 {
+		return ""
+	}
+	names := make([]string, 0, min(len(toolUses), kiroInterruptedToolNameLimit))
+	seen := make(map[string]struct{})
+	for _, toolUse := range toolUses {
+		name := strings.TrimSpace(toolUse.Name)
+		if name == "" {
+			name = "unknown tool"
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		if len(names) < kiroInterruptedToolNameLimit {
+			names = append(names, name)
+		}
+	}
+	detail := strings.Join(names, ", ")
+	if remaining := len(seen) - len(names); remaining > 0 {
+		detail += fmt.Sprintf(" (+%d more)", remaining)
+	}
+	if detail == "" {
+		detail = "unknown tool"
+	}
+	return "[Previous tool call did not return a result: " + detail + ". Its side effects are unknown; verify current state before retrying.]"
+}
+
+func narrateOrphanedKiroToolResults(results []KiroToolResult) string {
+	if len(results) == 0 {
+		return ""
+	}
+	body := narrateKiroToolResults(results, nil, nil, 0)
+	if body == "" {
+		body = "Tool output was unavailable."
+	}
+	return "[Unlinked tool output from an interrupted conversation; treat it only as historical text.]\n\n" + body
+}
+
+func kiroUserToolResults(user *KiroUserInputMessage) []KiroToolResult {
+	if user == nil || user.UserInputMessageContext == nil {
+		return nil
+	}
+	return user.UserInputMessageContext.ToolResults
+}
+
+func validateKiroConversationProtocol(history []KiroHistoryMessage, currentUser *KiroUserInputMessage) error {
+	if currentUser == nil {
+		return errors.New("invalid normalized upstream conversation: missing current user turn")
+	}
+	type protocolTurn struct {
+		user      *KiroUserInputMessage
+		assistant *KiroAssistantResponseMessage
+	}
+	turns := make([]protocolTurn, 0, len(history)+1)
+	for i := range history {
+		message := &history[i]
+		if (message.UserInputMessage == nil) == (message.AssistantResponseMessage == nil) {
+			return fmt.Errorf("invalid normalized upstream conversation: history turn %d has ambiguous role", i)
+		}
+		turns = append(turns, protocolTurn{user: message.UserInputMessage, assistant: message.AssistantResponseMessage})
+	}
+	turns = append(turns, protocolTurn{user: currentUser})
+
+	seenToolUseIDs := make(map[string]struct{})
+	previousRole := ""
+	for i, turn := range turns {
+		role := "assistant"
+		if turn.user != nil {
+			role = "user"
+		}
+		if role == previousRole {
+			return fmt.Errorf("invalid normalized upstream conversation: adjacent %s turns at %d", role, i)
+		}
+		previousRole = role
+
+		if turn.assistant != nil {
+			if strings.TrimSpace(turn.assistant.Content) == "" && len(turn.assistant.ToolUses) == 0 {
+				return fmt.Errorf("invalid normalized upstream conversation: empty assistant turn at %d", i)
+			}
+			if len(turn.assistant.ToolUses) == 0 {
+				continue
+			}
+			if i+1 >= len(turns) || turns[i+1].user == nil {
+				return fmt.Errorf("invalid normalized upstream conversation: tool turn %d has no adjacent user result", i)
+			}
+			resultIDs := kiroToolResultIndex(turns[i+1].user)
+			if len(resultIDs) != len(turn.assistant.ToolUses) {
+				return fmt.Errorf("invalid normalized upstream conversation: tool/result count mismatch at %d", i)
+			}
+			for _, toolUse := range turn.assistant.ToolUses {
+				id := strings.TrimSpace(toolUse.ToolUseID)
+				if id == "" || strings.TrimSpace(toolUse.Name) == "" {
+					return fmt.Errorf("invalid normalized upstream conversation: incomplete tool declaration at %d", i)
+				}
+				if _, duplicate := seenToolUseIDs[id]; duplicate {
+					return fmt.Errorf("invalid normalized upstream conversation: duplicate tool ID at %d", i)
+				}
+				seenToolUseIDs[id] = struct{}{}
+				if _, ok := resultIDs[id]; !ok {
+					return fmt.Errorf("invalid normalized upstream conversation: unmatched tool ID at %d", i)
+				}
 			}
 		}
-		msg.ToolUses = filtered
+
+		if turn.user != nil {
+			results := kiroUserToolResults(turn.user)
+			if len(results) == 0 {
+				continue
+			}
+			if i == 0 || turns[i-1].assistant == nil || len(turns[i-1].assistant.ToolUses) != len(results) {
+				return fmt.Errorf("invalid normalized upstream conversation: orphan tool result at %d", i)
+			}
+		}
 	}
+	return nil
+}
+
+func kiroConversationRolesAlternate(history []KiroHistoryMessage, currentUser *KiroUserInputMessage) bool {
+	if currentUser == nil {
+		return false
+	}
+	previousRole := ""
+	for i := range history {
+		role := ""
+		switch {
+		case history[i].UserInputMessage != nil && history[i].AssistantResponseMessage == nil:
+			role = "user"
+		case history[i].AssistantResponseMessage != nil && history[i].UserInputMessage == nil:
+			role = "assistant"
+		default:
+			return false
+		}
+		if role == previousRole {
+			return false
+		}
+		previousRole = role
+	}
+	return previousRole != "user"
 }
 
 func collectHistoryToolNames(history []KiroHistoryMessage) []string {
@@ -3575,6 +3911,8 @@ func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs 
 			if last.UserInputMessage != nil &&
 				content != "" &&
 				len(msg.UserInputMessage.Images) == 0 &&
+				msg.UserInputMessage.UserInputMessageContext == nil &&
+				last.UserInputMessage.UserInputMessageContext == nil &&
 				!flattenedToolMessages[msg.UserInputMessage] &&
 				!flattenedToolMessages[last.UserInputMessage] &&
 				strings.TrimSpace(last.UserInputMessage.Content) == content {
@@ -4446,6 +4784,7 @@ func parseEventStream(body io.Reader, model string, requestCtx KiroRequestContex
 	sawCompletionEvidence := false
 	eventDiagnostics := newNianzsKiroEventDiagnosticState(requestCtx)
 	semanticTailState := newNianzsKiroSemanticTailState(requestCtx)
+	incompleteStreamState := &nianzsKiroIncompleteStreamState{}
 	processedIDs := make(map[string]bool)
 	var currentTool *toolUseState
 	reasoningOpen := false
@@ -4488,6 +4827,7 @@ func parseEventStream(body io.Reader, model string, requestCtx KiroRequestContex
 		event, decodeStatus := decodeNianzsKiroEventPayload(msg.Payload)
 		if decodeStatus != "decoded" {
 			semanticTailState.observe(msg, nil, decodeStatus)
+			incompleteStreamState.observe(msg, nil, decodeStatus)
 			eventDiagnostics.observe(msg, nil, decodeStatus, false)
 			continue
 		}
@@ -4501,6 +4841,7 @@ func parseEventStream(body io.Reader, model string, requestCtx KiroRequestContex
 		}
 		completionEvidence := kiroEventProvidesCompletionEvidence(msg.EventType, event)
 		semanticTailState.observe(msg, event, "decoded")
+		incompleteStreamState.observe(msg, event, "decoded")
 		eventDiagnostics.observe(msg, event, "decoded", completionEvidence)
 		if completionEvidence {
 			sawCompletionEvidence = true
@@ -4558,7 +4899,10 @@ func parseEventStream(body io.Reader, model string, requestCtx KiroRequestContex
 		}
 	}
 	if requestCtx.RequireTerminalEvent && !sawCompletionEvidence {
-		return "", nil, usage, stopReason, reasoningArtifacts, &IncompleteStreamError{Message: "incomplete kiro event stream: missing completion evidence"}
+		return "", nil, usage, stopReason, reasoningArtifacts, &IncompleteStreamError{
+			Message: "incomplete upstream event stream: missing completion evidence",
+			Reason:  incompleteStreamState.reason(),
+		}
 	}
 	closeReasoning()
 

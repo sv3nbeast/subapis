@@ -448,6 +448,70 @@ func newNianzsKiroRouteTestRuntime(t *testing.T, response *http.Response) (*Gate
 	return svc, upstream, account
 }
 
+func TestNianzsMessagesEntrypointRepairsInterruptedToolConversation(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			body := []byte(fmt.Sprintf(`{
+				"model":"claude-opus-5",
+				"max_tokens":128,
+				"stream":%t,
+				"messages":[
+					{"role":"user","content":"start"},
+					{"role":"assistant","content":[
+						{"type":"tool_use","id":"toolu_complete","name":"Read","input":{"path":"/tmp/a"}},
+						{"type":"tool_use","id":"toolu_interrupted","name":"Write","input":{"secret":"do-not-replay"}}
+					]},
+					{"role":"user","content":[
+						{"type":"tool_result","tool_use_id":"toolu_complete","content":"read ok"},
+						{"type":"text","text":"continue"}
+					]}
+				]
+			}`, stream))
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+			require.NoError(t, err)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+			svc, upstream, account := newNianzsKiroRouteTestRuntime(t, kiroEventStreamResponse(t, "normalized ok", 10, 3))
+
+			result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+
+			require.NoError(t, forwardErr)
+			require.NotNil(t, result)
+			require.Equal(t, http.StatusOK, recorder.Code)
+			require.Len(t, upstream.bodies, 1)
+			payload := upstream.bodies[0]
+			require.NotContains(t, string(payload), "do-not-replay")
+			require.Contains(t, string(payload), "Previous tool call did not return a result")
+			var completeUseCount, interruptedUseCount, completeResultCount int
+			for _, message := range gjson.GetBytes(payload, "conversationState.history").Array() {
+				for _, use := range message.Get("assistantResponseMessage.toolUses").Array() {
+					switch use.Get("toolUseId").String() {
+					case "toolu_complete":
+						completeUseCount++
+					case "toolu_interrupted":
+						interruptedUseCount++
+					}
+				}
+				for _, toolResult := range message.Get("userInputMessage.userInputMessageContext.toolResults").Array() {
+					if toolResult.Get("toolUseId").String() == "toolu_complete" {
+						completeResultCount++
+					}
+				}
+			}
+			for _, toolResult := range gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults").Array() {
+				if toolResult.Get("toolUseId").String() == "toolu_complete" {
+					completeResultCount++
+				}
+			}
+			require.Equal(t, 1, completeUseCount)
+			require.Zero(t, interruptedUseCount)
+			require.Equal(t, 1, completeResultCount)
+		})
+	}
+}
+
 func nianzsKiroContextUsageResponse(t *testing.T, percentage float64, outputTokens int) *http.Response {
 	t.Helper()
 	stream := bytes.NewBuffer(nil)

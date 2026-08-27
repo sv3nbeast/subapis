@@ -824,6 +824,8 @@ const (
 
 type GatewayFailureReason string
 
+const GatewayFailureReasonKiroMetadataOnlyEOF GatewayFailureReason = "kiro_metadata_only_eof"
+
 // UpstreamFailoverError indicates an upstream error that should trigger account failover.
 type UpstreamFailoverError struct {
 	StatusCode               int

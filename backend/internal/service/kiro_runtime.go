@@ -938,6 +938,14 @@ func (s *GatewayService) kiroStreamErrorToFailover(ctx context.Context, account 
 
 	var nianzsIncompleteStreamErr *nianzskiro.IncompleteStreamError
 	if errors.As(err, &nianzsIncompleteStreamErr) {
+		failureReason := GatewayFailureReason("")
+		failureScope := GatewayFailureScope("")
+		requestScopedTransient := false
+		if nianzskiro.IsMetadataOnlyIncompleteStream(err) {
+			failureReason = GatewayFailureReasonKiroMetadataOnlyEOF
+			failureScope = GatewayFailureScopeRequest
+			requestScopedTransient = true
+		}
 		body, _ := json.Marshal(map[string]any{
 			"type": "error",
 			"error": map[string]string{
@@ -948,7 +956,10 @@ func (s *GatewayService) kiroStreamErrorToFailover(ctx context.Context, account 
 		return &UpstreamFailoverError{
 			StatusCode:             http.StatusBadGateway,
 			ResponseBody:           body,
-			RetryableOnSameAccount: true,
+			RetryableOnSameAccount: !requestScopedTransient,
+			RequestScopedTransient: requestScopedTransient,
+			Scope:                  failureScope,
+			Reason:                 failureReason,
 			SuppressTempUnschedule: true,
 			FailureKind:            UpstreamFailureIncompleteStream,
 			UpstreamDone:           upstreamDone,

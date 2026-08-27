@@ -251,6 +251,46 @@ type nianzsKiroSemanticTailState struct {
 	allowReasoning              bool
 }
 
+// nianzsKiroIncompleteStreamState classifies only evidence already decoded
+// from the EventStream. In particular, context metadata with no assistant,
+// reasoning, or tool candidate is request-shaped and deterministic across
+// credentials; a transport EOF with no decoded frames remains a distinct
+// transient/account failover signal.
+type nianzsKiroIncompleteStreamState struct {
+	decodedFrames      int
+	sawContextUsage    bool
+	sawSemantic        bool
+	sawNonMetadataOnly bool
+}
+
+func (s *nianzsKiroIncompleteStreamState) observe(msg *eventStreamMessage, event map[string]any, decodeStatus string) {
+	if s == nil || msg == nil || decodeStatus != "decoded" {
+		return
+	}
+	s.decodedFrames++
+	if nianzsKiroDiagnosticHasSemanticCandidate(msg, event) {
+		s.sawSemantic = true
+	}
+	switch strings.TrimSpace(msg.EventType) {
+	case "contextUsageEvent":
+		s.sawContextUsage = true
+	case "messageMetadataEvent", "metadataEvent":
+		// Metadata frames may accompany context usage but cannot complete a turn.
+	default:
+		s.sawNonMetadataOnly = true
+	}
+}
+
+func (s *nianzsKiroIncompleteStreamState) reason() IncompleteStreamReason {
+	if s == nil || s.decodedFrames == 0 {
+		return IncompleteStreamReasonEmptyEOF
+	}
+	if s.sawContextUsage && !s.sawSemantic && !s.sawNonMetadataOnly {
+		return IncompleteStreamReasonMetadataOnlyEOF
+	}
+	return IncompleteStreamReasonMissingTerminal
+}
+
 func newNianzsKiroSemanticTailState(requestCtx KiroRequestContext) *nianzsKiroSemanticTailState {
 	return &nianzsKiroSemanticTailState{allowReasoning: requestCtx.ThinkingEnabled}
 }

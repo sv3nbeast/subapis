@@ -183,7 +183,7 @@ func TestBuildKiroPayloadDoesNotInsertUserDotBeforeLeadingAssistant(t *testing.T
 	foundLeadingAssistant := false
 	for _, msg := range history {
 		require.NotEqual(t, ".", msg.Get("userInputMessage.content").String())
-		if msg.Get("assistantResponseMessage.content").String() == "prior assistant" {
+		if strings.Contains(msg.Get("assistantResponseMessage.content").String(), "prior assistant") {
 			foundLeadingAssistant = true
 		}
 	}
@@ -205,7 +205,7 @@ func TestBuildKiroPayloadSingleAssistantDoesNotInsertUserDot(t *testing.T) {
 	foundOnlyAssistant := false
 	for _, msg := range history {
 		require.NotEqual(t, ".", msg.Get("userInputMessage.content").String())
-		if msg.Get("assistantResponseMessage.content").String() == "only assistant" {
+		if strings.Contains(msg.Get("assistantResponseMessage.content").String(), "only assistant") {
 			foundOnlyAssistant = true
 		}
 	}
