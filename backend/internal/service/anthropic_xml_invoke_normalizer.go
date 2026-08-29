@@ -96,7 +96,8 @@ func normalizeAnthropicXMLInvokeResponseBody(body []byte) ([]byte, bool) {
 	var blocks []map[string]any
 	changed := false
 	content.ForEach(func(_, item gjson.Result) bool {
-		if item.Get("type").String() != "text" {
+		blockType := item.Get("type").String()
+		if blockType != "text" && blockType != "thinking" {
 			var block map[string]any
 			if err := json.Unmarshal([]byte(item.Raw), &block); err == nil {
 				blocks = append(blocks, block)
@@ -104,7 +105,11 @@ func normalizeAnthropicXMLInvokeResponseBody(body []byte) ([]byte, bool) {
 			return true
 		}
 
-		text := item.Get("text").String()
+		textField := "text"
+		if blockType == "thinking" {
+			textField = "thinking"
+		}
+		text := item.Get(textField).String()
 		parts, pending := drainAnthropicXMLInvokeParts(text)
 		if !anthropicXMLInvokePartsContainCall(parts) {
 			var block map[string]any
@@ -115,6 +120,33 @@ func normalizeAnthropicXMLInvokeResponseBody(body []byte) ([]byte, bool) {
 		}
 
 		changed = true
+		if blockType == "thinking" {
+			var normalizedThinking strings.Builder
+			var calls []anthropicXMLInvokeCall
+			for _, part := range parts {
+				if part.call != nil {
+					calls = append(calls, *part.call)
+					continue
+				}
+				_, _ = normalizedThinking.WriteString(part.text)
+			}
+			_, _ = normalizedThinking.WriteString(pending)
+
+			var thinkingBlock map[string]any
+			if err := json.Unmarshal([]byte(item.Raw), &thinkingBlock); err == nil {
+				thinkingBlock["thinking"] = normalizedThinking.String()
+				blocks = append(blocks, thinkingBlock)
+			}
+			for _, call := range calls {
+				blocks = append(blocks, map[string]any{
+					"type":  "tool_use",
+					"id":    generateAnthropicXMLInvokeToolID(call.name),
+					"name":  call.name,
+					"input": call.input,
+				})
+			}
+			return true
+		}
 		for _, part := range parts {
 			if part.call != nil {
 				blocks = append(blocks, map[string]any{
@@ -154,6 +186,7 @@ func normalizeAnthropicXMLInvokeResponseBody(body []byte) ([]byte, bool) {
 
 type anthropicXMLInvokeStreamNormalizer struct {
 	activeTextBlocks       map[int]*anthropicXMLInvokeStreamTextBlock
+	activeThinkingBlocks   map[int]*anthropicXMLInvokeStreamThinkingBlock
 	syntheticClosedIndexes map[int]struct{}
 	pendingText            string
 	indexShift             int
@@ -165,6 +198,13 @@ type anthropicXMLInvokeStreamTextBlock struct {
 	downstreamIndex int
 	hasStart        bool
 	closed          bool
+}
+
+type anthropicXMLInvokeStreamThinkingBlock struct {
+	upstreamIndex   int
+	downstreamIndex int
+	pendingText     string
+	calls           []anthropicXMLInvokeCall
 }
 
 func newAnthropicXMLInvokeStreamNormalizer() *anthropicXMLInvokeStreamNormalizer {
@@ -195,11 +235,18 @@ func (n *anthropicXMLInvokeStreamNormalizer) handleEvent(event map[string]any) (
 }
 
 func (n *anthropicXMLInvokeStreamNormalizer) flushPendingEvents() []map[string]any {
-	if n == nil || len(n.activeTextBlocks) == 0 {
+	if n == nil || (len(n.activeTextBlocks) == 0 && len(n.activeThinkingBlocks) == 0) {
 		return nil
 	}
-	indexes := make([]int, 0, len(n.activeTextBlocks))
+	indexSet := make(map[int]struct{}, len(n.activeTextBlocks)+len(n.activeThinkingBlocks))
 	for index := range n.activeTextBlocks {
+		indexSet[index] = struct{}{}
+	}
+	for index := range n.activeThinkingBlocks {
+		indexSet[index] = struct{}{}
+	}
+	indexes := make([]int, 0, len(indexSet))
+	for index := range indexSet {
 		indexes = append(indexes, index)
 	}
 	sort.Ints(indexes)
@@ -232,7 +279,48 @@ func (n *anthropicXMLInvokeStreamNormalizer) handleContentBlockStart(event map[s
 		event["index"] = downstreamIndex
 	}
 	contentBlock, ok := event["content_block"].(map[string]any)
-	if !ok || contentBlock["type"] != "text" {
+	if !ok {
+		delete(n.activeTextBlocks, index)
+		delete(n.activeThinkingBlocks, index)
+		return nil, false, downstreamIndex != index
+	}
+	blockType, _ := contentBlock["type"].(string)
+	if blockType == "thinking" {
+		delete(n.activeTextBlocks, index)
+		if n.activeThinkingBlocks == nil {
+			n.activeThinkingBlocks = make(map[int]*anthropicXMLInvokeStreamThinkingBlock)
+		}
+		n.activeThinkingBlocks[index] = &anthropicXMLInvokeStreamThinkingBlock{
+			upstreamIndex:   index,
+			downstreamIndex: downstreamIndex,
+		}
+		initialThinking := askUserQuestionStringFromAny(contentBlock["thinking"])
+		if initialThinking == "" || !shouldBufferAnthropicXMLInvokeText(initialThinking) {
+			return nil, false, downstreamIndex != index
+		}
+		startEvent := cloneAnthropicSSEEvent(event)
+		if startBlock, ok := startEvent["content_block"].(map[string]any); ok {
+			startBlock["thinking"] = ""
+		}
+		deltaEvent := map[string]any{
+			"type":  "content_block_delta",
+			"index": index,
+			"delta": map[string]any{
+				"type":     "thinking_delta",
+				"thinking": initialThinking,
+			},
+		}
+		generated, handled, changed := n.handleThinkingBlockDelta(index, deltaEvent)
+		if handled {
+			return append([]map[string]any{startEvent}, generated...), true, true
+		}
+		if changed {
+			return []map[string]any{startEvent, deltaEvent}, true, true
+		}
+		return nil, false, downstreamIndex != index
+	}
+	delete(n.activeThinkingBlocks, index)
+	if blockType != "text" {
 		delete(n.activeTextBlocks, index)
 		return nil, false, downstreamIndex != index
 	}
@@ -276,6 +364,9 @@ func (n *anthropicXMLInvokeStreamNormalizer) handleContentBlockDelta(event map[s
 	index, ok := anthropicSSEEventIndex(event)
 	if !ok {
 		return nil, false, false
+	}
+	if _, ok := n.activeThinkingBlocks[index]; ok {
+		return n.handleThinkingBlockDelta(index, event)
 	}
 	block, ok := n.activeTextBlocks[index]
 	if !ok {
@@ -345,6 +436,53 @@ func (n *anthropicXMLInvokeStreamNormalizer) handleContentBlockDelta(event map[s
 	return generated, true, true
 }
 
+func (n *anthropicXMLInvokeStreamNormalizer) handleThinkingBlockDelta(index int, event map[string]any) ([]map[string]any, bool, bool) {
+	block, ok := n.activeThinkingBlocks[index]
+	if !ok {
+		return nil, false, false
+	}
+	event["index"] = block.downstreamIndex
+	delta, ok := event["delta"].(map[string]any)
+	if !ok || delta["type"] != "thinking_delta" {
+		return nil, false, block.downstreamIndex != index
+	}
+	text := askUserQuestionStringFromAny(delta["thinking"])
+	if text == "" && block.pendingText == "" {
+		return nil, false, block.downstreamIndex != index
+	}
+
+	combined := block.pendingText + text
+	block.pendingText = ""
+	parts, pending := drainAnthropicXMLInvokeParts(combined)
+	block.pendingText = pending
+	hasCall := anthropicXMLInvokePartsContainCall(parts)
+	if !hasCall && pending == "" {
+		if combined == text {
+			return nil, false, block.downstreamIndex != index
+		}
+		delta["thinking"] = combined
+		return nil, false, true
+	}
+
+	var visible strings.Builder
+	for _, part := range parts {
+		if part.call != nil {
+			block.calls = append(block.calls, *part.call)
+			n.sawToolUse = true
+			continue
+		}
+		_, _ = visible.WriteString(part.text)
+	}
+	if visible.Len() == 0 {
+		return nil, true, true
+	}
+	visibleEvent := cloneAnthropicSSEEvent(event)
+	if visibleDelta, ok := visibleEvent["delta"].(map[string]any); ok {
+		visibleDelta["thinking"] = visible.String()
+	}
+	return []map[string]any{visibleEvent}, true, true
+}
+
 func (n *anthropicXMLInvokeStreamNormalizer) handleSyntheticContentBlockDelta(index int, event map[string]any) ([]map[string]any, bool, bool) {
 	downstreamIndex := index + n.indexShift
 	delta, ok := event["delta"].(map[string]any)
@@ -410,6 +548,36 @@ func (n *anthropicXMLInvokeStreamNormalizer) handleContentBlockStop(event map[st
 	index, ok := anthropicSSEEventIndex(event)
 	if !ok {
 		return nil, false, false
+	}
+	if block, ok := n.activeThinkingBlocks[index]; ok {
+		delete(n.activeThinkingBlocks, index)
+		if len(block.calls) == 0 && block.pendingText == "" {
+			if block.downstreamIndex != index {
+				event["index"] = block.downstreamIndex
+				return nil, false, true
+			}
+			return nil, false, false
+		}
+		generated := make([]map[string]any, 0, 2+len(block.calls)*3)
+		if block.pendingText != "" {
+			generated = append(generated, map[string]any{
+				"type":  "content_block_delta",
+				"index": block.downstreamIndex,
+				"delta": map[string]any{
+					"type":     "thinking_delta",
+					"thinking": block.pendingText,
+				},
+			})
+		}
+		generated = append(generated, map[string]any{
+			"type":  "content_block_stop",
+			"index": block.downstreamIndex,
+		})
+		for _, call := range block.calls {
+			toolIndex := n.nextInsertedBlockIndex(block.upstreamIndex)
+			generated = append(generated, anthropicXMLInvokeToolUseEvents(call, toolIndex)...)
+		}
+		return generated, true, true
 	}
 	block, ok := n.activeTextBlocks[index]
 	if !ok {

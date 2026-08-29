@@ -70,6 +70,26 @@ func TestNormalizeAnthropicXMLInvokeResponseBodyConvertsTextToToolUse(t *testing
 	require.Equal(t, " After", content[2].Get("text").String())
 }
 
+func TestNormalizeAnthropicXMLInvokeResponseBodyLiftsToolUseOutOfThinking(t *testing.T) {
+	body := []byte(`{"id":"msg_1","type":"message","content":[{"type":"thinking","thinking":"inspect first <invoke name=\"Bash\"><parameter name=\"command\">pwd</parameter></invoke> then continue","signature":"opaque-provider-signature"},{"type":"text","text":"visible answer"}],"stop_reason":"end_turn"}`)
+
+	normalized, changed := normalizeAnthropicXMLInvokeResponseBody(body)
+
+	require.True(t, changed)
+	response := gjson.ParseBytes(normalized)
+	require.Equal(t, "tool_use", response.Get("stop_reason").String())
+	content := response.Get("content").Array()
+	require.Len(t, content, 3)
+	require.Equal(t, "thinking", content[0].Get("type").String())
+	require.Equal(t, "inspect first  then continue", content[0].Get("thinking").String())
+	require.Equal(t, "opaque-provider-signature", content[0].Get("signature").String())
+	require.Equal(t, "tool_use", content[1].Get("type").String())
+	require.Equal(t, "Bash", content[1].Get("name").String())
+	require.Equal(t, "pwd", content[1].Get("input.command").String())
+	require.Equal(t, "text", content[2].Get("type").String())
+	require.Equal(t, "visible answer", content[2].Get("text").String())
+}
+
 func TestDrainAnthropicXMLInvokeTextConvertsEscapedInvoke(t *testing.T) {
 	cleaned, calls, pending := drainAnthropicXMLInvokeText(`&lt;invoke name=&quot;Bash&quot;&gt;&lt;parameter name=&quot;command&quot;&gt;echo &amp;&amp; pwd&lt;/parameter&gt;&lt;/invoke&gt;`)
 
@@ -457,4 +477,178 @@ func TestAnthropicXMLInvokeStreamNormalizerKeepsIncompleteInvokeAsText(t *testin
 	require.Equal(t, "content_block_delta", generated[0]["type"])
 	require.Equal(t, `<invoke name="Bash"><parameter name="command">`, generated[0]["delta"].(map[string]any)["text"])
 	require.Equal(t, "content_block_stop", generated[1]["type"])
+}
+
+func TestAnthropicXMLInvokeStreamNormalizerLiftsSplitInvokeAfterThinkingSignature(t *testing.T) {
+	normalizer := newAnthropicXMLInvokeStreamNormalizer()
+
+	generated, handled, changed := normalizer.handleEvent(map[string]any{
+		"type":  "content_block_start",
+		"index": float64(0),
+		"content_block": map[string]any{
+			"type":      "thinking",
+			"thinking":  "",
+			"signature": "",
+		},
+	})
+	require.False(t, handled)
+	require.False(t, changed)
+	require.Empty(t, generated)
+
+	generated, handled, changed = normalizer.handleEvent(map[string]any{
+		"type":  "content_block_delta",
+		"index": float64(0),
+		"delta": map[string]any{
+			"type":     "thinking_delta",
+			"thinking": "inspect first <in",
+		},
+	})
+	require.True(t, handled)
+	require.True(t, changed)
+	require.Len(t, generated, 1)
+	require.Equal(t, "inspect first ", generated[0]["delta"].(map[string]any)["thinking"])
+
+	generated, handled, changed = normalizer.handleEvent(map[string]any{
+		"type":  "content_block_delta",
+		"index": float64(0),
+		"delta": map[string]any{
+			"type":     "thinking_delta",
+			"thinking": `voke name="Bash"><parameter name="command">pwd</parameter></invoke> then continue`,
+		},
+	})
+	require.True(t, handled)
+	require.True(t, changed)
+	require.Len(t, generated, 1)
+	require.Equal(t, " then continue", generated[0]["delta"].(map[string]any)["thinking"])
+
+	generated, handled, changed = normalizer.handleEvent(map[string]any{
+		"type":  "content_block_delta",
+		"index": float64(0),
+		"delta": map[string]any{
+			"type":      "signature_delta",
+			"signature": "opaque-provider-signature",
+		},
+	})
+	require.False(t, handled)
+	require.False(t, changed)
+	require.Empty(t, generated)
+
+	generated, handled, changed = normalizer.handleEvent(map[string]any{
+		"type":  "content_block_stop",
+		"index": float64(0),
+	})
+	require.True(t, handled)
+	require.True(t, changed)
+	require.Len(t, generated, 4)
+	require.Equal(t, "content_block_stop", generated[0]["type"])
+	require.Equal(t, 0, generated[0]["index"])
+	require.Equal(t, "content_block_start", generated[1]["type"])
+	require.Equal(t, 1, generated[1]["index"])
+	require.Equal(t, "tool_use", generated[1]["content_block"].(map[string]any)["type"])
+	require.Equal(t, "Bash", generated[1]["content_block"].(map[string]any)["name"])
+	require.Contains(t, generated[2]["delta"].(map[string]any)["partial_json"], `"command":"pwd"`)
+	require.Equal(t, "content_block_stop", generated[3]["type"])
+
+	messageDelta := map[string]any{
+		"type":  "message_delta",
+		"delta": map[string]any{"stop_reason": "end_turn"},
+	}
+	generated, handled, changed = normalizer.handleEvent(messageDelta)
+	require.False(t, handled)
+	require.True(t, changed)
+	require.Empty(t, generated)
+	require.Equal(t, "tool_use", messageDelta["delta"].(map[string]any)["stop_reason"])
+
+	nextStart := map[string]any{
+		"type":  "content_block_start",
+		"index": float64(1),
+		"content_block": map[string]any{
+			"type": "text",
+			"text": "",
+		},
+	}
+	generated, handled, changed = normalizer.handleEvent(nextStart)
+	require.False(t, handled)
+	require.True(t, changed)
+	require.Empty(t, generated)
+	require.Equal(t, 2, nextStart["index"])
+}
+
+func TestAnthropicXMLInvokeStreamNormalizerPreservesIncompleteThinkingInvoke(t *testing.T) {
+	normalizer := newAnthropicXMLInvokeStreamNormalizer()
+	_, _, _ = normalizer.handleEvent(map[string]any{
+		"type":  "content_block_start",
+		"index": float64(0),
+		"content_block": map[string]any{
+			"type": "thinking", "thinking": "", "signature": "",
+		},
+	})
+	generated, handled, changed := normalizer.handleEvent(map[string]any{
+		"type":  "content_block_delta",
+		"index": float64(0),
+		"delta": map[string]any{
+			"type": "thinking_delta", "thinking": `before <invoke name="Bash"><parameter name="command">`,
+		},
+	})
+	require.True(t, handled)
+	require.True(t, changed)
+	require.Len(t, generated, 1)
+	require.Equal(t, "before ", generated[0]["delta"].(map[string]any)["thinking"])
+
+	generated, handled, changed = normalizer.handleEvent(map[string]any{
+		"type": "content_block_stop", "index": float64(0),
+	})
+	require.True(t, handled)
+	require.True(t, changed)
+	require.Len(t, generated, 2)
+	require.Equal(t, "thinking_delta", generated[0]["delta"].(map[string]any)["type"])
+	require.Equal(t, `<invoke name="Bash"><parameter name="command">`, generated[0]["delta"].(map[string]any)["thinking"])
+	require.Equal(t, "content_block_stop", generated[1]["type"])
+}
+
+func TestAnthropicXMLInvokeStreamNormalizerLiftsMultipleThinkingInvokes(t *testing.T) {
+	normalizer := newAnthropicXMLInvokeStreamNormalizer()
+	_, _, _ = normalizer.handleEvent(map[string]any{
+		"type":  "content_block_start",
+		"index": float64(0),
+		"content_block": map[string]any{
+			"type": "thinking", "thinking": "", "signature": "",
+		},
+	})
+	generated, handled, changed := normalizer.handleEvent(map[string]any{
+		"type":  "content_block_delta",
+		"index": float64(0),
+		"delta": map[string]any{
+			"type": "thinking_delta",
+			"thinking": `<invoke name="Bash"><parameter name="command">pwd</parameter></invoke>` +
+				`<invoke name="Read"><parameter name="file_path">README.md</parameter></invoke>`,
+		},
+	})
+	require.True(t, handled)
+	require.True(t, changed)
+	require.Empty(t, generated)
+
+	generated, handled, changed = normalizer.handleEvent(map[string]any{
+		"type": "content_block_stop", "index": float64(0),
+	})
+	require.True(t, handled)
+	require.True(t, changed)
+	require.Len(t, generated, 7)
+	require.Equal(t, "content_block_stop", generated[0]["type"])
+	require.Equal(t, "Bash", generated[1]["content_block"].(map[string]any)["name"])
+	require.Equal(t, 1, generated[1]["index"])
+	require.Equal(t, "Read", generated[4]["content_block"].(map[string]any)["name"])
+	require.Equal(t, 2, generated[4]["index"])
+
+	nextStart := map[string]any{
+		"type":  "content_block_start",
+		"index": float64(1),
+		"content_block": map[string]any{
+			"type": "text", "text": "",
+		},
+	}
+	_, handled, changed = normalizer.handleEvent(nextStart)
+	require.False(t, handled)
+	require.True(t, changed)
+	require.Equal(t, 3, nextStart["index"])
 }

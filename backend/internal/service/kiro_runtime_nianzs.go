@@ -498,6 +498,12 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 			zap.Bool("stream", false),
 		)
 	}
+	if shouldBridgeAnthropicXMLInvoke(ctx) {
+		if normalizedBody, changed := normalizeAnthropicXMLInvokeResponseBody(parseResult.ResponseBody); changed {
+			parseResult.ResponseBody = normalizedBody
+			parseResult.StopReason = "tool_use"
+		}
+	}
 
 	c.Header("Content-Type", "application/json")
 	nianzsEnsureClaudeResponseVary(c.Writer.Header())
