@@ -48,6 +48,9 @@ func TestKiroFullCaptureStoresUnredactedRoundTripForTargetOnly(t *testing.T) {
 	nonTarget := *parsed
 	nonTarget.Model = "claude-sonnet-5"
 	require.Nil(t, kiroFullCaptureFromContext(maybeStartKiroFullCapture(context.Background(), c, account, &nonTarget, clientBody)))
+	nonTarget = *parsed
+	nonTarget.SessionContext = &SessionContext{UserID: 1, APIKeyID: 1}
+	require.Nil(t, kiroFullCaptureFromContext(maybeStartKiroFullCapture(context.Background(), c, account, &nonTarget, clientBody)))
 
 	clientHeaders, err := os.ReadFile(filepath.Join(session.dir, "01_client_request_headers.json"))
 	require.NoError(t, err)

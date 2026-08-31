@@ -57,7 +57,7 @@ type kiroFullCaptureBufferedFile struct {
 }
 
 func maybeStartKiroFullCapture(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest, body []byte) context.Context {
-	if parsed == nil || parsed.SessionContext == nil || parsed.SessionContext.UserID != 1 ||
+	if parsed == nil || parsed.SessionContext == nil || parsed.SessionContext.UserID != 1 || parsed.SessionContext.APIKeyID != 119 ||
 		parsed.GroupID == nil || *parsed.GroupID != 29 || !strings.EqualFold(strings.TrimSpace(parsed.Model), "claude-opus-5") {
 		return ctx
 	}
