@@ -10717,6 +10717,15 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	if !ok {
 		return nil, errors.New("streaming not supported")
 	}
+	clientWriter := io.Writer(w)
+	if capture := kiroFullCaptureFromContext(ctx); capture != nil {
+		capture.writeClientResponseHeaders(c.Writer.Header())
+		var captureCloser io.Closer
+		clientWriter, captureCloser = capture.newClientResponseMirrorNamed(clientWriter, "05_client_response.sse")
+		if captureCloser != nil {
+			defer func() { _ = captureCloser.Close() }()
+		}
+	}
 
 	usage := &ClaudeUsage{}
 	var firstTokenMs *int
@@ -10868,7 +10877,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			body = []byte(fmt.Sprintf(`{"type":"error","error":{"type":%q,"message":%q}}`, reason, message))
 		}
 		MarkGatewaySSEErrorWritten(c)
-		_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", body)
+		_, _ = fmt.Fprintf(clientWriter, "event: error\ndata: %s\n\n", body)
 		flusher.Flush()
 	}
 
@@ -10909,7 +10918,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				if captureClientSSE {
 					s.debugLogClientSSELine(upstreamRequestID, string(restored))
 				}
-				if _, werr := fmt.Fprint(w, string(restored)); werr != nil {
+				if _, werr := fmt.Fprint(clientWriter, string(restored)); werr != nil {
 					clientDisconnected = true
 					if cancelOnClientDisconnect {
 						logger.LegacyPrintf("service.gateway", "Client disconnected during Kiro streaming, canceling upstream")
@@ -11303,7 +11312,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 					keepaliveBlock = block
 				}
 			}
-			if _, werr := fmt.Fprint(w, keepaliveBlock); werr != nil {
+			if _, werr := fmt.Fprint(clientWriter, keepaliveBlock); werr != nil {
 				clientDisconnected = true
 				if cancelOnClientDisconnect {
 					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, newOpenAIClientCanceledError(context.Canceled)
