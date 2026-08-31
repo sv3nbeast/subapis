@@ -361,6 +361,9 @@ func (h *GatewayHandler) chatCompletionsErrorResponse(c *gin.Context, status int
 func (h *GatewayHandler) handleCCFailoverExhausted(c *gin.Context, lastErr *service.UpstreamFailoverError, streamStarted bool) {
 	applyFailoverRetryAfter(c, lastErr)
 	if streamStarted {
+		if status, errType, message, ok := resolveModelCapacityFailover(c, lastErr); ok {
+			h.handleStreamingAwareError(c, status, errType, message, true)
+		}
 		return
 	}
 	status, errType, errMsg := h.resolveFailoverExhaustedError(c, lastErr, service.PlatformAnthropic)

@@ -78,6 +78,28 @@ func newTestKiro429FailoverErr() *service.UpstreamFailoverError {
 	}
 }
 
+func TestHandleFailoverErrorModelCapacityStopsWithoutScanningAccountPool(t *testing.T) {
+	fs := NewFailoverState(10, false)
+	mock := &mockTempUnscheduler{}
+	failoverErr := &service.UpstreamFailoverError{
+		StatusCode:             http.StatusTooManyRequests,
+		FailureKind:            service.UpstreamFailureModelCapacity,
+		NextAccountAction:      service.NextAccountStop,
+		RequestScopedTransient: true,
+		SuppressTempUnschedule: true,
+	}
+
+	action := fs.HandleFailoverError(context.Background(), mock, 42, service.PlatformKiro, failoverErr)
+
+	require.Equal(t, FailoverExhausted, action)
+	require.Zero(t, fs.SwitchCount)
+	require.Empty(t, fs.FailedAccountIDs)
+	require.Empty(t, fs.SameAccountRetryCount)
+	require.Empty(t, mock.calls)
+	require.Same(t, failoverErr, fs.LastFailoverErr)
+	require.False(t, failoverErr.ShouldReportAccountScheduleFailure())
+}
+
 // ---------------------------------------------------------------------------
 // NewFailoverState 测试
 // ---------------------------------------------------------------------------

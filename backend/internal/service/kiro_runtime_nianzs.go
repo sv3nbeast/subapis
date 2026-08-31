@@ -937,6 +937,26 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 
 			if resp.StatusCode == http.StatusTooManyRequests {
 				nianzsDumpKiro429ResponseForDebug(resp, account.ID, endpoint.URL, endpoint.Name)
+				respBody, readErr := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				if readErr != nil {
+					return nil, requestCtx, readErr
+				}
+				classification := nianzsClassifyKiroHTTPError(resp.StatusCode, string(respBody))
+				if classification.Category == nianzsKiroErrorModelCapacity {
+					if attempt < maxRetries {
+						wait := nianzsKiroRetryBackoffDelay(attempt)
+						if retryState := ModelCapacityRetryStateFromContext(ctx); retryState != nil && !retryState.Spend(wait) {
+							return nil, requestCtx, newNianzsKiroModelCapacityFailover(resp, respBody, requestModel)
+						}
+						if sleepErr := nianzsKiroRetrySleep(ctx, wait); sleepErr != nil {
+							return nil, requestCtx, sleepErr
+						}
+						continue
+					}
+					return nil, requestCtx, newNianzsKiroModelCapacityFailover(resp, respBody, requestModel)
+				}
+				nianzsResetHTTPResponseBody(resp, respBody)
 
 				cooldown, err := s.markKiro429Nianzs(ctx, account.ID, accountKey)
 				if err != nil {
@@ -1065,6 +1085,29 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 		}
 	}
 	return nil, requestCtx, fmt.Errorf("kiro upstream endpoints exhausted")
+}
+
+func newNianzsKiroModelCapacityFailover(resp *http.Response, responseBody []byte, requestedModel string) *UpstreamFailoverError {
+	headers := make(http.Header)
+	statusCode := http.StatusTooManyRequests
+	if resp != nil {
+		statusCode = resp.StatusCode
+		headers = resp.Header.Clone()
+	}
+	return &UpstreamFailoverError{
+		StatusCode:             statusCode,
+		ResponseBody:           append([]byte(nil), responseBody...),
+		ResponseHeaders:        headers,
+		RequestScopedTransient: true,
+		Stage:                  GatewayFailureStageInference,
+		Scope:                  GatewayFailureScopeProvider,
+		NextAccountAction:      NextAccountStop,
+		ClientStatusCode:       http.StatusServiceUnavailable,
+		ClientMessage:          AWSModelCapacityUnavailableClientMessage,
+		SuppressTempUnschedule: true,
+		RequestedModel:         strings.TrimSpace(requestedModel),
+		FailureKind:            UpstreamFailureModelCapacity,
+	}
 }
 
 // nianzsKiroKRSEndpointURL 是 Kiro 自家前置网关（KRS = Kiro Runtime Service）的固定 URL。
@@ -1506,6 +1549,9 @@ func (s *GatewayService) handleKiroHTTPErrorNianzs(ctx context.Context, resp *ht
 		upstreamMsg = strings.TrimSpace(string(respBody))
 	}
 	classification := nianzsClassifyKiroHTTPError(resp.StatusCode, string(respBody))
+	if classification.Category == nianzsKiroErrorModelCapacity {
+		return newNianzsKiroModelCapacityFailover(resp, respBody, mappedModel)
+	}
 	if resp.StatusCode == http.StatusBadRequest {
 		nianzsLogKiroBadRequestClassification(classification, account, "", resp.Header, respBody)
 	}

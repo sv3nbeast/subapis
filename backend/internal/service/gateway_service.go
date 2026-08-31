@@ -793,11 +793,14 @@ type UpstreamFailureKind string
 
 const (
 	UpstreamFailureRateLimited           UpstreamFailureKind = "rate_limited"
+	UpstreamFailureModelCapacity         UpstreamFailureKind = "model_capacity"
 	UpstreamFailureResponseHeaderTimeout UpstreamFailureKind = "response_header_timeout"
 	UpstreamFailureFirstSemanticTimeout  UpstreamFailureKind = "first_semantic_timeout"
 	UpstreamFailureTransportError        UpstreamFailureKind = "transport_error"
 	UpstreamFailureIncompleteStream      UpstreamFailureKind = "incomplete_stream"
 )
+
+const AWSModelCapacityUnavailableClientMessage = "AWS 上游当前模型容量不足，请稍后重试或切换其他模型。"
 
 type GatewayFailureStage string
 
@@ -938,6 +941,9 @@ func (e *UpstreamFailoverError) IsCredentialFailure() bool {
 
 func (e *UpstreamFailoverError) ShouldReportAccountScheduleFailure() bool {
 	if e == nil {
+		return false
+	}
+	if e.FailureKind == UpstreamFailureModelCapacity {
 		return false
 	}
 	return !e.IsCredentialFailure() || e.Scope == GatewayFailureScopeAccount

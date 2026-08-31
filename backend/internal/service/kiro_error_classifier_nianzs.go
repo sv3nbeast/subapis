@@ -20,6 +20,7 @@ const (
 	nianzsKiroErrorProfileError           = "profile_error"
 	nianzsKiroErrorQuotaExhausted         = "quota_exhausted"
 	nianzsKiroErrorOverageExhausted       = "overage_exhausted"
+	nianzsKiroErrorModelCapacity          = "model_capacity"
 	nianzsKiroErrorRateLimited            = "rate_limited"
 	nianzsKiroErrorSuspended              = "suspended"
 	nianzsKiroErrorUsageForbidden         = "usage_forbidden"
@@ -65,6 +66,8 @@ func nianzsClassifyKiroHTTPError(statusCode int, body string) nianzsKiroErrorCla
 		return nianzsKiroErrorClassification{Category: nianzsKiroErrorOverageExhausted, StatusCode: statusCode, Message: trimmed}
 	case nianzsLooksLikeKiroQuotaExhaustedError(lower):
 		return nianzsKiroErrorClassification{Category: nianzsKiroErrorQuotaExhausted, StatusCode: statusCode, Message: trimmed}
+	case statusCode == http.StatusTooManyRequests && nianzsLooksLikeKiroModelCapacityError(trimmed):
+		return nianzsKiroErrorClassification{Category: nianzsKiroErrorModelCapacity, StatusCode: statusCode, Message: trimmed}
 	case statusCode == http.StatusTooManyRequests:
 		return nianzsKiroErrorClassification{Category: nianzsKiroErrorRateLimited, StatusCode: statusCode, Message: trimmed}
 	case statusCode == http.StatusForbidden:
@@ -74,6 +77,24 @@ func nianzsClassifyKiroHTTPError(statusCode int, body string) nianzsKiroErrorCla
 	default:
 		return nianzsKiroErrorClassification{Category: nianzsKiroErrorUpstreamTransient, StatusCode: statusCode, Message: trimmed}
 	}
+}
+
+func nianzsLooksLikeKiroModelCapacityError(body string) bool {
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" {
+		return false
+	}
+	const reason = "INSUFFICIENT_MODEL_CAPACITY"
+	if gjson.Valid(trimmed) {
+		for _, path := range []string{"reason", "error.reason", "code", "error.code"} {
+			if strings.EqualFold(strings.TrimSpace(gjson.Get(trimmed, path).String()), reason) {
+				return true
+			}
+		}
+	}
+	lower := strings.ToLower(trimmed)
+	return strings.Contains(lower, "insufficient_model_capacity") ||
+		strings.Contains(lower, "insufficient model capacity")
 }
 
 func nianzsClassifyKiroError(err error) nianzsKiroErrorClassification {

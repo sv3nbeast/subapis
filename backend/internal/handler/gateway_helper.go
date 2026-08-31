@@ -245,6 +245,23 @@ func applyFailoverRetryAfter(c *gin.Context, failoverErr *service.UpstreamFailov
 	c.Header("Retry-After", fmt.Sprintf("%d", seconds))
 }
 
+func resolveModelCapacityFailover(c *gin.Context, failoverErr *service.UpstreamFailoverError) (int, string, string, bool) {
+	if failoverErr == nil || failoverErr.FailureKind != service.UpstreamFailureModelCapacity {
+		return 0, "", "", false
+	}
+	status := failoverErr.ClientStatusCode
+	if status <= 0 {
+		status = http.StatusServiceUnavailable
+	}
+	message := strings.TrimSpace(failoverErr.ClientMessage)
+	if message == "" {
+		message = service.AWSModelCapacityUnavailableClientMessage
+	}
+	upstreamMessage := service.ExtractUpstreamErrorMessage(failoverErr.ResponseBody)
+	service.SetOpsUpstreamError(c, failoverErr.StatusCode, upstreamMessage, string(failoverErr.ResponseBody))
+	return status, "overloaded_error", message, true
+}
+
 func copyFailoverRetryAfter(c *gin.Context, headers http.Header) {
 	if c == nil || headers == nil {
 		return

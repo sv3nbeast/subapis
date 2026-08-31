@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,6 +82,111 @@ func TestHandleMessagesFailoverExhausted_KeepsClientMessageAndStoresRawUpstreamD
 	detail, exists := c.Get(service.OpsUpstreamErrorDetailKey)
 	require.True(t, exists)
 	require.JSONEq(t, `{"error":{"type":"permission_error","message":"workspace forbidden by policy","code":"policy_denied"}}`, detail.(string))
+}
+
+func modelCapacityFailoverTestError() *service.UpstreamFailoverError {
+	return &service.UpstreamFailoverError{
+		StatusCode:             http.StatusTooManyRequests,
+		ResponseBody:           []byte(`{"message":"I am experiencing high traffic, please try again shortly.","reason":"INSUFFICIENT_MODEL_CAPACITY"}`),
+		FailureKind:            service.UpstreamFailureModelCapacity,
+		NextAccountAction:      service.NextAccountStop,
+		ClientStatusCode:       http.StatusServiceUnavailable,
+		ClientMessage:          service.AWSModelCapacityUnavailableClientMessage,
+		RequestedModel:         "claude-opus-5",
+		SuppressTempUnschedule: true,
+	}
+}
+
+func TestHandleMessagesFailoverExhausted_ReturnsModelCapacityGuidance(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	(&GatewayHandler{}).handleFailoverExhausted(c, modelCapacityFailoverTestError(), service.PlatformKiro, false)
+
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	errObj := payload["error"].(map[string]any)
+	require.Equal(t, "overloaded_error", errObj["type"])
+	require.Equal(t, service.AWSModelCapacityUnavailableClientMessage, errObj["message"])
+	require.NotContains(t, strings.ToLower(w.Body.String()), "kiro")
+	require.Equal(t, http.StatusTooManyRequests, mustContextInt(t, c, service.OpsUpstreamStatusCodeKey))
+}
+
+func TestHandleResponsesFailoverExhausted_ReturnsModelCapacityGuidance(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	(&GatewayHandler{}).handleResponsesFailoverExhausted(c, modelCapacityFailoverTestError(), false)
+
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	errObj := payload["error"].(map[string]any)
+	require.Equal(t, "overloaded_error", errObj["code"])
+	require.Equal(t, service.AWSModelCapacityUnavailableClientMessage, errObj["message"])
+}
+
+func TestHandleResponsesFailoverExhausted_StreamsModelCapacityGuidanceAfterKeepalive(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Header("Content-Type", "text/event-stream")
+
+	(&GatewayHandler{}).handleResponsesFailoverExhausted(c, modelCapacityFailoverTestError(), true)
+
+	require.Contains(t, w.Body.String(), `event: response.failed`)
+	require.Contains(t, w.Body.String(), `"code":"overloaded_error"`)
+	require.Contains(t, w.Body.String(), service.AWSModelCapacityUnavailableClientMessage)
+	require.NotContains(t, strings.ToLower(w.Body.String()), "kiro")
+}
+
+func TestHandleChatCompletionsFailoverExhausted_StreamsModelCapacityGuidance(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	(&GatewayHandler{}).handleCCFailoverExhausted(c, modelCapacityFailoverTestError(), true)
+
+	require.Contains(t, w.Body.String(), `"type":"overloaded_error"`)
+	require.Contains(t, w.Body.String(), service.AWSModelCapacityUnavailableClientMessage)
+	require.NotContains(t, strings.ToLower(w.Body.String()), "kiro")
+}
+
+func TestHandleAnthropicFailoverExhausted_StreamsModelCapacityGuidance(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	(&OpenAIGatewayHandler{}).handleAnthropicFailoverExhausted(c, modelCapacityFailoverTestError(), true)
+
+	require.Contains(t, w.Body.String(), `event: error`)
+	require.Contains(t, w.Body.String(), `"type":"overloaded_error"`)
+	require.Contains(t, w.Body.String(), service.AWSModelCapacityUnavailableClientMessage)
+	require.NotContains(t, strings.ToLower(w.Body.String()), "kiro")
+}
+
+func TestOpenAIWebSocketModelCapacityCloseReasonGuidesModelSwitch(t *testing.T) {
+	message, ok := openAIWSModelCapacityCloseReason(modelCapacityFailoverTestError())
+	require.True(t, ok)
+	require.Equal(t, service.AWSModelCapacityUnavailableClientMessage, message)
+	require.NotContains(t, strings.ToLower(message), "kiro")
+}
+
+func mustContextInt(t *testing.T, c *gin.Context, key string) int {
+	t.Helper()
+	value, exists := c.Get(key)
+	require.True(t, exists)
+	result, ok := value.(int)
+	require.True(t, ok)
+	return result
 }
 
 func TestHandleCCFailoverExhausted_UsesSelectedPlatformForPassthroughAndOpsContext(t *testing.T) {

@@ -1312,6 +1312,10 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 						h.handleAnthropicFailoverExhausted(c, failoverErr, true)
 						return
 					}
+					if !failoverErr.ShouldRetryNextAccount() {
+						h.handleAnthropicFailoverExhausted(c, failoverErr, streamStarted)
+						return
+					}
 					h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(reqModel), false, nil)
 					// 池模式：同账号重试
 					if failoverErr.RetryableOnSameAccount {
@@ -1489,6 +1493,9 @@ func (h *OpenAIGatewayHandler) resolveAnthropicFailoverExhaustedError(c *gin.Con
 	if failoverErr.IsCredentialFailure() {
 		status, message := credentialFailoverClientResponse(failoverErr)
 		return status, "api_error", message
+	}
+	if status, errType, message, ok := resolveModelCapacityFailover(c, failoverErr); ok {
+		return status, errType, message
 	}
 
 	statusCode := failoverErr.StatusCode
@@ -2497,7 +2504,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		if err := h.gatewayService.ProxyResponsesWebSocketFromClient(ctx, c, wsConn, account, token, wsFirstMessage, hooks); err != nil {
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
-				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(reqModel), false, nil)
+				if failoverErr.ShouldReportAccountScheduleFailure() {
+					h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(reqModel), false, nil)
+				}
 				releaseAccountSlot()
 				if account.Platform == service.PlatformKiro {
 					kiroFailoverState.SwitchCount = switchCount
@@ -2780,6 +2789,10 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 	if failoverErr.IsCredentialFailure() {
 		status, message := credentialFailoverClientResponse(failoverErr)
 		h.handleStreamingAwareError(c, status, "upstream_error", message, streamStarted)
+		return
+	}
+	if status, errType, message, ok := resolveModelCapacityFailover(c, failoverErr); ok {
+		h.handleStreamingAwareError(c, status, errType, message, streamStarted)
 		return
 	}
 	if failoverErr != nil && failoverErr.IsOpenAIRequestBodyTooLarge() {
@@ -3137,6 +3150,10 @@ func closeOpenAIWSFailoverExhausted(conn *coderws.Conn, failoverErr *service.Ups
 		closeOpenAIClientWS(conn, coderws.StatusTryAgainLater, message)
 		return
 	}
+	if message, ok := openAIWSModelCapacityCloseReason(failoverErr); ok {
+		closeOpenAIClientWS(conn, coderws.StatusTryAgainLater, message)
+		return
+	}
 	switch failoverErr.StatusCode {
 	case http.StatusTooManyRequests:
 		closeOpenAIClientWS(conn, coderws.StatusTryAgainLater, "upstream rate limit exceeded, please retry later")
@@ -3147,6 +3164,17 @@ func closeOpenAIWSFailoverExhausted(conn *coderws.Conn, failoverErr *service.Ups
 	default:
 		closeOpenAIClientWS(conn, coderws.StatusInternalError, "upstream websocket proxy failed")
 	}
+}
+
+func openAIWSModelCapacityCloseReason(failoverErr *service.UpstreamFailoverError) (string, bool) {
+	if failoverErr == nil || failoverErr.FailureKind != service.UpstreamFailureModelCapacity {
+		return "", false
+	}
+	message := strings.TrimSpace(failoverErr.ClientMessage)
+	if message == "" {
+		message = service.AWSModelCapacityUnavailableClientMessage
+	}
+	return message, true
 }
 
 func writeContentModerationWSError(ctx context.Context, conn *coderws.Conn, decision *service.ContentModerationDecision) {

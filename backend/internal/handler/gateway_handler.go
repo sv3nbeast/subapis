@@ -2315,6 +2315,9 @@ func (h *GatewayHandler) resolveFailoverExhaustedError(c *gin.Context, failoverE
 		status, message := credentialFailoverClientResponse(failoverErr)
 		return status, "server_error", message
 	}
+	if status, errType, message, ok := resolveModelCapacityFailover(c, failoverErr); ok {
+		return status, errType, message
+	}
 
 	statusCode := failoverErr.StatusCode
 	responseBody := failoverErr.ResponseBody

@@ -2564,6 +2564,212 @@ func TestNianzsRuntime429UsesIsolatedCooldownWithoutSameAccountLoop(t *testing.T
 	require.Nil(t, legacyState)
 }
 
+func nianzsModelCapacityResponse() *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"message":"I am experiencing high traffic, please try again shortly.","reason":"INSUFFICIENT_MODEL_CAPACITY"}`,
+		)),
+	}
+}
+
+func TestNianzsRuntimeModelCapacityRetriesSameEndpointThenRecovers(t *testing.T) {
+	originalRetrySleep := nianzsKiroRetrySleep
+	var waits []time.Duration
+	nianzsKiroRetrySleep = func(_ context.Context, wait time.Duration) error {
+		waits = append(waits, wait)
+		return nil
+	}
+	t.Cleanup(func() { nianzsKiroRetrySleep = originalRetrySleep })
+
+	redisServer := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	t.Cleanup(func() { require.NoError(t, redisClient.Close()) })
+	dualStore := newDualKiroCooldownStore(redisClient)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		nianzsModelCapacityResponse(),
+		{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+			Body:       io.NopCloser(bytes.NewReader(nil)),
+		},
+	}}
+	svc := &GatewayService{
+		cfg:                     &config.Config{Gateway: config.GatewayConfig{KiroEngine: config.KiroEngineNianzs}},
+		httpUpstream:            upstream,
+		kiroCooldownStore:       dualStore,
+		nianzsKiroCooldownStore: dualStore.nianzs,
+		tlsFPProfileService:     &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID: 1804, Name: "capacity-recovery", Platform: PlatformKiro,
+		Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+	}
+	body := []byte(`{"model":"claude-opus-5","max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`)
+
+	resp, _, err := svc.executeKiroUpstreamWithParsedNianzs(
+		context.Background(), account, nil, body, "claude-opus-5", "claude-opus-5", "oauth-token", nil,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Len(t, upstream.requests, 2)
+	require.Len(t, waits, 1)
+	require.Equal(t, upstream.requests[0].URL.String(), upstream.requests[1].URL.String())
+	state, stateErr := dualStore.nianzs.GetState(context.Background(), nianzsBuildKiroAccountKey(account))
+	require.NoError(t, stateErr)
+	require.Nil(t, state, "shared model capacity must never create an account cooldown")
+}
+
+func TestNianzsRuntimeModelCapacityExhaustionStopsWithoutAccountCooldown(t *testing.T) {
+	originalRetrySleep := nianzsKiroRetrySleep
+	var waits []time.Duration
+	nianzsKiroRetrySleep = func(_ context.Context, wait time.Duration) error {
+		waits = append(waits, wait)
+		return nil
+	}
+	t.Cleanup(func() { nianzsKiroRetrySleep = originalRetrySleep })
+
+	redisServer := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	t.Cleanup(func() { require.NoError(t, redisClient.Close()) })
+	dualStore := newDualKiroCooldownStore(redisClient)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		nianzsModelCapacityResponse(),
+		nianzsModelCapacityResponse(),
+		nianzsModelCapacityResponse(),
+	}}
+	svc := &GatewayService{
+		cfg:                     &config.Config{Gateway: config.GatewayConfig{KiroEngine: config.KiroEngineNianzs}},
+		httpUpstream:            upstream,
+		kiroCooldownStore:       dualStore,
+		nianzsKiroCooldownStore: dualStore.nianzs,
+		tlsFPProfileService:     &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID: 1805, Name: "capacity-exhausted", Platform: PlatformKiro,
+		Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+	}
+	body := []byte(`{"model":"claude-opus-5","max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`)
+
+	resp, _, err := svc.executeKiroUpstreamWithParsedNianzs(
+		context.Background(), account, nil, body, "claude-opus-5", "claude-opus-5", "oauth-token", nil,
+	)
+
+	require.Nil(t, resp)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, UpstreamFailureModelCapacity, failoverErr.FailureKind)
+	require.Equal(t, NextAccountStop, failoverErr.NextAccountAction)
+	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
+	require.Equal(t, http.StatusServiceUnavailable, failoverErr.ClientStatusCode)
+	require.Equal(t, AWSModelCapacityUnavailableClientMessage, failoverErr.ClientMessage)
+	require.Equal(t, "claude-opus-5", failoverErr.RequestedModel)
+	require.Len(t, upstream.requests, 3)
+	require.Len(t, waits, 2)
+	for _, request := range upstream.requests {
+		require.Equal(t, upstream.requests[0].URL.String(), request.URL.String(), "capacity retry must not switch endpoint or credential")
+	}
+	state, stateErr := dualStore.nianzs.GetState(context.Background(), nianzsBuildKiroAccountKey(account))
+	require.NoError(t, stateErr)
+	require.Nil(t, state, "shared model capacity must never create an account cooldown")
+}
+
+func TestNianzsRuntimeModelCapacityHonorsSharedRetryBudget(t *testing.T) {
+	originalRetrySleep := nianzsKiroRetrySleep
+	sleepCalls := 0
+	nianzsKiroRetrySleep = func(_ context.Context, _ time.Duration) error {
+		sleepCalls++
+		return nil
+	}
+	t.Cleanup(func() { nianzsKiroRetrySleep = originalRetrySleep })
+
+	redisServer := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	t.Cleanup(func() { require.NoError(t, redisClient.Close()) })
+	dualStore := newDualKiroCooldownStore(redisClient)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{nianzsModelCapacityResponse()}}
+	svc := &GatewayService{
+		cfg:                     &config.Config{Gateway: config.GatewayConfig{KiroEngine: config.KiroEngineNianzs}},
+		httpUpstream:            upstream,
+		kiroCooldownStore:       dualStore,
+		nianzsKiroCooldownStore: dualStore.nianzs,
+		tlsFPProfileService:     &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID: 1806, Name: "capacity-budget", Platform: PlatformKiro,
+		Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+	}
+	body := []byte(`{"model":"claude-opus-5","max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`)
+	ctx := WithModelCapacityRetryState(context.Background(), NewModelCapacityRetryState(time.Millisecond), false)
+
+	resp, _, err := svc.executeKiroUpstreamWithParsedNianzs(
+		ctx, account, nil, body, "claude-opus-5", "claude-opus-5", "oauth-token", nil,
+	)
+
+	require.Nil(t, resp)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, UpstreamFailureModelCapacity, failoverErr.FailureKind)
+	require.Len(t, upstream.requests, 1)
+	require.Zero(t, sleepCalls)
+}
+
+func TestNianzsMCPModelCapacityDoesNotMarkAccountCooldown(t *testing.T) {
+	redisServer := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	t.Cleanup(func() { require.NoError(t, redisClient.Close()) })
+	dualStore := newDualKiroCooldownStore(redisClient)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{nianzsModelCapacityResponse()}}
+	svc := &GatewayService{
+		httpUpstream:            upstream,
+		kiroCooldownStore:       dualStore,
+		nianzsKiroCooldownStore: dualStore.nianzs,
+		tlsFPProfileService:     &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID: 1807, Name: "mcp-capacity", Platform: PlatformKiro,
+		Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+	}
+
+	resp, _, err := svc.doKiroMCPJSONRequestNianzs(
+		context.Background(), account, "https://q.us-east-1.amazonaws.com/mcp", []byte(`{}`), "oauth-token",
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	require.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
+	respBody, readErr := io.ReadAll(resp.Body)
+	require.NoError(t, readErr)
+	require.True(t, nianzsLooksLikeKiroModelCapacityError(string(respBody)))
+	state, stateErr := dualStore.nianzs.GetState(context.Background(), nianzsBuildKiroAccountKey(account))
+	require.NoError(t, stateErr)
+	require.Nil(t, state)
+}
+
+func TestNianzsModelCapacityClassifierRequiresCapacityReason(t *testing.T) {
+	require.Equal(t, nianzsKiroErrorModelCapacity, nianzsClassifyKiroHTTPError(
+		http.StatusTooManyRequests,
+		`{"message":"busy","reason":"INSUFFICIENT_MODEL_CAPACITY"}`,
+	).Category)
+	require.Equal(t, nianzsKiroErrorModelCapacity, nianzsClassifyKiroHTTPError(
+		http.StatusTooManyRequests,
+		`{"error":{"message":"busy","code":"insufficient_model_capacity"}}`,
+	).Category)
+	require.Equal(t, nianzsKiroErrorRateLimited, nianzsClassifyKiroHTTPError(
+		http.StatusTooManyRequests,
+		`{"message":"I am experiencing high traffic, please try again shortly."}`,
+	).Category)
+}
+
 func TestNianzsMessagesStreamSurfacesPostOutputUpstreamFailureWithoutSuccessTerminal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"messages":[{"role":"user","content":"stream then fail"}],"stream":true}`)
