@@ -147,6 +147,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 		mappedModel = next
 	}
 	clientBody := parsed.Body.Bytes()
+	ctx = maybeStartKiroFullCapture(ctx, c, account, parsed, clientBody)
 	body := clientBody
 	if mappedModel != originalModel {
 		body = s.replaceModelInBody(body, mappedModel)
@@ -508,6 +509,10 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 	c.Header("Content-Type", "application/json")
 	nianzsEnsureClaudeResponseVary(c.Writer.Header())
 	requestID := nianzsSetClaudeResponseRequestID(c.Writer.Header())
+	if capture := kiroFullCaptureFromContext(ctx); capture != nil {
+		capture.writeClientResponseHeaders(c.Writer.Header())
+		capture.writeClientResponseBody(parseResult.ResponseBody, "json")
+	}
 	c.Data(http.StatusOK, "application/json", parseResult.ResponseBody)
 	nianzsLogKiroContextUsage(account, mappedModel, inputTokens, requestCtx.CompletedToolHistoryFlattened, requestCtx.OldCompletedToolHistoryCompacted, parseResult.Usage)
 
@@ -635,17 +640,28 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 	wrappedHeaders.Set("Content-Type", "text/event-stream")
 	nianzsEnsureClaudeResponseVary(wrappedHeaders)
 	nianzsSetClaudeResponseRequestID(wrappedHeaders)
+	if capture := kiroFullCaptureFromContext(ctx); capture != nil {
+		capture.writeClientResponseHeaders(wrappedHeaders)
+	}
 
 	structuredSchema, strictStructuredOutput := nianzsKiroStructuredOutputSchema(anthropicBody)
 	go func() {
 		defer func() { _ = resp.Body.Close() }()
-		streamWriter := io.Writer(pw)
+		streamDestination := io.Writer(pw)
+		var clientCaptureCloser io.Closer
+		if capture := kiroFullCaptureFromContext(ctx); capture != nil {
+			streamDestination, clientCaptureCloser = capture.newClientResponseMirrorNamed(streamDestination, "04_translated_response.sse")
+			if clientCaptureCloser != nil {
+				defer func() { _ = clientCaptureCloser.Close() }()
+			}
+		}
+		streamWriter := streamDestination
 		var structuredWriter *nianzsStructuredOutputSSEWriter
 		if strictStructuredOutput {
 			// Kiro does not expose constrained decoding. For the object schema
 			// shape supported by Anthropic, incrementally project each completed
 			// member so extra fields are removed without full-response buffering.
-			if next, ok := newNianzsStructuredOutputSSEWriter(pw, structuredSchema); ok {
+			if next, ok := newNianzsStructuredOutputSSEWriter(streamDestination, structuredSchema); ok {
 				structuredWriter = next
 				streamWriter = structuredWriter
 			}
@@ -923,9 +939,14 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 			if err != nil {
 				return nil, requestCtx, err
 			}
+			var fullCaptureAttempt *kiroFullCaptureAttempt
+			if capture := kiroFullCaptureFromContext(ctx); capture != nil {
+				fullCaptureAttempt = capture.beginAttempt(account, endpoint.Name, req, payload)
+			}
 
 			resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
 			if err != nil {
+				fullCaptureAttempt.recordTransportError(err)
 				if attempt < maxRetries {
 					if sleepErr := nianzsSleepKiroRetry(ctx, attempt); sleepErr != nil {
 						return nil, requestCtx, sleepErr
@@ -934,6 +955,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 				}
 				return nil, requestCtx, err
 			}
+			fullCaptureAttempt.wrapResponse(resp)
 
 			if resp.StatusCode == http.StatusTooManyRequests {
 				nianzsDumpKiro429ResponseForDebug(resp, account.ID, endpoint.URL, endpoint.Name)
