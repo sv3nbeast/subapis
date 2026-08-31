@@ -800,7 +800,7 @@ const (
 	UpstreamFailureIncompleteStream      UpstreamFailureKind = "incomplete_stream"
 )
 
-const AWSModelCapacityUnavailableClientMessage = "AWS 上游当前模型容量不足，请稍后重试或切换其他模型。"
+const AWSModelCapacityUnavailableClientMessage = "AWS 官方当前模型容量不足，请稍后重试或切换其他模型。"
 
 type GatewayFailureStage string
 
