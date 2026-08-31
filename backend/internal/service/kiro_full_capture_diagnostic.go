@@ -28,7 +28,7 @@ var (
 	kiroFullCaptureSessions    atomic.Int64
 )
 
-const kiroFullCaptureTargetSessionID = "d442d75a-5806-41de-a48a-355965bd6884"
+const kiroFullCaptureTargetSessionID = "805fe2a8-2c53-47ae-8e5d-adee841aa9f6"
 
 type kiroFullCaptureContextKey struct{}
 
