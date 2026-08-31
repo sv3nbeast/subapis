@@ -1,1277 +1,426 @@
 <template>
-  <PublicLayout>
-  <div
-    class="public-docs-view docs-guide min-h-screen overflow-hidden bg-gradient-to-br from-gray-50 via-primary-50/40 to-cyan-50/30 text-gray-950 dark:from-dark-950 dark:via-dark-900 dark:to-dark-950 dark:text-white"
-    :class="{ 'docs-guide-dark': isDark }"
-  >
-    <div class="docs-guide-bg" aria-hidden="true">
-      <div class="docs-guide-blob docs-guide-blob-a"></div>
-      <div class="docs-guide-blob docs-guide-blob-b"></div>
-      <div class="docs-guide-grid"></div>
-    </div>
-
-    <header class="sticky top-0 z-40 px-4 py-3 sm:px-6">
-      <nav class="docs-guide-nav mx-auto flex max-w-7xl items-center justify-between gap-4">
-        <RouterLink to="/home" class="flex min-w-0 items-center gap-2.5">
-          <span class="h-9 w-9 overflow-hidden rounded-xl bg-white shadow-md ring-1 ring-gray-200/70 dark:bg-dark-800 dark:ring-dark-700">
-            <img :src="siteLogo || '/logo.png'" :alt="t('common.logoAlt')" class="h-full w-full object-contain" />
-          </span>
-          <span class="docs-guide-brand truncate text-base font-black tracking-tight text-gray-950 dark:text-white sm:text-lg">
-            {{ siteName }}
-          </span>
-        </RouterLink>
-
-        <div class="flex items-center gap-2 sm:gap-3">
-          <RouterLink to="/home" class="docs-guide-nav-link hidden sm:inline-flex">
-            {{ t('docsGuide.nav.home') }}
+  <PublicLayout :show-chrome="false" content-class="public-ui-v2__content--flush">
+    <div class="docs-page min-h-screen bg-white text-gray-950 dark:bg-dark-900 dark:text-white">
+      <header class="docs-topbar">
+        <div class="docs-topbar-inner">
+          <RouterLink to="/home" class="docs-brand" :aria-label="siteName">
+            <img v-if="siteLogo" :src="siteLogo" :alt="siteName" class="h-7 w-7 object-contain" />
+            <span v-else class="docs-brand-mark">S</span>
+            <span>{{ siteName }}</span>
+            <span class="docs-brand-divider"></span>
+            <span class="text-sm font-medium text-gray-500 dark:text-dark-300">{{ t('docsGuide.sidebar.title') }}</span>
           </RouterLink>
-          <RouterLink to="/monitor" class="docs-guide-nav-link hidden sm:inline-flex">
-            {{ t('docsGuide.nav.status') }}
-          </RouterLink>
-          <LocaleSwitcher />
-          <button
-            type="button"
-            class="docs-guide-icon-button"
-            :title="isDark ? t('home.switchToLight') : t('home.switchToDark')"
-            @click="toggleTheme"
-          >
-            <Icon v-if="isDark" name="sun" size="md" />
-            <Icon v-else name="moon" size="md" />
-          </button>
-          <RouterLink
-            :to="isAuthenticated ? dashboardPath : '/login'"
-            class="docs-guide-dashboard-link"
-          >
-            {{ isAuthenticated ? t('home.dashboard') : t('home.login') }}
-          </RouterLink>
-        </div>
-      </nav>
-    </header>
 
-    <main class="relative z-10 mx-auto max-w-7xl px-4 pb-16 pt-8 sm:px-6 lg:pb-24 lg:pt-12">
-      <section class="grid items-center gap-8 lg:grid-cols-[minmax(0,1.05fr)_minmax(21rem,0.95fr)]">
-        <div>
-          <div class="docs-guide-eyebrow">
-            {{ t('docsGuide.hero.eyebrow') }}
-          </div>
-          <h1 class="mt-5 max-w-4xl text-[2rem] font-black leading-[1.08] tracking-[-0.035em] text-gray-950 dark:text-white sm:text-[2.4rem] lg:text-[2.85rem]">
-            {{ t('docsGuide.hero.title') }}
-          </h1>
-          <p class="mt-5 max-w-2xl text-base leading-8 text-gray-600 dark:text-dark-300 sm:text-lg">
-            {{ t('docsGuide.hero.description') }}
-          </p>
-          <div class="mt-7 flex flex-col gap-3 sm:flex-row">
-            <RouterLink
-              :to="isAuthenticated ? dashboardPath : '/register'"
-              class="btn btn-primary px-6 py-3 text-sm shadow-lg shadow-primary-500/30"
-            >
-              {{ isAuthenticated ? t('home.goToDashboard') : t('docsGuide.hero.primaryCta') }}
-              <Icon name="arrowRight" size="md" />
+          <nav class="flex items-center gap-1">
+            <RouterLink to="/home" class="docs-icon-link" :title="t('docsGuide.nav.home')">
+              <Icon name="home" size="sm" />
+              <span class="hidden sm:inline">{{ t('docsGuide.nav.home') }}</span>
             </RouterLink>
-            <a href="#quick-start" class="btn btn-secondary px-6 py-3 text-sm">
-              <Icon name="book" size="md" />
-              {{ t('docsGuide.hero.secondaryCta') }}
-            </a>
-          </div>
+            <RouterLink to="/status" class="docs-icon-link" :title="t('docsGuide.nav.status')">
+              <Icon name="chart" size="sm" />
+              <span class="hidden sm:inline">{{ t('docsGuide.nav.status') }}</span>
+            </RouterLink>
+            <LocaleSwitcher />
+            <button type="button" class="docs-icon-button" :title="isDark ? 'Light mode' : 'Dark mode'" @click="toggleTheme">
+              <Icon :name="isDark ? 'sun' : 'moon'" size="sm" />
+            </button>
+          </nav>
         </div>
+      </header>
 
-        <div class="docs-guide-terminal">
-          <div class="docs-guide-terminal-head">
-            <span></span>
-            <span></span>
-            <span></span>
-          </div>
-          <div class="space-y-4 p-5">
-            <div>
-              <p class="docs-guide-terminal-label">{{ t('docsGuide.hero.baseUrlLabel') }}</p>
-              <div class="docs-guide-code-line">
-                {{ apiBaseUrl }}<span>/v1/chat/completions</span>
-              </div>
-            </div>
-            <div>
-              <p class="docs-guide-terminal-label">{{ t('docsGuide.hero.envLabel') }}</p>
-              <pre><code>OPENAI_API_KEY=sk-...
-OPENAI_BASE_URL={{ apiBaseUrl }}/v1</code></pre>
+      <div class="docs-main">
+        <section class="docs-intro">
+          <div class="min-w-0">
+            <p class="docs-kicker">{{ t('docsGuide.hero.eyebrow') }}</p>
+            <h1>{{ t('docsGuide.hero.title') }}</h1>
+            <p class="docs-lead">{{ t('docsGuide.hero.description') }}</p>
+            <div class="mt-5 flex flex-wrap gap-2">
+              <RouterLink :to="isAuthenticated ? dashboardPath : '/register'" class="btn btn-primary px-4 py-2.5 text-sm">
+                {{ isAuthenticated ? t('home.goToDashboard') : t('docsGuide.hero.primaryCta') }}
+                <Icon name="arrowRight" size="sm" />
+              </RouterLink>
+              <RouterLink to="/model-plaza" class="btn btn-secondary px-4 py-2.5 text-sm">
+                {{ t('docsGuide.sections.models.articles.market.title') }}
+              </RouterLink>
             </div>
           </div>
-        </div>
-      </section>
 
-      <section id="docs-center" class="mt-14 grid gap-8 lg:grid-cols-[18rem_minmax(0,1fr)] lg:items-start">
-        <aside class="docs-guide-sidebar">
-          <p class="px-3 text-xs font-black uppercase tracking-[0.18em] text-primary-700 dark:text-primary-300">
-            {{ t('docsGuide.sidebar.title') }}
-          </p>
-          <nav class="mt-4 space-y-4">
-            <div
-              v-for="group in docsNavigation"
-              :key="group.title"
-              class="docs-guide-nav-group"
-            >
-              <p class="docs-guide-sidebar-group">{{ group.title }}</p>
-              <div class="mt-1.5 space-y-1">
-                <a
-                  v-for="link in group.links"
-                  :key="link.id"
-                  :href="`#${link.id}`"
-                  class="docs-guide-side-link"
-                >
+          <div class="docs-base-url">
+            <span>{{ t('docsGuide.hero.baseUrlLabel') }}</span>
+            <code>{{ apiBaseUrl }}</code>
+            <button type="button" :title="t('common.copy')" @click="copySnippet('base-url', apiBaseUrl)">
+              <Icon :name="copiedId === 'base-url' ? 'check' : 'copy'" size="sm" />
+            </button>
+          </div>
+        </section>
+
+        <div class="docs-layout">
+          <aside class="docs-sidebar">
+            <nav aria-label="Documentation">
+              <div v-for="group in docsNavigation" :key="group.title" class="docs-nav-group">
+                <p>{{ group.title }}</p>
+                <a v-for="link in group.links" :key="link.id" :href="`#${link.id}`">
                   <span>{{ link.badge }}</span>
                   {{ link.title }}
                 </a>
               </div>
-            </div>
-          </nav>
-        </aside>
+            </nav>
+          </aside>
 
-        <div class="space-y-5">
-          <section id="quick-start" class="docs-guide-content-section scroll-mt-28">
-            <div class="docs-guide-section-head">
-              <div class="docs-guide-eyebrow">{{ t('docsGuide.quickStart.eyebrow') }}</div>
-              <h2>{{ t('docsGuide.quickStart.title') }}</h2>
-              <p>{{ t('docsGuide.quickStart.description') }}</p>
-            </div>
-
-            <div class="mt-5 space-y-4">
-              <article
-                v-for="step in quickStartSteps"
-                :id="step.id"
-                :key="step.id"
-                class="docs-guide-step-card scroll-mt-28"
-              >
-                <div class="flex flex-col gap-4 sm:flex-row sm:items-start">
-                  <div class="docs-guide-step-icon">
-                    <Icon :name="step.icon" size="lg" />
-                  </div>
-                  <div class="min-w-0 flex-1">
-                    <div class="flex flex-wrap items-center gap-3">
-                      <span class="docs-guide-step-number">{{ step.step }}</span>
-                      <h3 class="text-lg font-black tracking-[-0.02em] text-gray-950 dark:text-white sm:text-xl">
-                        {{ step.title }}
-                      </h3>
-                    </div>
-                    <p class="mt-2.5 text-[0.86rem] leading-6 text-gray-600 dark:text-dark-300 sm:text-sm">
-                      {{ step.description }}
-                    </p>
-                    <ul class="mt-4 grid gap-2.5 sm:grid-cols-2">
-                      <li
-                        v-for="item in step.items"
-                        :key="item"
-                        class="docs-guide-check-item"
-                      >
-                        <Icon name="checkCircle" size="sm" />
-                        <span>{{ item }}</span>
-                      </li>
+          <article class="docs-content">
+            <section id="quick-start" class="docs-section scroll-mt-24">
+              <SectionHeading :eyebrow="t('docsGuide.quickStart.eyebrow')" :title="t('docsGuide.quickStart.title')" :description="t('docsGuide.quickStart.description')" />
+              <ol class="docs-steps">
+                <li v-for="step in quickStartSteps" :id="step.id" :key="step.id" class="scroll-mt-24">
+                  <span class="docs-step-number">{{ step.step }}</span>
+                  <div>
+                    <h3>{{ step.title }}</h3>
+                    <p>{{ step.description }}</p>
+                    <ul>
+                      <li v-for="item in step.items" :key="item"><Icon name="check" size="xs" /><span>{{ item }}</span></li>
                     </ul>
                   </div>
-                </div>
-              </article>
-            </div>
-          </section>
+                </li>
+              </ol>
+            </section>
 
-          <section
-            v-for="section in guideSections"
-            :id="section.id"
-            :key="section.id"
-            class="docs-guide-content-section scroll-mt-28"
-          >
-            <div class="docs-guide-section-head">
-              <div class="docs-guide-eyebrow">{{ section.eyebrow }}</div>
-              <h2>{{ section.title }}</h2>
-              <p>{{ section.description }}</p>
-            </div>
+            <section id="keys-and-models" class="docs-section scroll-mt-24">
+              <SectionHeading :eyebrow="t('docsGuide.sections.models.eyebrow')" :title="t('docsGuide.sections.models.title')" :description="t('docsGuide.sections.models.description')" />
+              <div class="docs-prose-grid">
+                <DocTopic id="model-center" badge="01" icon="grid" :title="t('docsGuide.sections.models.articles.market.title')" :description="t('docsGuide.sections.models.articles.market.description')" :items="translationList('docsGuide.sections.models.articles.market.items')" :note="t('docsGuide.sections.models.articles.market.note')">
+                  <RouterLink to="/model-plaza" class="docs-inline-link">{{ t('modelMarket.viewModelsAndPricing') }}<Icon name="arrowRight" size="xs" /></RouterLink>
+                </DocTopic>
+                <DocTopic id="token-groups" badge="02" icon="key" :title="t('docsGuide.sections.models.articles.groups.title')" :description="t('docsGuide.sections.models.articles.groups.description')" :items="translationList('docsGuide.sections.models.articles.groups.items')" :note="t('docsGuide.sections.models.articles.groups.note')" />
+                <DocTopic id="pricing-and-quota" badge="03" icon="calculator" :title="t('docsGuide.sections.models.articles.pricing.title')" :description="t('docsGuide.sections.models.articles.pricing.description')" :items="translationList('docsGuide.sections.models.articles.pricing.items')" :note="t('docsGuide.sections.models.articles.pricing.note')" />
+              </div>
+            </section>
 
-            <div class="mt-6 grid gap-5 xl:grid-cols-2">
-              <article
-                v-for="article in section.articles"
-                :id="article.id"
-                :key="article.id"
-                class="docs-guide-article-card scroll-mt-28"
-              >
-                <div class="flex items-start gap-4">
-                  <div class="docs-guide-step-icon docs-guide-article-icon">
-                    <Icon :name="article.icon" size="md" />
-                  </div>
-                  <div class="min-w-0">
-                    <p class="text-xs font-black uppercase tracking-[0.16em] text-primary-700 dark:text-primary-300">
-                      {{ article.badge }}
-                    </p>
-                    <h3 class="mt-2 text-base font-black tracking-[-0.02em] text-gray-950 dark:text-white sm:text-lg">
-                      {{ article.title }}
-                    </h3>
-                  </div>
-                </div>
+            <section id="endpoint-map" class="docs-section scroll-mt-24">
+              <SectionHeading :eyebrow="t('docsGuide.examples.eyebrow')" :title="t('docsGuide.examples.title')" :description="t('docsGuide.examples.description')" />
+              <div class="docs-endpoint-table">
+                <div v-for="endpoint in endpoints" :key="endpoint.path"><span>{{ endpoint.name }}</span><code>{{ endpoint.path }}</code></div>
+              </div>
+              <CodeBlock id="curl" label="cURL" :code="curlExample" :copied="copiedId === 'curl'" @copy="copySnippet('curl', curlExample)" />
+            </section>
 
-                <p class="mt-4 text-sm leading-7 text-gray-600 dark:text-dark-300">
-                  {{ article.description }}
-                </p>
-                <ul class="mt-5 space-y-2.5">
-                  <li
-                    v-for="item in article.items"
-                    :key="item"
-                    class="docs-guide-check-item docs-guide-check-item-compact"
-                  >
-                    <Icon name="checkCircle" size="sm" />
-                    <span>{{ item }}</span>
-                  </li>
-                </ul>
-                <pre v-if="article.code" class="docs-guide-article-code"><code>{{ article.code }}</code></pre>
-                <p v-if="article.note" class="docs-guide-note">
-                  {{ article.note }}
-                </p>
-                <div v-if="article.links?.length" class="mt-5 flex flex-wrap gap-2">
-                  <RouterLink
-                    v-for="link in article.links"
-                    :key="link.to"
-                    :to="link.to"
-                    class="docs-guide-pill-link"
-                  >
-                    {{ link.label }}
-                  </RouterLink>
-                </div>
-              </article>
-            </div>
-          </section>
-
-          <section id="endpoint-map" class="docs-guide-example-card scroll-mt-28">
-            <div class="grid gap-6 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-              <div>
-                <div class="docs-guide-eyebrow">
-                  {{ t('docsGuide.examples.eyebrow') }}
-                </div>
-                <h2 class="mt-4 text-2xl font-black tracking-[-0.035em] text-gray-950 dark:text-white sm:text-[1.85rem]">
-                  {{ t('docsGuide.examples.title') }}
-                </h2>
-                <p class="mt-4 text-sm leading-7 text-gray-600 dark:text-dark-300 sm:text-base">
-                  {{ t('docsGuide.examples.description') }}
-                </p>
-                <div class="mt-6 grid gap-3">
-                  <div
-                    v-for="endpoint in endpoints"
-                    :key="endpoint.path"
-                    class="docs-guide-endpoint-row"
-                  >
-                    <span>{{ endpoint.name }}</span>
-                    <code>{{ endpoint.path }}</code>
-                  </div>
-                </div>
+            <section id="client-setup" class="docs-section scroll-mt-24">
+              <SectionHeading :eyebrow="t('docsGuide.sections.cli.eyebrow')" :title="t('docsGuide.sections.cli.title')" :description="t('docsGuide.sections.cli.description')" />
+              <div class="docs-segmented" role="tablist" aria-label="Operating system">
+                <button type="button" :class="{ active: selectedOS === 'unix' }" @click="selectedOS = 'unix'">macOS / Linux</button>
+                <button type="button" :class="{ active: selectedOS === 'windows' }" @click="selectedOS = 'windows'">Windows</button>
               </div>
 
-              <div class="docs-guide-code-card">
-                <div class="mb-3 flex items-center justify-between gap-3">
-                  <span class="text-xs font-black uppercase tracking-[0.16em] text-primary-700 dark:text-primary-300">cURL</span>
-                  <button type="button" class="docs-guide-copy-button" @click="copyCurlExample">
-                    <Icon name="copy" size="sm" />
-                    {{ t('common.copy') }}
-                  </button>
-                </div>
-                <pre><code>{{ curlExample }}</code></pre>
+              <div id="environment-check" class="docs-client-section scroll-mt-24">
+                <ClientHeading badge="00" icon="terminal" :title="t('docsGuide.sections.cli.articles.env.title')" />
+                <p>{{ t('docsGuide.sections.cli.articles.env.description') }}</p>
+                <ul class="docs-check-list"><li v-for="item in translationList('docsGuide.sections.cli.articles.env.items')" :key="item"><Icon name="checkCircle" size="sm" />{{ item }}</li></ul>
+                <CodeBlock id="env-check" label="Terminal" :code="environmentCheck" :copied="copiedId === 'env-check'" @copy="copySnippet('env-check', environmentCheck)" />
               </div>
-            </div>
-          </section>
-        </div>
-      </section>
 
-      <section class="docs-guide-bottom-cta">
-        <div>
-          <div class="docs-guide-eyebrow">{{ t('docsGuide.bottom.eyebrow') }}</div>
-          <h2 class="mt-3 text-2xl font-black tracking-[-0.035em] text-gray-950 dark:text-white sm:text-[1.85rem]">
-            {{ t('docsGuide.bottom.title') }}
-          </h2>
-          <p class="mt-3 max-w-2xl text-sm leading-7 text-gray-600 dark:text-dark-300 sm:text-base">
-            {{ t('docsGuide.bottom.description') }}
-          </p>
+              <div id="claude-code" class="docs-client-section scroll-mt-24">
+                <ClientHeading badge="01" icon="chat" :title="t('docsGuide.sections.cli.articles.claude.title')" />
+                <p>{{ t('docsGuide.sections.cli.articles.claude.description') }}</p>
+                <NumberedList :items="translationList('docsGuide.sections.cli.articles.claude.items')" />
+                <CodeBlock id="claude-settings" :label="claudeSettingsPath" :code="claudeSettingsExample" :copied="copiedId === 'claude-settings'" @copy="copySnippet('claude-settings', claudeSettingsExample)" />
+                <p class="docs-callout">{{ t('docsGuide.sections.cli.articles.claude.note') }}</p>
+              </div>
+
+              <div id="codex-cli" class="docs-client-section scroll-mt-24">
+                <ClientHeading badge="02" icon="cpu" :title="t('docsGuide.sections.cli.articles.codex.title')" />
+                <p>{{ t('docsGuide.sections.cli.articles.codex.description') }}</p>
+                <NumberedList :items="translationList('docsGuide.sections.cli.articles.codex.items')" />
+                <div class="grid gap-4 xl:grid-cols-2">
+                  <CodeBlock id="codex-config" :label="codexConfigPath" :code="codexConfigExample" :copied="copiedId === 'codex-config'" @copy="copySnippet('codex-config', codexConfigExample)" />
+                  <CodeBlock id="codex-auth" :label="codexAuthPath" :code="codexAuthExample" :copied="copiedId === 'codex-auth'" @copy="copySnippet('codex-auth', codexAuthExample)" />
+                </div>
+                <p class="docs-callout">{{ t('docsGuide.sections.cli.articles.codex.note') }}</p>
+              </div>
+            </section>
+
+            <section id="desktop-and-switch" class="docs-section scroll-mt-24">
+              <SectionHeading :eyebrow="t('docsGuide.sections.advanced.eyebrow')" :title="t('docsGuide.sections.advanced.title')" :description="t('docsGuide.sections.advanced.description')" />
+              <div class="docs-prose-grid">
+                <DocTopic id="claude-desktop" badge="01" icon="cloud" :title="t('docsGuide.sections.advanced.articles.desktop.title')" :description="t('docsGuide.sections.advanced.articles.desktop.description')" :items="translationList('docsGuide.sections.advanced.articles.desktop.items')" :note="t('docsGuide.sections.advanced.articles.desktop.note')">
+                  <dl class="docs-settings-list">
+                    <div><dt>Gateway base URL</dt><dd>{{ apiBaseUrl }}</dd></div>
+                    <div><dt>Gateway auth scheme</dt><dd>x-api-key</dd></div>
+                    <div><dt>Gateway API key</dt><dd>sk-...</dd></div>
+                  </dl>
+                </DocTopic>
+                <DocTopic id="cc-switch" badge="02" icon="sync" :title="t('docsGuide.sections.cli.articles.ccSwitch.title')" :description="t('docsGuide.sections.cli.articles.ccSwitch.description')" :items="translationList('docsGuide.sections.cli.articles.ccSwitch.items')" :note="t('docsGuide.sections.cli.articles.ccSwitch.note')" />
+              </div>
+            </section>
+
+            <section id="faq" class="docs-section scroll-mt-24">
+              <SectionHeading :eyebrow="t('docsGuide.sections.faq.eyebrow')" :title="t('docsGuide.sections.faq.title')" :description="t('docsGuide.sections.faq.description')" />
+              <div class="docs-faq-list">
+                <details v-for="faq in faqItems" :key="faq.title">
+                  <summary><span>{{ faq.badge }}</span>{{ faq.title }}<Icon name="chevronDown" size="sm" /></summary>
+                  <div><p>{{ faq.description }}</p><ol><li v-for="item in faq.items" :key="item">{{ item }}</li></ol><p class="docs-callout">{{ faq.note }}</p></div>
+                </details>
+              </div>
+            </section>
+
+            <section class="docs-finish">
+              <div><p class="docs-kicker">{{ t('docsGuide.bottom.eyebrow') }}</p><h2>{{ t('docsGuide.bottom.title') }}</h2><p>{{ t('docsGuide.bottom.description') }}</p></div>
+              <RouterLink :to="isAuthenticated ? dashboardPath : '/register'" class="btn btn-primary px-5 py-2.5 text-sm">{{ isAuthenticated ? t('home.goToDashboard') : t('docsGuide.bottom.button') }}<Icon name="arrowRight" size="sm" /></RouterLink>
+            </section>
+          </article>
         </div>
-        <RouterLink
-          :to="isAuthenticated ? dashboardPath : '/register'"
-          class="btn btn-primary shrink-0 px-6 py-3 text-sm shadow-lg shadow-primary-500/30"
-        >
-          {{ isAuthenticated ? t('home.goToDashboard') : t('docsGuide.bottom.button') }}
-          <Icon name="arrowRight" size="md" />
-        </RouterLink>
-      </section>
-    </main>
-  </div>
+      </div>
+    </div>
   </PublicLayout>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { useI18n } from 'vue-i18n'
+import { computed, defineComponent, h, onMounted, ref, type PropType } from 'vue'
 import { RouterLink } from 'vue-router'
-import { useAppStore, useAuthStore } from '@/stores'
-import Icon from '@/components/icons/Icon.vue'
-import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
+import { useI18n } from 'vue-i18n'
 import PublicLayout from '@/components/public/PublicLayout.vue'
+import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
+import Icon from '@/components/icons/Icon.vue'
+import { useAppStore, useAuthStore } from '@/stores'
 import { useClipboard } from '@/composables/useClipboard'
 import { normalizeSiteName } from '@/utils/siteBrand'
 
 type GuideIconName = InstanceType<typeof Icon>['$props']['name']
+interface DocsNavLink { id: string; badge: string; title: string }
+interface DocsNavGroup { title: string; links: DocsNavLink[] }
+interface QuickStartStep { id: string; step: string; title: string; description: string; items: string[] }
+interface FAQItem { badge: string; title: string; description: string; items: string[]; note: string }
 
-interface QuickStartStep {
-  id: string
-  step: string
-  icon: GuideIconName
-  title: string
-  description: string
-  items: string[]
-}
+const SectionHeading = defineComponent({
+  props: { eyebrow: { type: String, required: true }, title: { type: String, required: true }, description: { type: String, required: true } },
+  setup: (props) => () => h('div', { class: 'docs-section-heading' }, [h('p', { class: 'docs-kicker' }, props.eyebrow), h('h2', props.title), h('p', props.description)])
+})
 
-interface EndpointItem {
-  name: string
-  path: string
-}
+const DocTopic = defineComponent({
+  props: {
+    id: { type: String, required: true }, badge: { type: String, required: true }, icon: { type: String as PropType<GuideIconName>, required: true },
+    title: { type: String, required: true }, description: { type: String, required: true }, items: { type: Array as PropType<string[]>, required: true }, note: { type: String, required: true }
+  },
+  setup(props, { slots }) {
+    return () => h('section', { id: props.id, class: 'docs-topic scroll-mt-24' }, [
+      h('div', { class: 'docs-topic-heading' }, [h('div', { class: 'docs-topic-icon' }, [h(Icon, { name: props.icon, size: 'sm' })]), h('div', [h('span', props.badge), h('h3', props.title)])]),
+      h('p', { class: 'docs-topic-description' }, props.description),
+      h('ul', { class: 'docs-check-list' }, props.items.map((item) => h('li', { key: item }, [h(Icon, { name: 'checkCircle', size: 'sm' }), item]))),
+      slots.default?.(), h('p', { class: 'docs-callout' }, props.note)
+    ])
+  }
+})
 
-interface DocsNavLink {
-  id: string
-  badge: string
-  title: string
-}
+const CodeBlock = defineComponent({
+  emits: ['copy'],
+  props: { id: { type: String, required: true }, label: { type: String, required: true }, code: { type: String, required: true }, copied: { type: Boolean, default: false } },
+  setup: (props, { emit }) => () => h('div', { class: 'docs-code-block' }, [
+    h('div', { class: 'docs-code-header' }, [h('span', props.label), h('button', { type: 'button', title: props.copied ? 'Copied' : 'Copy', onClick: () => emit('copy') }, [h(Icon, { name: props.copied ? 'check' : 'copy', size: 'xs' })])]),
+    h('pre', [h('code', props.code)])
+  ])
+})
 
-interface DocsNavGroup {
-  title: string
-  links: DocsNavLink[]
-}
+const ClientHeading = defineComponent({
+  props: { badge: { type: String, required: true }, icon: { type: String as PropType<GuideIconName>, required: true }, title: { type: String, required: true } },
+  setup: (props) => () => h('div', { class: 'docs-client-heading' }, [h(Icon, { name: props.icon, size: 'md' }), h('div', [h('span', props.badge), h('h3', props.title)])])
+})
 
-interface GuideArticle {
-  id: string
-  badge: string
-  icon: GuideIconName
-  title: string
-  description: string
-  items: string[]
-  code?: string
-  note?: string
-  links?: Array<{
-    label: string
-    to: string
-  }>
-}
-
-interface GuideSection {
-  id: string
-  eyebrow: string
-  title: string
-  description: string
-  articles: GuideArticle[]
-}
+const NumberedList = defineComponent({
+  props: { items: { type: Array as PropType<string[]>, required: true } },
+  setup: (props) => () => h('ol', { class: 'docs-numbered-list' }, props.items.map((item, index) => h('li', { key: item }, [h('span', String(index + 1)), item])))
+})
 
 const { t, tm } = useI18n()
-const { copyToClipboard } = useClipboard()
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const { copyToClipboard } = useClipboard()
 const isDark = ref(document.documentElement.classList.contains('dark'))
+const selectedOS = ref<'unix' | 'windows'>('unix')
+const copiedId = ref('')
 
 const siteName = computed(() => normalizeSiteName(appStore.cachedPublicSettings?.site_name || appStore.siteName))
 const siteLogo = computed(() => appStore.cachedPublicSettings?.site_logo || appStore.siteLogo || '')
 const isAuthenticated = computed(() => authStore.isAuthenticated)
-const isAdmin = computed(() => authStore.isAdmin)
-const dashboardPath = computed(() => (isAdmin.value ? '/admin/dashboard' : '/dashboard'))
-const apiBaseUrl = computed(() => normalizeBaseUrl(appStore.cachedPublicSettings?.api_base_url || appStore.apiBaseUrl || 'https://subapis.com'))
+const dashboardPath = computed(() => (authStore.isAdmin ? '/admin/dashboard' : '/dashboard'))
+const apiBaseUrl = computed(() => normalizeBaseUrl(appStore.cachedPublicSettings?.api_base_url || appStore.apiBaseUrl || 'https://api.subapis.com'))
+const usageConfig = computed(() => appStore.cachedPublicSettings?.api_key_usage_config)
+const codexModel = computed(() => usageConfig.value?.codex_model || 'gpt-5.6-sol')
+const codexReviewModel = computed(() => usageConfig.value?.codex_review_model || codexModel.value)
 
 const docsNavigation = computed<DocsNavGroup[]>(() => [
-  {
-    title: t('docsGuide.navGroups.quickStart'),
-    links: [
-      { id: 'quick-start', badge: '00', title: t('docsGuide.quickStart.title') },
-      ...quickStartSteps.value.map((step) => ({ id: step.id, badge: step.step, title: step.title }))
-    ]
-  },
-  {
-    title: t('docsGuide.navGroups.models'),
-    links: [
-      { id: 'model-center', badge: 'M1', title: t('docsGuide.sections.models.articles.market.title') },
-      { id: 'token-groups', badge: 'M2', title: t('docsGuide.sections.models.articles.groups.title') },
-      { id: 'endpoint-map', badge: 'API', title: t('docsGuide.examples.title') }
-    ]
-  },
-  {
-    title: t('docsGuide.navGroups.cli'),
-    links: [
-      { id: 'cli-overview', badge: 'CLI', title: t('docsGuide.sections.cli.title') },
-      { id: 'claude-code', badge: 'CC', title: t('docsGuide.sections.cli.articles.claude.title') },
-      { id: 'codex-cli', badge: 'CX', title: t('docsGuide.sections.cli.articles.codex.title') },
-      { id: 'gemini-cli', badge: 'GM', title: t('docsGuide.sections.cli.articles.gemini.title') },
-      { id: 'cc-switch', badge: 'SW', title: t('docsGuide.sections.cli.articles.ccSwitch.title') },
-      { id: 'cc-switch-cli', badge: 'SC', title: t('docsGuide.sections.cli.articles.ccSwitchCli.title') }
-    ]
-  },
-  {
-    title: t('docsGuide.navGroups.more'),
-    links: [
-      { id: 'advanced-usage', badge: 'AD', title: t('docsGuide.sections.advanced.title') },
-      { id: 'image-models', badge: 'IMG', title: t('docsGuide.sections.advanced.articles.image.title') },
-      { id: 'faq', badge: 'FAQ', title: t('docsGuide.sections.faq.title') },
-      { id: 'policies', badge: 'TOS', title: t('docsGuide.sections.policies.title') }
-    ]
-  }
+  { title: t('docsGuide.navGroups.quickStart'), links: [
+    { id: 'quick-start', badge: '01', title: t('docsGuide.quickStart.title') }, { id: 'keys-and-models', badge: '02', title: t('docsGuide.sections.models.title') }, { id: 'endpoint-map', badge: '03', title: t('docsGuide.examples.title') }
+  ] },
+  { title: t('docsGuide.navGroups.cli'), links: [
+    { id: 'environment-check', badge: '00', title: t('docsGuide.sections.cli.articles.env.title') }, { id: 'claude-code', badge: 'CC', title: t('docsGuide.sections.cli.articles.claude.title') }, { id: 'codex-cli', badge: 'CX', title: t('docsGuide.sections.cli.articles.codex.title') }
+  ] },
+  { title: t('docsGuide.navGroups.more'), links: [
+    { id: 'claude-desktop', badge: 'CD', title: t('docsGuide.sections.advanced.articles.desktop.title') }, { id: 'cc-switch', badge: 'SW', title: t('docsGuide.sections.cli.articles.ccSwitch.title') }, { id: 'faq', badge: 'FAQ', title: t('docsGuide.sections.faq.title') }
+  ] }
 ])
 
 const quickStartSteps = computed<QuickStartStep[]>(() => [
-  {
-    id: 'register',
-    step: '01',
-    icon: 'userPlus',
-    title: t('docsGuide.steps.register.title'),
-    description: t('docsGuide.steps.register.description'),
-    items: tm('docsGuide.steps.register.items') as string[]
-  },
-  {
-    id: 'login',
-    step: '02',
-    icon: 'login',
-    title: t('docsGuide.steps.login.title'),
-    description: t('docsGuide.steps.login.description'),
-    items: tm('docsGuide.steps.login.items') as string[]
-  },
-  {
-    id: 'billing',
-    step: '03',
-    icon: 'creditCard',
-    title: t('docsGuide.steps.billing.title'),
-    description: t('docsGuide.steps.billing.description'),
-    items: tm('docsGuide.steps.billing.items') as string[]
-  },
-  {
-    id: 'token',
-    step: '04',
-    icon: 'key',
-    title: t('docsGuide.steps.token.title'),
-    description: t('docsGuide.steps.token.description'),
-    items: tm('docsGuide.steps.token.items') as string[]
-  },
-  {
-    id: 'environment',
-    step: '05',
-    icon: 'terminal',
-    title: t('docsGuide.steps.environment.title'),
-    description: t('docsGuide.steps.environment.description'),
-    items: tm('docsGuide.steps.environment.items') as string[]
-  },
-  {
-    id: 'first-call',
-    step: '06',
-    icon: 'play',
-    title: t('docsGuide.steps.firstCall.title'),
-    description: t('docsGuide.steps.firstCall.description'),
-    items: tm('docsGuide.steps.firstCall.items') as string[]
-  }
+  createStep('register', '01', 'docsGuide.steps.register'), createStep('login', '02', 'docsGuide.steps.login'), createStep('billing', '03', 'docsGuide.steps.billing'),
+  createStep('token', '04', 'docsGuide.steps.token'), createStep('environment', '05', 'docsGuide.steps.environment'), createStep('first-call', '06', 'docsGuide.steps.firstCall')
 ])
 
-const endpoints = computed<EndpointItem[]>(() => [
-  { name: 'GPT', path: `${apiBaseUrl.value}/v1/chat/completions` },
-  { name: 'Claude', path: `${apiBaseUrl.value}/v1/messages` },
-  { name: 'Responses', path: `${apiBaseUrl.value}/v1/responses` },
-  { name: 'Gemini', path: `${apiBaseUrl.value}/v1beta/models/{model}:generateContent` },
-  { name: 'Antigravity', path: `${apiBaseUrl.value}/antigravity/v1/messages` }
+const endpoints = computed(() => [
+  { name: 'Anthropic Messages', path: `${apiBaseUrl.value}/v1/messages` }, { name: 'OpenAI Responses', path: `${apiBaseUrl.value}/v1/responses` },
+  { name: 'OpenAI Chat Completions', path: `${apiBaseUrl.value}/v1/chat/completions` }, { name: 'Model list', path: `${apiBaseUrl.value}/v1/models` }
 ])
 
-const curlExample = computed(() => `curl ${apiBaseUrl.value}/v1/chat/completions \\
-  -H "Authorization: Bearer sk-..." \\
+const curlExample = computed(() => `curl "${apiBaseUrl.value}/v1/responses" \\
+  -H "Authorization: Bearer sk-your-key" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "model": "gpt-4.1-mini",
-    "messages": [
-      { "role": "user", "content": "Hello from SubAPIs" }
-    ]
+    "model": "${codexModel.value}",
+    "input": "Reply with OK."
   }'`)
 
-const cliEnvExample = computed(() => `export OPENAI_API_KEY="sk-..."
-export OPENAI_BASE_URL="${apiBaseUrl.value}/v1"`)
+const environmentCheck = computed(() => selectedOS.value === 'windows'
+  ? `node --version\nnpm --version\ncurl.exe -I "${apiBaseUrl.value}/health"`
+  : `node --version\nnpm --version\ncurl -I "${apiBaseUrl.value}/health"`)
+const claudeSettingsPath = computed(() => selectedOS.value === 'windows' ? '%USERPROFILE%\\.claude\\settings.json' : '~/.claude/settings.json')
+const claudeSettingsExample = computed(() => JSON.stringify({ env: {
+  ANTHROPIC_BASE_URL: apiBaseUrl.value, ANTHROPIC_AUTH_TOKEN: 'sk-your-key', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', CLAUDE_CODE_ATTRIBUTION_HEADER: String(usageConfig.value?.claude_code_attribution_header ?? 0)
+} }, null, 2))
+const codexConfigPath = computed(() => selectedOS.value === 'windows' ? '%USERPROFILE%\\.codex\\config.toml' : '~/.codex/config.toml')
+const codexAuthPath = computed(() => selectedOS.value === 'windows' ? '%USERPROFILE%\\.codex\\auth.json' : '~/.codex/auth.json')
+const codexConfigExample = computed(() => {
+  const lines = ['model_provider = "OpenAI"', `model = ${JSON.stringify(codexModel.value)}`, `review_model = ${JSON.stringify(codexReviewModel.value)}`,
+    `model_reasoning_effort = ${JSON.stringify(usageConfig.value?.codex_reasoning_effort || 'xhigh')}`, `disable_response_storage = ${usageConfig.value?.codex_disable_response_storage ?? true}`,
+    `network_access = ${JSON.stringify(usageConfig.value?.codex_network_access || 'enabled')}`, 'windows_wsl_setup_acknowledged = true', '', '[model_providers.OpenAI]', 'name = "OpenAI"',
+    `base_url = ${JSON.stringify(`${apiBaseUrl.value}/v1`)}`, 'wire_api = "responses"']
+  if (usageConfig.value?.codex_websocket_enabled ?? true) lines.push('supports_websockets = true')
+  lines.push('requires_openai_auth = true')
+  if (usageConfig.value?.codex_goals_enabled ?? true) lines.push('', '[features]', 'goals = true')
+  return lines.join('\n')
+})
+const codexAuthExample = '{\n  "OPENAI_API_KEY": "sk-your-key"\n}'
+const faqItems = computed<FAQItem[]>(() => [createFAQ('Q1', 'docsGuide.sections.faq.articles.noModel'), createFAQ('Q2', 'docsGuide.sections.faq.articles.auth'), createFAQ('Q3', 'docsGuide.sections.faq.articles.billing'), createFAQ('Q4', 'docsGuide.sections.faq.articles.latency')])
 
-const openAIEnvExample = computed(() => `OPENAI_API_KEY=sk-...
-OPENAI_BASE_URL=${apiBaseUrl.value}/v1`)
-
-const claudeEnvExample = computed(() => `ANTHROPIC_API_KEY=sk-...
-ANTHROPIC_BASE_URL=${apiBaseUrl.value}`)
-
-const geminiExample = computed(() => `GEMINI_API_KEY=sk-...
-GEMINI_BASE_URL=${apiBaseUrl.value}/v1beta`)
-
-const guideSections = computed<GuideSection[]>(() => [
-  {
-    id: 'models-and-groups',
-    eyebrow: t('docsGuide.sections.models.eyebrow'),
-    title: t('docsGuide.sections.models.title'),
-    description: t('docsGuide.sections.models.description'),
-    articles: [
-      createArticle('docsGuide.sections.models.articles.market', {
-        id: 'model-center',
-        badge: 'M1',
-        icon: 'grid'
-      }),
-      createArticle('docsGuide.sections.models.articles.groups', {
-        id: 'token-groups',
-        badge: 'M2',
-        icon: 'users'
-      }),
-      createArticle('docsGuide.sections.models.articles.pricing', {
-        id: 'pricing-and-quota',
-        badge: 'M3',
-        icon: 'calculator'
-      }),
-      createArticle('docsGuide.sections.models.articles.routing', {
-        id: 'routing-policy',
-        badge: 'M4',
-        icon: 'swap'
-      })
-    ]
-  },
-  {
-    id: 'cli-overview',
-    eyebrow: t('docsGuide.sections.cli.eyebrow'),
-    title: t('docsGuide.sections.cli.title'),
-    description: t('docsGuide.sections.cli.description'),
-    articles: [
-      createArticle('docsGuide.sections.cli.articles.env', {
-        id: 'cli-env',
-        badge: 'CLI',
-        icon: 'terminal',
-        code: cliEnvExample.value
-      }),
-      createArticle('docsGuide.sections.cli.articles.claude', {
-        id: 'claude-code',
-        badge: 'CC',
-        icon: 'chat',
-        code: claudeEnvExample.value
-      }),
-      createArticle('docsGuide.sections.cli.articles.codex', {
-        id: 'codex-cli',
-        badge: 'CX',
-        icon: 'cpu',
-        code: openAIEnvExample.value
-      }),
-      createArticle('docsGuide.sections.cli.articles.gemini', {
-        id: 'gemini-cli',
-        badge: 'GM',
-        icon: 'sparkles',
-        code: geminiExample.value
-      }),
-      createArticle('docsGuide.sections.cli.articles.ccSwitch', {
-        id: 'cc-switch',
-        badge: 'SW',
-        icon: 'sync'
-      }),
-      createArticle('docsGuide.sections.cli.articles.ccSwitchCli', {
-        id: 'cc-switch-cli',
-        badge: 'SC',
-        icon: 'terminal'
-      }),
-      createArticle('docsGuide.sections.cli.articles.cache', {
-        id: 'cache-tips',
-        badge: 'CA',
-        icon: 'database'
-      })
-    ]
-  },
-  {
-    id: 'advanced-usage',
-    eyebrow: t('docsGuide.sections.advanced.eyebrow'),
-    title: t('docsGuide.sections.advanced.title'),
-    description: t('docsGuide.sections.advanced.description'),
-    articles: [
-      createArticle('docsGuide.sections.advanced.articles.desktop', {
-        id: 'claude-desktop',
-        badge: 'A1',
-        icon: 'cloud'
-      }),
-      createArticle('docsGuide.sections.advanced.articles.gateway', {
-        id: 'gateway-migration',
-        badge: 'A2',
-        icon: 'link'
-      }),
-      createArticle('docsGuide.sections.advanced.articles.compatibleClaude', {
-        id: 'compatible-claude-code',
-        badge: 'A3',
-        icon: 'swap'
-      }),
-      createArticle('docsGuide.sections.advanced.articles.image', {
-        id: 'image-models',
-        badge: 'IMG',
-        icon: 'sparkles'
-      }),
-      createArticle('docsGuide.sections.advanced.articles.risk', {
-        id: 'risk-control',
-        badge: 'A4',
-        icon: 'shield'
-      }),
-      createArticle('docsGuide.sections.advanced.articles.monitoring', {
-        id: 'monitoring',
-        badge: 'A5',
-        icon: 'chartBar'
-      })
-    ]
-  },
-  {
-    id: 'faq',
-    eyebrow: t('docsGuide.sections.faq.eyebrow'),
-    title: t('docsGuide.sections.faq.title'),
-    description: t('docsGuide.sections.faq.description'),
-    articles: [
-      createArticle('docsGuide.sections.faq.articles.noModel', {
-        id: 'faq-no-model',
-        badge: 'Q1',
-        icon: 'questionCircle'
-      }),
-      createArticle('docsGuide.sections.faq.articles.auth', {
-        id: 'faq-auth',
-        badge: 'Q2',
-        icon: 'key'
-      }),
-      createArticle('docsGuide.sections.faq.articles.billing', {
-        id: 'faq-billing',
-        badge: 'Q3',
-        icon: 'dollar'
-      }),
-      createArticle('docsGuide.sections.faq.articles.latency', {
-        id: 'faq-latency',
-        badge: 'Q4',
-        icon: 'clock'
-      })
-    ]
-  },
-  {
-    id: 'policies',
-    eyebrow: t('docsGuide.sections.policies.eyebrow'),
-    title: t('docsGuide.sections.policies.title'),
-    description: t('docsGuide.sections.policies.description'),
-    articles: [
-      createArticle('docsGuide.sections.policies.articles.terms', {
-        id: 'policy-terms',
-        badge: 'P1',
-        icon: 'document',
-        links: [{ label: t('home.footer.terms'), to: '/legal/terms' }]
-      }),
-      createArticle('docsGuide.sections.policies.articles.aup', {
-        id: 'policy-aup',
-        badge: 'P2',
-        icon: 'shield',
-        links: [{ label: t('home.footer.usagePolicy'), to: '/legal/usage-policy' }]
-      }),
-      createArticle('docsGuide.sections.policies.articles.regions', {
-        id: 'policy-regions',
-        badge: 'P3',
-        icon: 'globe',
-        links: [{ label: t('home.footer.supportedRegions'), to: '/legal/supported-regions' }]
-      }),
-      createArticle('docsGuide.sections.policies.articles.serviceTerms', {
-        id: 'policy-service-terms',
-        badge: 'P4',
-        icon: 'book',
-        links: [{ label: t('home.footer.serviceSpecificTerms'), to: '/legal/service-specific-terms' }]
-      })
-    ]
-  }
-])
-
-function createArticle(key: string, options: Omit<GuideArticle, 'title' | 'description' | 'items' | 'note'> & { note?: string }): GuideArticle {
-  return {
-    ...options,
-    title: t(`${key}.title`),
-    description: t(`${key}.description`),
-    items: tm(`${key}.items`) as string[],
-    note: options.note ?? t(`${key}.note`)
-  }
-}
-
-function normalizeBaseUrl(url: string): string {
-  return url.trim().replace(/\/+$/, '')
-}
-
-function toggleTheme() {
-  isDark.value = !isDark.value
-  document.documentElement.classList.toggle('dark', isDark.value)
-  localStorage.setItem('theme', isDark.value ? 'dark' : 'light')
-}
-
-async function copyCurlExample() {
-  await copyToClipboard(curlExample.value)
-}
-
-function initTheme() {
-  const savedTheme = localStorage.getItem('theme')
-  if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-    isDark.value = true
-    document.documentElement.classList.add('dark')
-  }
-}
+function createStep(id: string, step: string, key: string): QuickStartStep { return { id, step, title: t(`${key}.title`), description: t(`${key}.description`), items: translationList(`${key}.items`) } }
+function createFAQ(badge: string, key: string): FAQItem { return { badge, title: t(`${key}.title`), description: t(`${key}.description`), items: translationList(`${key}.items`), note: t(`${key}.note`) } }
+function translationList(key: string): string[] { const value = tm(key); return Array.isArray(value) ? value.map(String) : [] }
+function normalizeBaseUrl(url: string): string { return url.trim().replace(/\/+$/, '') }
+async function copySnippet(id: string, value: string) { await copyToClipboard(value); copiedId.value = id; window.setTimeout(() => { if (copiedId.value === id) copiedId.value = '' }, 1600) }
+function toggleTheme() { isDark.value = !isDark.value; document.documentElement.classList.toggle('dark', isDark.value); localStorage.setItem('theme', isDark.value ? 'dark' : 'light') }
 
 onMounted(() => {
-  initTheme()
+  const savedTheme = localStorage.getItem('theme')
+  if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) { isDark.value = true; document.documentElement.classList.add('dark') }
   authStore.checkAuth()
-  if (!appStore.publicSettingsLoaded) {
-    appStore.fetchPublicSettings()
-  }
+  if (!appStore.publicSettingsLoaded) appStore.fetchPublicSettings()
 })
 </script>
 
 <style scoped>
-.docs-guide {
-  isolation: isolate;
-}
-
-.docs-guide-bg {
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
-  position: fixed;
-}
-
-.docs-guide-grid {
-  background-image:
-    linear-gradient(rgba(20, 184, 166, 0.045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(20, 184, 166, 0.045) 1px, transparent 1px);
-  background-size: 64px 64px;
-  inset: 0;
-  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.7), transparent 70%);
-  position: absolute;
-}
-
-.docs-guide-blob {
-  border-radius: 9999px;
-  filter: blur(58px);
-  position: absolute;
-}
-
-.docs-guide-blob-a {
-  background: rgba(20, 184, 166, 0.2);
-  height: 24rem;
-  left: -8rem;
-  top: 8rem;
-  width: 24rem;
-}
-
-.docs-guide-blob-b {
-  background: rgba(6, 182, 212, 0.16);
-  height: 28rem;
-  right: -10rem;
-  top: 18rem;
-  width: 28rem;
-}
-
-.docs-guide-nav {
-  padding: 0.35rem 0;
-}
-
-.docs-guide-brand {
-  font-style: italic;
-  letter-spacing: -0.045em;
-  transform: skewX(-6deg);
-}
-
-.docs-guide-nav-link,
-.docs-guide-icon-button,
-.docs-guide-dashboard-link {
-  align-items: center;
-  border-radius: 9999px;
-  color: #475569;
-  display: inline-flex;
-  font-size: 0.82rem;
-  font-weight: 800;
-  justify-content: center;
-  min-height: 2.25rem;
-  transition:
-    background-color 180ms ease,
-    box-shadow 180ms ease,
-    color 180ms ease,
-    transform 180ms ease;
-}
-
-.docs-guide-nav-link {
-  padding: 0 0.8rem;
-}
-
-.docs-guide-icon-button {
-  width: 2.25rem;
-}
-
-.docs-guide-dashboard-link {
-  background: #0f172a;
-  color: #fff;
-  padding: 0 1rem;
-}
-
-.docs-guide-nav-link:hover,
-.docs-guide-icon-button:hover {
-  background: rgba(255, 255, 255, 0.72);
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
-  color: #0f766e;
-  transform: translateY(-1px);
-}
-
-.docs-guide-dashboard-link:hover {
-  background: #1f2937;
-  transform: translateY(-1px);
-}
-
-.docs-guide-eyebrow {
-  align-items: center;
-  color: #0f766e;
-  display: inline-flex;
-  font-size: 0.76rem;
-  font-weight: 900;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-
-.docs-guide-terminal,
-.docs-guide-step-card,
-.docs-guide-example-card,
-.docs-guide-bottom-cta,
-.docs-guide-sidebar {
-  border: 1px solid rgba(226, 232, 240, 0.86);
-  background: rgba(255, 255, 255, 0.88);
-  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.08);
-  backdrop-filter: blur(18px);
-}
-
-.docs-guide-terminal {
-  border-radius: 1.45rem;
-  overflow: hidden;
-}
-
-.docs-guide-terminal-head {
-  align-items: center;
-  background: rgba(15, 23, 42, 0.92);
-  display: flex;
-  gap: 0.45rem;
-  padding: 0.9rem 1rem;
-}
-
-.docs-guide-terminal-head span {
-  border-radius: 9999px;
-  height: 0.7rem;
-  width: 0.7rem;
-}
-
-.docs-guide-terminal-head span:nth-child(1) {
-  background: #fb7185;
-}
-
-.docs-guide-terminal-head span:nth-child(2) {
-  background: #fbbf24;
-}
-
-.docs-guide-terminal-head span:nth-child(3) {
-  background: #34d399;
-}
-
-.docs-guide-terminal-label {
-  color: #64748b;
-  font-size: 0.75rem;
-  font-weight: 900;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
-.docs-guide-code-line {
-  background: #f1f5f9;
-  border-radius: 0.9rem;
-  color: #111827;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.92rem;
-  margin-top: 0.6rem;
-  overflow-x: auto;
-  padding: 0.95rem 1rem;
-  white-space: nowrap;
-}
-
-.docs-guide-code-line span {
-  color: #0891b2;
-  font-weight: 800;
-}
-
-.docs-guide-terminal pre,
-.docs-guide-code-card pre {
-  background: #07111f;
-  border-radius: 1rem;
-  color: #d1fae5;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.83rem;
-  line-height: 1.7;
-  margin-top: 0.6rem;
-  overflow-x: auto;
-  padding: 1rem;
-}
-
-.docs-guide-sidebar {
-  border-radius: 1.25rem;
-  max-height: calc(100vh - 7rem);
-  overflow: auto;
-  padding: 1rem 0.7rem;
-  position: sticky;
-  scrollbar-width: thin;
-  top: 5.5rem;
-}
-
-.docs-guide-sidebar-group {
-  color: #64748b;
-  font-size: 0.7rem;
-  font-weight: 900;
-  letter-spacing: 0.14em;
-  padding: 0 0.8rem;
-  text-transform: uppercase;
-}
-
-.docs-guide-side-link {
-  align-items: center;
-  border-radius: 0.9rem;
-  color: #475569;
-  display: flex;
-  gap: 0.65rem;
-  font-size: 0.9rem;
-  font-weight: 800;
-  padding: 0.75rem 0.8rem;
-  transition:
-    background-color 180ms ease,
-    color 180ms ease,
-    transform 180ms ease;
-}
-
-.docs-guide-side-link span {
-  color: #0f766e;
-  font-size: 0.72rem;
-  font-weight: 900;
-}
-
-.docs-guide-side-link:hover {
-  background: rgba(20, 184, 166, 0.1);
-  color: #0f766e;
-  transform: translateX(2px);
-}
-
-.docs-guide-step-card {
-  border-radius: 1.25rem;
-  padding: 1.05rem;
-}
-
-.docs-guide-content-section {
-  border: 1px solid rgba(226, 232, 240, 0.86);
-  border-radius: 1.45rem;
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(240, 253, 250, 0.72)),
-    rgba(255, 255, 255, 0.88);
-  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.07);
-  padding: 1.15rem;
-  backdrop-filter: blur(18px);
-}
-
-.docs-guide-section-head h2 {
-  color: #0f172a;
-  font-size: clamp(1.42rem, 1.9vw, 2rem);
-  font-weight: 900;
-  letter-spacing: -0.032em;
-  line-height: 1.12;
-  margin-top: 0.7rem;
-}
-
-.docs-guide-section-head p {
-  color: #64748b;
-  font-size: 0.92rem;
-  line-height: 1.75;
-  margin-top: 0.8rem;
-  max-width: 46rem;
-}
-
-.docs-guide-article-card {
-  border: 1px solid rgba(226, 232, 240, 0.86);
-  border-radius: 1.35rem;
-  background: rgba(255, 255, 255, 0.82);
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.045);
-  padding: 1.2rem;
-  transition:
-    border-color 180ms ease,
-    box-shadow 180ms ease,
-    transform 180ms ease;
-}
-
-.docs-guide-article-card:hover {
-  border-color: rgba(20, 184, 166, 0.36);
-  box-shadow: 0 20px 48px rgba(15, 23, 42, 0.09);
-  transform: translateY(-3px);
-}
-
-.docs-guide-article-icon {
-  height: 2.75rem;
-  width: 2.75rem;
-}
-
-.docs-guide-check-item-compact {
-  background: rgba(248, 250, 252, 0.72);
-  padding: 0.65rem 0.75rem;
-}
-
-.docs-guide-article-code {
-  background: #07111f;
-  border-radius: 1rem;
-  color: #d1fae5;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.8rem;
-  line-height: 1.7;
-  margin-top: 1rem;
-  overflow-x: auto;
-  padding: 1rem;
-}
-
-.docs-guide-note {
-  background: rgba(20, 184, 166, 0.08);
-  border: 1px solid rgba(20, 184, 166, 0.18);
-  border-radius: 0.95rem;
-  color: #0f766e;
-  font-size: 0.85rem;
-  font-weight: 700;
-  line-height: 1.7;
-  margin-top: 1rem;
-  padding: 0.8rem 0.9rem;
-}
-
-.docs-guide-pill-link {
-  border: 1px solid rgba(20, 184, 166, 0.26);
-  border-radius: 9999px;
-  color: #0f766e;
-  font-size: 0.78rem;
-  font-weight: 900;
-  padding: 0.48rem 0.75rem;
-  transition:
-    background-color 180ms ease,
-    color 180ms ease,
-    transform 180ms ease;
-}
-
-.docs-guide-pill-link:hover {
-  background: rgba(20, 184, 166, 0.1);
-  transform: translateY(-1px);
-}
-
-.docs-guide-step-icon {
-  align-items: center;
-  background: linear-gradient(135deg, #ccfbf1 0%, #ecfeff 100%);
-  border-radius: 1rem;
-  color: #0d9488;
-  display: inline-flex;
-  flex: 0 0 auto;
-  height: 2.85rem;
-  justify-content: center;
-  width: 2.85rem;
-}
-
-.docs-guide-step-number {
-  background: rgba(20, 184, 166, 0.1);
-  border-radius: 9999px;
-  color: #0f766e;
-  font-size: 0.68rem;
-  font-weight: 900;
-  letter-spacing: 0.18em;
-  padding: 0.28rem 0.62rem;
-}
-
-.docs-guide-check-item {
-  align-items: flex-start;
-  background: rgba(248, 250, 252, 0.86);
-  border: 1px solid rgba(226, 232, 240, 0.86);
-  border-radius: 0.95rem;
-  color: #475569;
-  display: flex;
-  font-size: 0.875rem;
-  gap: 0.55rem;
-  line-height: 1.5;
-  padding: 0.62rem 0.72rem;
-}
-
-.docs-guide-check-item svg {
-  color: #0d9488;
-  flex: 0 0 auto;
-  margin-top: 0.1rem;
-}
-
-.docs-guide-example-card,
-.docs-guide-bottom-cta {
-  border-radius: 1.6rem;
-  padding: 1.5rem;
-}
-
-.docs-guide-endpoint-row {
-  align-items: center;
-  background: rgba(248, 250, 252, 0.86);
-  border: 1px solid rgba(226, 232, 240, 0.86);
-  border-radius: 0.95rem;
-  display: flex;
-  gap: 0.75rem;
-  justify-content: space-between;
-  padding: 0.75rem 0.85rem;
-}
-
-.docs-guide-endpoint-row span {
-  color: #0f172a;
-  font-weight: 900;
-}
-
-.docs-guide-endpoint-row code {
-  color: #0891b2;
-  font-size: 0.78rem;
-  overflow-wrap: anywhere;
-  text-align: right;
-}
-
-.docs-guide-code-card {
-  background: #fff;
-  border: 1px solid rgba(226, 232, 240, 0.86);
-  border-radius: 1.25rem;
-  padding: 1rem;
-}
-
-.docs-guide-copy-button {
-  align-items: center;
-  border: 1px solid rgba(226, 232, 240, 0.9);
-  border-radius: 9999px;
-  color: #475569;
-  display: inline-flex;
-  font-size: 0.78rem;
-  font-weight: 800;
-  gap: 0.35rem;
-  padding: 0.45rem 0.7rem;
-  transition:
-    border-color 180ms ease,
-    color 180ms ease,
-    transform 180ms ease;
-}
-
-.docs-guide-copy-button:hover {
-  border-color: rgba(20, 184, 166, 0.45);
-  color: #0f766e;
-  transform: translateY(-1px);
-}
-
-.docs-guide-bottom-cta {
-  align-items: center;
-  display: flex;
-  gap: 1.5rem;
-  justify-content: space-between;
-  margin-top: 5rem;
-}
-
-.docs-guide-dark {
-  background:
-    radial-gradient(circle at 18% 18%, rgba(20, 184, 166, 0.13), transparent 30%),
-    radial-gradient(circle at 84% 24%, rgba(8, 145, 178, 0.14), transparent 28%),
-    linear-gradient(135deg, #07111f 0%, #0a1724 48%, #081820 100%);
-}
-
-.docs-guide-dark .docs-guide-grid {
-  background-image:
-    linear-gradient(rgba(148, 163, 184, 0.045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 163, 184, 0.045) 1px, transparent 1px);
-  opacity: 0.32;
-}
-
-.docs-guide-dark .docs-guide-nav-link,
-.docs-guide-dark .docs-guide-icon-button {
-  color: #cbd5e1;
-}
-
-.docs-guide-dark .docs-guide-nav-link:hover,
-.docs-guide-dark .docs-guide-icon-button:hover {
-  background: rgba(15, 23, 42, 0.66);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
-  color: #5eead4;
-}
-
-.docs-guide-dark .docs-guide-dashboard-link {
-  background: #e2e8f0;
-  color: #0f172a;
-}
-
-.docs-guide-dark .docs-guide-eyebrow,
-.docs-guide-dark .docs-guide-side-link span,
-.docs-guide-dark .docs-guide-section-head h2 {
-  color: #5eead4;
-}
-
-.docs-guide-dark .docs-guide-terminal,
-.docs-guide-dark .docs-guide-step-card,
-.docs-guide-dark .docs-guide-content-section,
-.docs-guide-dark .docs-guide-article-card,
-.docs-guide-dark .docs-guide-example-card,
-.docs-guide-dark .docs-guide-bottom-cta,
-.docs-guide-dark .docs-guide-sidebar,
-.docs-guide-dark .docs-guide-code-card {
-  border-color: rgba(148, 163, 184, 0.18);
-  background:
-    linear-gradient(180deg, rgba(15, 23, 42, 0.82), rgba(8, 22, 32, 0.62)),
-    rgba(15, 23, 42, 0.66);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 26px 70px rgba(0, 0, 0, 0.28);
-}
-
-.docs-guide-dark .docs-guide-code-line,
-.docs-guide-dark .docs-guide-check-item,
-.docs-guide-dark .docs-guide-endpoint-row {
-  background: rgba(2, 6, 23, 0.42);
-  border-color: rgba(148, 163, 184, 0.18);
-  color: #e2e8f0;
-}
-
-.docs-guide-dark .docs-guide-terminal-label,
-.docs-guide-dark .docs-guide-sidebar-group,
-.docs-guide-dark .docs-guide-section-head p,
-.docs-guide-dark .docs-guide-side-link,
-.docs-guide-dark .docs-guide-check-item,
-.docs-guide-dark .docs-guide-copy-button {
-  color: #cbd5e1;
-}
-
-.docs-guide-dark .docs-guide-note {
-  background: rgba(20, 184, 166, 0.14);
-  border-color: rgba(94, 234, 212, 0.18);
-  color: #99f6e4;
-}
-
-.docs-guide-dark .docs-guide-pill-link {
-  border-color: rgba(94, 234, 212, 0.24);
-  color: #5eead4;
-}
-
-.docs-guide-dark .docs-guide-step-icon {
-  background: linear-gradient(135deg, rgba(45, 212, 191, 0.16), rgba(8, 145, 178, 0.12));
-  border: 1px solid rgba(94, 234, 212, 0.16);
-  color: #5eead4;
-}
-
-.docs-guide-dark .docs-guide-step-number {
-  background: rgba(20, 184, 166, 0.16);
-  color: #5eead4;
-}
-
-.docs-guide-dark .docs-guide-endpoint-row span {
-  color: #f8fafc;
-}
-
-.docs-guide-dark .docs-guide-endpoint-row code,
-.docs-guide-dark .docs-guide-code-line span {
-  color: #67e8f9;
-}
-
-@media (max-width: 1023px) {
-  .docs-guide-sidebar {
-    position: relative;
-    top: auto;
-  }
-
-  .docs-guide-bottom-cta {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-}
-
-@media (max-width: 640px) {
-  .docs-guide-endpoint-row {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .docs-guide-endpoint-row code {
-    text-align: left;
-  }
-}
+.docs-page { --docs-border: #e5e7eb; --docs-muted: #64748b; }
+.dark .docs-page { --docs-border: #2f3642; --docs-muted: #9ca3af; }
+.docs-topbar { background: rgba(255,255,255,.94); border-bottom: 1px solid var(--docs-border); position: sticky; top: 0; z-index: 30; }
+.dark .docs-topbar { background: rgba(17,21,28,.94); }
+.docs-topbar-inner { align-items: center; display: flex; height: 3.75rem; justify-content: space-between; margin: 0 auto; max-width: 90rem; padding: 0 1.25rem; }
+.docs-brand { align-items: center; display: flex; font-size: .94rem; font-weight: 800; gap: .6rem; min-width: 0; }
+.docs-brand-mark { align-items: center; background: #111827; border-radius: 6px; color: #fff; display: flex; height: 1.75rem; justify-content: center; width: 1.75rem; }
+.dark .docs-brand-mark { background: #14b8a6; color: #071a18; }
+.docs-brand-divider { background: var(--docs-border); height: 1.25rem; width: 1px; }
+.docs-icon-link,.docs-icon-button { align-items: center; border-radius: 6px; color: #4b5563; display: inline-flex; font-size: .78rem; font-weight: 650; gap: .4rem; min-height: 2rem; padding: 0 .55rem; }
+.docs-icon-link:hover,.docs-icon-button:hover { background: #f3f4f6; color: #111827; }
+.dark .docs-icon-link,.dark .docs-icon-button { color: #c4c9d2; }
+.dark .docs-icon-link:hover,.dark .docs-icon-button:hover { background: #262c35; color: #fff; }
+.docs-main { margin: 0 auto; max-width: 90rem; padding: 0 1.25rem 4rem; }
+.docs-intro { align-items: end; border-bottom: 1px solid var(--docs-border); display: grid; gap: 2rem; grid-template-columns: minmax(0,1fr) minmax(18rem,28rem); padding: 3.25rem 0 2.5rem; }
+.docs-kicker { color: #0f766e; font-size: .72rem; font-weight: 800; letter-spacing: 0; text-transform: uppercase; }
+.dark .docs-kicker { color: #5eead4; }
+.docs-intro h1 { font-size: 2.5rem; font-weight: 850; letter-spacing: 0; line-height: 1.12; margin-top: .75rem; max-width: 52rem; }
+.docs-lead { color: var(--docs-muted); font-size: 1rem; line-height: 1.75; margin-top: 1rem; max-width: 48rem; }
+.docs-base-url { align-items: center; background: #f8fafc; border: 1px solid var(--docs-border); border-radius: 8px; display: grid; gap: .4rem .75rem; grid-template-columns: minmax(0,1fr) auto; padding: .9rem 1rem; }
+.dark .docs-base-url { background: #151a22; }
+.docs-base-url>span { color: var(--docs-muted); font-size: .7rem; font-weight: 750; grid-column: 1/-1; }
+.docs-base-url code { font-size: .8rem; overflow-wrap: anywhere; }
+.docs-base-url button { color: #0f766e; }
+.docs-layout { display: grid; gap: 3.5rem; grid-template-columns: 15rem minmax(0,1fr); }
+.docs-sidebar { align-self: start; max-height: calc(100vh - 5rem); overflow-y: auto; padding: 2.25rem 0; position: sticky; top: 3.75rem; }
+.docs-nav-group+.docs-nav-group { margin-top: 1.5rem; }
+.docs-nav-group>p { color: #111827; font-size: .72rem; font-weight: 800; margin-bottom: .45rem; }
+.dark .docs-nav-group>p { color: #f3f4f6; }
+.docs-nav-group a { align-items: center; border-radius: 5px; color: var(--docs-muted); display: flex; font-size: .78rem; gap: .55rem; line-height: 1.35; padding: .4rem .5rem; }
+.docs-nav-group a:hover { background: #f3f4f6; color: #0f766e; }
+.dark .docs-nav-group a:hover { background: #202630; color: #5eead4; }
+.docs-nav-group a span { color: #94a3b8; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .63rem; min-width: 1.8rem; }
+.docs-content { border-left: 1px solid var(--docs-border); min-width: 0; padding-left: 3.5rem; }
+.docs-section { border-bottom: 1px solid var(--docs-border); padding: 3rem 0; }
+.docs-section-heading { max-width: 50rem; }
+.docs-section-heading h2 { font-size: 1.75rem; font-weight: 820; letter-spacing: 0; line-height: 1.25; margin-top: .6rem; }
+.docs-section-heading>p:last-child { color: var(--docs-muted); font-size: .92rem; line-height: 1.75; margin-top: .75rem; }
+.docs-steps { margin-top: 2rem; }
+.docs-steps>li { display: grid; gap: 1.25rem; grid-template-columns: 2rem minmax(0,1fr); padding: 1.5rem 0; }
+.docs-steps>li+li { border-top: 1px solid var(--docs-border); }
+.docs-step-number { align-items: center; background: #ecfdf5; border-radius: 6px; color: #047857; display: flex; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .7rem; font-weight: 800; height: 2rem; justify-content: center; width: 2rem; }
+.dark .docs-step-number { background: rgba(20,184,166,.14); color: #5eead4; }
+.docs-steps h3 { font-size: 1rem; font-weight: 800; }
+.docs-steps p { color: var(--docs-muted); font-size: .84rem; line-height: 1.65; margin-top: .4rem; }
+.docs-steps ul { display: grid; gap: .45rem 1.5rem; grid-template-columns: repeat(2,minmax(0,1fr)); margin-top: .85rem; }
+.docs-steps ul li,.docs-check-list li { align-items: start; color: #374151; display: flex; font-size: .78rem; gap: .5rem; line-height: 1.55; }
+.dark .docs-steps ul li,.dark .docs-check-list li { color: #d1d5db; }
+.docs-steps ul svg,.docs-check-list svg { color: #0d9488; flex: none; margin-top: .1rem; }
+.docs-prose-grid { display: grid; gap: 0 2.5rem; grid-template-columns: repeat(2,minmax(0,1fr)); margin-top: 1.5rem; }
+.docs-topic { border-top: 1px solid var(--docs-border); padding: 1.75rem 0; }
+.docs-topic-heading,.docs-client-heading { align-items: center; display: flex; gap: .8rem; }
+.docs-topic-icon { align-items: center; background: #f0fdfa; border-radius: 6px; color: #0f766e; display: flex; height: 2.25rem; justify-content: center; width: 2.25rem; }
+.dark .docs-topic-icon { background: rgba(20,184,166,.12); color: #5eead4; }
+.docs-topic-heading span,.docs-client-heading span { color: #94a3b8; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .65rem; }
+.docs-topic-heading h3,.docs-client-heading h3 { font-size: 1rem; font-weight: 800; margin-top: .1rem; }
+.docs-topic-description,.docs-client-section>p { color: var(--docs-muted); font-size: .84rem; line-height: 1.7; margin-top: 1rem; }
+.docs-check-list { display: grid; gap: .55rem; margin-top: 1rem; }
+.docs-callout { background: #f8fafc; border-left: 3px solid #14b8a6; border-radius: 0 5px 5px 0; color: #475569; font-size: .76rem; line-height: 1.6; margin-top: 1rem; padding: .7rem .85rem; }
+.dark .docs-callout { background: #171c24; color: #c4c9d2; }
+.docs-inline-link { align-items: center; color: #0f766e; display: inline-flex; font-size: .78rem; font-weight: 750; gap: .35rem; margin-top: 1rem; }
+.dark .docs-inline-link { color: #5eead4; }
+.docs-endpoint-table,.docs-settings-list { border: 1px solid var(--docs-border); border-radius: 8px; margin-top: 1.5rem; overflow: hidden; }
+.docs-endpoint-table>div { align-items: center; display: grid; gap: 1rem; grid-template-columns: 12rem minmax(0,1fr); padding: .8rem 1rem; }
+.docs-endpoint-table>div+div,.docs-settings-list>div+div { border-top: 1px solid var(--docs-border); }
+.docs-endpoint-table span { color: #374151; font-size: .78rem; font-weight: 700; }
+.dark .docs-endpoint-table span { color: #e5e7eb; }
+.docs-endpoint-table code { color: var(--docs-muted); font-size: .76rem; min-width: 0; overflow-x: auto; white-space: nowrap; }
+.docs-code-block { background: #111827; border: 1px solid #253047; border-radius: 8px; margin-top: 1.25rem; min-width: 0; overflow: hidden; }
+.docs-code-header { align-items: center; background: #182132; border-bottom: 1px solid #2b3649; color: #a8b3c5; display: flex; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .68rem; justify-content: space-between; min-height: 2.25rem; padding: 0 .8rem; }
+.docs-code-header button { align-items: center; border-radius: 5px; color: #cbd5e1; display: flex; height: 1.65rem; justify-content: center; width: 1.65rem; }
+.docs-code-header button:hover { background: #2b3649; color: #fff; }
+.docs-code-block pre { color: #e5edf8; font-size: .75rem; line-height: 1.65; max-height: 28rem; overflow: auto; padding: 1rem; white-space: pre; }
+.docs-segmented { background: #f1f5f9; border-radius: 7px; display: inline-flex; margin-top: 1.5rem; padding: .2rem; }
+.dark .docs-segmented { background: #202630; }
+.docs-segmented button { border-radius: 5px; color: var(--docs-muted); font-size: .72rem; font-weight: 750; min-height: 2rem; padding: 0 .85rem; }
+.docs-segmented button.active { background: #fff; color: #111827; box-shadow: 0 1px 2px rgba(15,23,42,.12); }
+.dark .docs-segmented button.active { background: #343c49; color: #fff; }
+.docs-client-section { padding: 2rem 0 0; }
+.docs-client-section+.docs-client-section { border-top: 1px solid var(--docs-border); margin-top: 2rem; }
+.docs-client-heading>svg { color: #0f766e; }
+.dark .docs-client-heading>svg { color: #5eead4; }
+.docs-numbered-list { display: grid; gap: .65rem; margin-top: 1rem; }
+.docs-numbered-list li { align-items: start; color: #374151; display: flex; font-size: .8rem; gap: .65rem; line-height: 1.55; }
+.dark .docs-numbered-list li { color: #d1d5db; }
+.docs-numbered-list li>span { align-items: center; border: 1px solid var(--docs-border); border-radius: 50%; color: #0f766e; display: flex; flex: none; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .62rem; height: 1.35rem; justify-content: center; margin-top: .04rem; width: 1.35rem; }
+.docs-settings-list>div { display: grid; gap: .75rem; grid-template-columns: 10rem minmax(0,1fr); padding: .65rem .8rem; }
+.docs-settings-list dt { color: var(--docs-muted); font-size: .7rem; }
+.docs-settings-list dd { font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .72rem; overflow-wrap: anywhere; }
+.docs-faq-list { border-top: 1px solid var(--docs-border); margin-top: 1.5rem; }
+.docs-faq-list details { border-bottom: 1px solid var(--docs-border); }
+.docs-faq-list summary { align-items: center; cursor: pointer; display: grid; font-size: .9rem; font-weight: 750; gap: .75rem; grid-template-columns: 2rem minmax(0,1fr) auto; list-style: none; padding: 1rem 0; }
+.docs-faq-list summary::-webkit-details-marker { display: none; }
+.docs-faq-list summary>span { color: #0f766e; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .65rem; }
+.docs-faq-list details[open] summary svg { transform: rotate(180deg); }
+.docs-faq-list details>div { padding: 0 0 1.25rem 2.75rem; }
+.docs-faq-list details>div>p:first-child { color: var(--docs-muted); font-size: .82rem; line-height: 1.65; }
+.docs-faq-list ol { color: #374151; font-size: .78rem; line-height: 1.6; list-style: decimal; margin: .8rem 0 0 1rem; }
+.dark .docs-faq-list ol { color: #d1d5db; }
+.docs-finish { align-items: center; display: flex; gap: 2rem; justify-content: space-between; padding: 3rem 0 0; }
+.docs-finish h2 { font-size: 1.35rem; font-weight: 820; margin-top: .45rem; }
+.docs-finish>div>p:last-child { color: var(--docs-muted); font-size: .82rem; line-height: 1.65; margin-top: .5rem; max-width: 42rem; }
+@media (max-width:1023px) { .docs-intro { grid-template-columns: 1fr; } .docs-layout { display: block; } .docs-sidebar { display: none; } .docs-content { border-left: 0; padding-left: 0; } }
+@media (max-width:639px) {
+  .docs-topbar-inner,.docs-main { padding-left: 1rem; padding-right: 1rem; } .docs-brand-divider,.docs-brand>span:last-child { display: none; }
+  .docs-intro { padding: 2.25rem 0 1.75rem; } .docs-intro h1 { font-size: 2rem; } .docs-section { padding: 2.25rem 0; }
+  .docs-prose-grid,.docs-steps ul { grid-template-columns: 1fr; } .docs-endpoint-table>div { align-items: start; gap: .3rem; grid-template-columns: 1fr; }
+  .docs-settings-list>div { gap: .25rem; grid-template-columns: 1fr; } .docs-faq-list details>div { padding-left: 0; } .docs-finish { align-items: stretch; flex-direction: column; }
+}
+@media (prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior: auto !important; transition: none !important; } }
 </style>

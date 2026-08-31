@@ -282,14 +282,12 @@ const baseMessages = {
       status: 'Status'
     },
     hero: {
-      eyebrow: 'SubAPIs Quick Start',
-      title: 'Go from account setup to first request in one guide',
+      eyebrow: 'SubAPIs User Guide',
+      title: 'Choose a group, configure a client, and complete your first call',
       description:
-        'Follow the flow from registration, balance setup, API key creation, Base URL configuration, and your first request to integrate SubAPIs into an app or CLI.',
+        'This guide covers the workflows currently exposed by SubAPIs: pricing and models, API keys, Claude Code, Codex, Claude Desktop, and CC-Switch.',
       primaryCta: 'Create Account',
-      secondaryCta: 'View Steps',
-      baseUrlLabel: 'Base URL',
-      envLabel: 'Environment'
+      baseUrlLabel: 'Base URL'
     },
     sidebar: {
       title: 'Docs'
@@ -301,418 +299,212 @@ const baseMessages = {
       more: 'Advanced and Support'
     },
     quickStart: {
-      eyebrow: 'Quick Start',
+      eyebrow: 'Setup Flow',
       title: 'Quick Start',
       description:
-        'Complete account, balance, API key, and environment setup first, then validate with one minimal request. The sections below cover groups, CLI tools, advanced usage, and common failures.'
+        'Choose a model and group first, create a key, copy the generated client configuration, and validate it with a minimal request. Do not begin by guessing model IDs or hand-writing a large config.'
     },
     steps: {
       register: {
-        title: 'Create an account',
-        description:
-          'Create a SubAPIs account with an email you can keep using for security and billing notifications.',
-        items: [
-          'Enter your email and password',
-          'Complete email verification or OAuth login',
-          'Confirm you can enter the console',
-          'Apply an invite or promo code if available'
-        ]
+        title: 'Register and sign in',
+        description: 'Create an account and enter the console. Balance, API keys, usage, and support evidence all belong to this account.',
+        items: ['Use a long-lived email address', 'Complete verification or third-party login', 'Confirm the user console opens', 'Do not share one login across multiple people']
       },
       login: {
-        title: 'Open the console',
-        description: 'After login, review wallet, API keys, available channels, usage analytics, and service status.',
-        items: [
-          'Confirm the account state in the header',
-          'Check wallet balance and recharge entry',
-          'Open API Key management',
-          'Review current service health'
-        ]
+        title: 'Review pricing and models',
+        description: 'Open Pricing & Models, search for the target model, and expand its group offers. The page shows official reference pricing, effective pricing, and group rates.',
+        items: ['Search the exact model ID', 'Review every group offering that model', 'Distinguish official and effective prices', 'Record the selected group name and rate']
       },
       billing: {
         title: 'Add balance or choose a plan',
-        description:
-          'Prepare balance or quota based on expected usage. Start with a small test before production integration.',
-        items: [
-          'Open wallet or plans',
-          'Choose an amount or plan',
-          'Wait for payment result sync',
-          'Confirm the balance update in billing'
-        ]
+        description: 'Usage groups require balance, while subscription groups require an active plan. Start with a small amount and verify billing before production use.',
+        items: ['Identify usage or subscription billing', 'Add balance or purchase the required plan', 'Wait for the order to complete', 'Confirm balance or plan status in the console']
       },
       token: {
         title: 'Create an API key',
-        description:
-          'Create an API key for requests, then configure group, quota, model access, and security controls for your use case.',
-        items: [
-          'Create a new API key',
-          'Select the proper user group',
-          'Set quota and expiry when needed',
-          'Store the secret safely'
-        ]
+        description: 'Every key must use the correct group. The group controls model access and billing rate. Use separate keys for testing, personal clients, and production.',
+        items: ['Give the key a recognizable name', 'Select the group verified above', 'Set quota, expiry, and IP rules as needed', 'Store the key immediately after creation']
       },
       environment: {
-        title: 'Configure the Base URL',
-        description:
-          'Replace the official SDK or CLI endpoint with the SubAPIs base URL and use the API key created in the console.',
-        items: [
-          'OpenAI-compatible APIs use /v1',
-          'Claude messages use /v1/messages',
-          'Gemini uses the v1beta path',
-          'Antigravity uses its dedicated path'
-        ]
+        title: 'Copy the client configuration',
+        description: 'Click Use Key in the API key list, then select Claude Code, Codex CLI, or WebSocket. SubAPIs inserts the current Base URL and recommended models.',
+        items: ['Prefer the configuration generated by SubAPIs', 'Claude Base URL has no /v1 suffix', 'Codex provider Base URL uses /v1', 'Back up an existing config before replacing it']
       },
       firstCall: {
         title: 'Send the first request',
-        description:
-          'Start with a simple chat request, verify connectivity, then observe usage and errors before production rollout.',
-        items: [
-          'Run a test request first',
-          'Confirm response and billing records',
-          'Tune model and quotas for the workload',
-          'Enable monitoring and alerts for production'
-        ]
+        description: 'Use a short prompt for the first request. Do not begin with a large repository or long context. Check the usage record after a complete response.',
+        items: ['Ask the model to reply with OK', 'Confirm the client receives a complete response', 'Verify model and cost in Usage', 'Keep the request ID for troubleshooting']
       }
     },
     examples: {
       eyebrow: 'Examples',
-      title: 'Choose the endpoint for each interface',
-      description:
-        'SubAPIs shows the current core channel entry points. Actual model availability depends on console groups and channel configuration, without overstating coverage on the public pages.'
+      title: 'Core endpoints and first request',
+      description: 'Claude clients use Anthropic Messages; Codex uses OpenAI Responses. The API key group still decides whether a model is available.'
     },
     sections: {
       models: {
         eyebrow: 'Model Groups',
-        title: 'Models, groups, and quota',
-        description:
-          'This adapts the model marketplace and token group tutorial pattern for SubAPIs: check available channels first, then use groups to control the capability boundary of each API key.',
+        title: 'Models, groups, and effective pricing',
+        description: 'The model ID chooses the model. The API key group determines whether it can be called and which rate applies. Both must match.',
         articles: {
           market: {
-            title: 'Model marketplace and channels',
-            description:
-              'Use the marketplace to review models, channel status, rates, and pricing available to the current account or group.',
+            title: 'Pricing & Models',
+            description: 'Review every public group offer for a model. The summary shows the lowest effective price; expanded details show rates, input, output, and cache prices.',
             items: [
-              'Confirm the model list visible to the group',
-              'Review rate and billing units for each model',
-              'Separate supported channels from on-demand channels',
-              'Validate one request with a test key before production'
+              'Use the exact model ID shown on the page',
+              'Effective pricing updates with the group rate',
+              'Official pricing is a reference, not the charged price',
+              'Sign in to inspect exclusive groups'
             ],
-            note: 'The docs list current core SubAPIs channels only and do not advertise broad model coverage.'
+            note: 'The page reflects current configuration; final billing is recorded at request time in Usage.'
           },
           groups: {
-            title: 'Token group overview',
-            description:
-              'The API key group decides which models, quotas, and policies are available. A wrong group commonly appears as model unavailable or request denied.',
+            title: 'API key groups',
+            description: 'One key belongs to one group. A correct model name still fails with “Requested model is not supported by this API key/group” when the group is wrong.',
             items: [
-              'Create separate groups for different workloads',
-              'Configure model access and rates by group',
-              'Use different keys for test and production',
-              'Revalidate CLI config after group changes'
+              'Claude clients need a group that accepts Anthropic requests',
+              'Codex needs a ChatGPT group containing the selected GPT model',
+              'Use a separate key per client or environment',
+              'Restart and revalidate after changing a group'
             ],
-            note: 'If a model is reported missing, check the key group first.'
+            note: 'For unsupported-model errors, check the key group before the model ID. Do not blindly retry the same request.'
           },
           pricing: {
             title: 'Quota, rates, and billing',
-            description:
-              'After adding balance, still review model rates and actual spend. Channels, models, and cache hits can all affect final billing.',
+            description: 'Billing combines channel pricing, group rate, optional user rate, and cache usage. Rate changes apply to subsequent requests.',
             items: [
-              'Confirm wallet balance or plan quota',
-              'Check requests and token usage in analytics',
-              'Review cache creation and cache read costs',
-              'Set quotas for high-frequency workloads'
+              'Review input, output, and cache tokens in Usage',
+              'Confirm the effective rate and charged cost',
+              'Client title or compaction calls may appear separately',
+              'Set total and rolling-window limits for automation keys'
             ],
-            note: 'Run a small production-like test before full rollout to validate rates.'
-          },
-          routing: {
-            title: 'Routing and service status',
-            description:
-              'SubAPIs focuses on keeping request paths, status, and errors visible in one operations surface.',
-            items: [
-              'Use service status to check channel health',
-              'Observe latency, error, and availability trends',
-              'Use stricter limits for critical workloads',
-              'Check request logs and status first during incidents'
-            ],
-            note: 'Do not rely only on SDK errors; console logs usually reveal permission, balance, model, or upstream causes faster.'
+            note: 'An announcement only informs users; billing changes only when group or channel pricing configuration changes.'
           }
         }
       },
       cli: {
         eyebrow: 'CLI Tools',
-        title: 'CLI configuration guides',
+        title: 'Claude Code and Codex setup',
         description:
-          'Covers environment checks and configuration patterns for Claude Code, Codex, Gemini, and CC-Switch-like tools. Exact commands depend on the installed tool version.',
+          'These examples match the Use Key generator and automatically use the current public Base URL, recommended models, and WebSocket capability.',
         articles: {
           env: {
             title: 'Environment check',
             description:
-              'Before configuring any CLI, confirm network access, environment variables, runtime, and API key validity.',
+              'Verify Node.js, npm, and the SubAPIs health endpoint before starting Claude Code or Codex. Existing environment variables may override config files.',
             items: [
-              'Confirm SubAPIs base domain is reachable',
-              'Confirm the API key has no extra spaces',
-              'Match the Base URL to the interface type',
-              'Validate with cURL before configuring complex tools'
+              'node and npm must print valid versions',
+              'Browser access does not prove terminal network access',
+              'Check the key for spaces, quotes, or line breaks',
+              'Existing ANTHROPIC_* or OPENAI_* variables may override files'
             ],
-            note: 'If cURL fails, debug key, balance, group, and network before debugging the CLI.'
+            note: 'If health checks fail, fix the network or domain first. If health works but generation fails, check the key, balance, group, and model ID.'
           },
           claude: {
             title: 'Claude Code configuration',
             description:
-              'Claude-style tools usually need Anthropic-compatible key and base URL settings. Use the SubAPIs domain, with messages through /v1/messages.',
+              'Claude Code reads ~/.claude/settings.json. SubAPIs uses ANTHROPIC_AUTH_TOKEN, and the Base URL is the domain without a /v1 suffix.',
             items: [
-              'Use an API key created in SubAPIs',
-              'Set ANTHROPIC_BASE_URL to the base domain',
-              'Confirm the group allows Claude channels',
-              'Validate with a simple message first'
+              'Create a key in a group that accepts Anthropic requests',
+              'Click Use Key and choose Claude Code',
+              'Write the generated content to settings.json',
+              'Restart the terminal, run claude, and verify with /model'
             ],
-            note: 'Claude tools may use different environment variable names; follow the tool documentation when they differ.'
+            note: 'Do not append /v1/messages to ANTHROPIC_BASE_URL or validate a third-party gateway with official login. Validate by sending a real message and receiving a complete response.'
           },
           codex: {
-            title: 'Codex / OpenAI-compatible setup',
-            description:
-              'OpenAI-compatible tools usually use /v1 as the base path and call chat or Responses APIs with a Bearer key.',
+            title: 'Codex CLI setup',
+            description: 'Codex needs config.toml and auth.json. Its provider uses /v1 and the Responses wire protocol.',
             items: [
-              'Set OPENAI_API_KEY',
-              'Set OPENAI_BASE_URL to SubAPIs /v1',
-              'Pick a GPT or compatible model available to the group',
-              'Check model name and permissions when calls fail'
+              'Create a ChatGPT group key containing the target GPT model',
+              'Choose Codex CLI or WebSocket under Use Key',
+              'Save config.toml and auth.json separately',
+              'Run codex, then inspect /status and /model'
             ],
-            note: 'Do not mix Claude paths with OpenAI /v1 paths.'
-          },
-          gemini: {
-            title: 'Gemini CLI setup',
-            description:
-              'Gemini-related tools commonly use v1beta-style paths. Confirm your group has Gemini channel access.',
-            items: [
-              'Confirm Gemini channel is supported and available',
-              'Use /v1beta for the Base URL',
-              'Use model names from the console list',
-              'Run a minimal prompt first'
-            ],
-            note: 'Gemini tools differ in environment variable names; this page defines only the SubAPIs endpoint boundary.'
+            note: 'wire_api must be responses. If Codex still contacts the official endpoint, check OPENAI_BASE_URL, stale providers, or IDE plugin settings overriding config.toml.'
           },
           ccSwitch: {
-            title: 'CC-Switch-like tools',
+            title: 'Import into CC-Switch',
             description:
-              'When a switching tool manages Claude, Codex, and Gemini providers, configure each provider Base URL separately.',
+              'The API key list includes Import to CC-Switch and generates a local provider containing Base URL, key, and usage lookup configuration.',
             items: [
-              'Claude provider uses the base domain',
-              'OpenAI provider uses /v1',
-              'Gemini provider uses /v1beta',
-              'Test each provider independently'
+              'Install and start CC-Switch first',
+              'Click Import to CC-Switch in the API key actions',
+              'Match the target client to the key group',
+              'Enable the provider and test it in the real client'
             ],
-            note: 'Switching tools manage local config only; actual model access is still controlled by SubAPIs groups.'
-          },
-          ccSwitchCli: {
-            title: 'CC-Switch-CLI usage',
-            description:
-              'Command-line switching tools are useful across projects and providers, but every provider still needs the correct endpoint path.',
-            items: [
-              'Put the SubAPIs key into the matching provider',
-              'Set Base URL separately per provider',
-              'Run a minimal request after switching',
-              'Do not overwrite production config with test config'
-            ],
-            note: 'If the CLI generates config automatically, check whether /v1 or /v1beta was duplicated.'
-          },
-          cache: {
-            title: 'Cache hit troubleshooting',
-            description:
-              'High cache hit rates can come from business reuse, upstream cache, repeated CLI requests, or retry behavior.',
-            items: [
-              'Check cache creation and read usage',
-              'Compare repeated prompt timing',
-              'Inspect whether the CLI repeats context',
-              'Use a separate key for isolated tests'
-            ],
-            note: 'High cache hits are not automatically a bug; judge with scheduling logs and request details.'
+            note: 'If the protocol handler is unavailable, start CC-Switch first. Import changes local client configuration only and does not change group permissions.'
           }
         }
       },
       advanced: {
-        eyebrow: 'Advanced',
-        title: 'Advanced usage',
-        description: 'Before putting SubAPIs in real production traffic, plan migration, controls, and monitoring.',
+        eyebrow: 'Desktop Clients',
+        title: 'Claude Desktop and configuration switching',
+        description: 'This section keeps only desktop workflows currently validated by SubAPIs and omits third-party clients without a supported template.',
         articles: {
           desktop: {
-            title: 'Claude Desktop scenarios',
+            title: 'Claude Desktop third-party gateway',
             description:
-              'For desktop clients or local MCP scenarios, make sure local proxies, Base URL, and API key settings are not overridden elsewhere.',
+              'Enter the SubAPIs gateway in Configure third-party inference under the Claude Desktop developer menu.',
             items: [
-              'Confirm the client supports custom Base URL',
-              'Use a dedicated key for traceability',
-              'Do not write production keys into shared config',
-              'Reduce to a minimal config when debugging'
+              'Enable Developer Mode and open third-party inference',
+              'Select x-api-key as the auth scheme',
+              'Enable Skip login-mode chooser',
+              'Apply locally and validate in a new conversation'
             ],
-            note: 'Desktop tools vary widely; SubAPIs defines only gateway endpoint and key behavior.'
-          },
-          gateway: {
-            title: 'Migrating from official endpoints',
-            description:
-              'Do not replace every workload at once. Start with small test traffic and verify cost, latency, and error behavior.',
-            items: [
-              'Replace the test environment Base URL first',
-              'Confirm model names exist in the group',
-              'Compare official endpoint and SubAPIs responses',
-              'Expand gradually to production traffic'
-            ],
-            note: 'Migration should be reversible. Keep the original config to reduce rollout risk.'
-          },
-          compatibleClaude: {
-            title: 'Compatible models in Claude Code',
-            description:
-              'When compatible models need to be used through Claude Code-like tools, first confirm the tool, request format, and model capability match.',
-            items: [
-              'Confirm the model supports the required message format',
-              'Use a separate group for experimental configs',
-              'Validate plain text requests before project use',
-              'Do not use experimental models directly in production automation'
-            ],
-            note: 'Compatible access is advanced usage. When it fails, validate with the official interface shape first.'
-          },
-          image: {
-            title: 'Image and multimodal models',
-            description:
-              'Image or multimodal capability requires separate confirmation of channel, model, billing mode, and client support.',
-            items: [
-              'Confirm the group enables image or multimodal capability',
-              'Review image billing units and rates',
-              'Test upload, generation, and response format',
-              'Limit image count and size before production'
-            ],
-            note: 'This guide defines configuration boundaries only; actual availability depends on the console.'
-          },
-          risk: {
-            title: 'Permissions, limits, and controls',
-            description:
-              'Use groups, quotas, expiry, model allowlists, and IP restrictions to reduce key leakage or misuse risk.',
-            items: [
-              'Use stricter quotas for production keys',
-              'Enable model limits for high-risk workloads',
-              'Split keys by team or project',
-              'Rotate keys immediately on abnormal usage'
-            ],
-            note: 'Do not use one unlimited key for test, production, and personal tools.'
-          },
-          monitoring: {
-            title: 'Monitoring and incident diagnosis',
-            description:
-              'After launch, monitor request trends, errors, balance spend, and service status so issues are visible before users report them.',
-            items: [
-              'Review status and usage pages regularly',
-              'Search logs by time range during incidents',
-              'Watch balance and rate-limit failures',
-              'Record key model and group settings'
-            ],
-            note: 'Suggested order: key permission -> balance -> model name -> Base URL -> upstream status.'
+            note: 'Third-party gateway mode does not use Anthropic official account validation. The absence of a connection-success message is normal; validate with a real conversation.'
           }
         }
       },
       faq: {
         eyebrow: 'FAQ',
         title: 'Frequently asked questions',
-        description: 'Common issues seen during CLI and API integration.',
+        description: 'Classify the error first. Do not hide configuration problems by repeatedly switching models, rotating accounts, or increasing retries.',
         articles: {
           noModel: {
-            title: 'What if the model does not exist?',
-            description: 'Most cases are caused by model name, token group, or channel permission mismatch.',
+            title: 'Unsupported or missing model',
+            description: '“Requested model is not supported by this API key/group” means the request was rejected before model generation.',
             items: [
-              'Confirm the exact model name',
-              'Check the API key group',
-              'Confirm the channel is enabled',
-              'Compare with the marketplace availability list'
+              'Search the exact model ID in Pricing & Models',
+              'Expand details and confirm the target group offers it',
+              'Check that the active key belongs to that group',
+              'Restart the client and send a new request after changes'
             ],
-            note: 'Do not only edit the client model name; confirm the console really exposes that model.'
+            note: 'The same model may be available in only some groups. Verify the key group before changing model IDs.'
           },
           auth: {
             title: 'What if 401 or auth fails?',
-            description:
-              'Auth failures usually come from key format, copy mistakes, environment overrides, or missing request headers.',
+            description: 'A 401 usually means a bad key or stale environment override and is unrelated to model capability.',
             items: [
-              'Check Authorization Bearer format',
-              'Confirm the key has no extra newline',
-              'Confirm the CLI reads the latest environment variables',
-              'Create a new test key when needed'
+              'Copy the complete key again from the key list',
+              'Check key status, expiry, and quota',
+              'Clear stale ANTHROPIC_* or OPENAI_* variables',
+              'Generate a fresh minimal config with Use Key'
             ],
-            note: 'Browser, terminal, and IDE plugins may read different environments.'
+            note: 'Terminals, VS Code, and desktop clients may use different files. Identify which client actually sent the failing request.'
           },
           billing: {
-            title: 'Why can I not call after payment?',
-            description:
-              'Balance is only one requirement. Also verify plan, group, channel status, and model permissions.',
+            title: 'Balance exists but calls still fail',
+            description: 'Balance, subscription status, key quota, and model permission are independent checks.',
             items: [
-              'Confirm payment result has synced',
-              'Check wallet balance update',
-              'Confirm the key is not expired or over quota',
-              'Check channel and model access'
+              'Confirm the order completed and wallet balance updated',
+              'Confirm an active plan for subscription groups',
+              'Check total and rolling-window key quotas',
+              'Verify group status and target model access'
             ],
-            note: 'If recharge is closed or payment sync is delayed, check order status first.'
+            note: 'A successful recharge does not automatically change the API key group or model allowlist.'
           },
           latency: {
-            title: 'What if requests are slow or stuck?',
+            title: 'Slow, interrupted, or repeatedly retried requests',
             description:
-              'Latency may come from upstream services, network, model queueing, tool retries, or large context.',
+              'Distinguish client-side no-send, gateway rejection, slow upstream first byte, and mid-stream disconnect. They require different fixes.',
             items: [
-              'Review latency trends on service status',
-              'Test with a minimal prompt',
-              'Check rate limit or retry behavior',
-              'Record the exact request time for log lookup'
+              'Check whether SubAPIs recorded the request',
+              'Keep the client request ID and exact timestamp',
+              'Run a short new-session control without overwriting evidence',
+              'Provide user, group, model, and stream mode'
             ],
-            note: 'With a specific API key and timestamp, scheduling logs are much easier to inspect.'
-          }
-        }
-      },
-      policies: {
-        eyebrow: 'Policies',
-        title: 'Terms and policies',
-        description:
-          'Expose login terms and usage boundaries in the docs so users can review compliance before integration.',
-        articles: {
-          terms: {
-            title: 'Terms of Service',
-            description:
-              'Covers service use, customer content, fees, suspension, termination, and liability boundaries.',
-            items: [
-              'Read terms before integration',
-              'Confirm organizational authority and use boundaries',
-              'Understand fees and refund rules',
-              'Keep links available for your team'
-            ],
-            note: 'Formal terms are controlled by the configured legal document page.'
-          },
-          aup: {
-            title: 'Usage Policy (AUP)',
-            description: 'Defines prohibited uses, high-risk use case requirements, and user disclosure obligations.',
-            items: [
-              'Illegal, fraudulent, abusive, and high-risk misuse is prohibited',
-              'High-risk scenarios need human review',
-              'Consumer-facing chatbots require AI disclosure',
-              'Products serving minors need extra safeguards'
-            ],
-            note: 'If your use case is near a high-risk domain, design human review and disclosure first.'
-          },
-          regions: {
-            title: 'Supported regions',
-            description:
-              'Lists countries and regions where commercial API access and services are currently supported.',
-            items: [
-              'Confirm the customer region is supported',
-              'Watch sanctions and export restrictions',
-              'Contact support for unlisted regions',
-              'Some services may have extra restrictions'
-            ],
-            note: 'Region availability may change; rely on the formal supported regions page.'
-          },
-          serviceTerms: {
-            title: 'Service-specific terms',
-            description:
-              'Covers supplemental terms for team, enterprise, beta, fine-tuning, cloud-hosted, and development partner services.',
-            items: [
-              'Team or enterprise users must be notified',
-              'Beta services are not for production reliance',
-              'Fine-tuning materials are customer content',
-              'Cloud-hosted services also follow cloud platform policies'
-            ],
-            note: 'Service-specific terms control for the applicable service.'
+            note: 'The request ID is the best troubleshooting entry point. Do not send the full API key; use its name or trailing identifier.'
           }
         }
       }

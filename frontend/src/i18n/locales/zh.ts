@@ -274,13 +274,11 @@ const baseMessages = {
       status: '服务状态'
     },
     hero: {
-      eyebrow: 'SubAPIs 快速开始',
-      title: '从注册到首次调用，用一条教程完成接入',
-      description: '按照注册、充值、创建 API Key、配置 Base URL 和首次请求的顺序，把 SubAPIs 接入你的应用或 CLI 工具。',
+      eyebrow: 'SubAPIs 使用手册',
+      title: '从选择分组到客户端调用，按步骤完成接入',
+      description: '这份文档只覆盖 SubAPIs 当前已开放的核心流程：查看模型与价格、创建 API Key，以及配置 Claude Code、Codex、Claude Desktop 和 CC-Switch。',
       primaryCta: '注册账号',
-      secondaryCta: '查看步骤',
-      baseUrlLabel: '基础地址',
-      envLabel: '环境变量'
+      baseUrlLabel: '基础地址'
     },
     sidebar: {
       title: '文档目录'
@@ -292,356 +290,195 @@ const baseMessages = {
       more: '进阶与支持'
     },
     quickStart: {
-      eyebrow: '快速开始',
+      eyebrow: '接入流程',
       title: '快速开始',
-      description:
-        '先完成账号、余额、密钥和环境配置，再进行一次最小请求验证。后续教程会继续说明分组、CLI、进阶用法和常见问题。'
+      description: '先确定要用的模型和分组，再创建 Key、复制平台生成的客户端配置，最后用最小请求验证。不要从猜模型名或手写复杂配置开始。'
     },
     steps: {
       register: {
-        title: '注册账号',
-        description: '进入注册页创建 SubAPIs 账号，建议使用长期可接收通知的邮箱，便于接收安全和账单提醒。',
-        items: [
-          '填写邮箱与密码',
-          '完成邮箱验证或授权登录',
-          '确认登录后可以进入控制台',
-          '如有邀请码或活动码，按页面提示填写'
-        ]
+        title: '注册并登录',
+        description: '创建账号并进入控制台。后续的余额、Key、用量和请求排查都以这个账号为准。',
+        items: ['使用长期有效的邮箱', '完成邮箱验证或第三方登录', '确认可以进入用户控制台', '不要多人共用同一个登录账号']
       },
       login: {
-        title: '登录控制台',
-        description: '登录后先熟悉控制台里的钱包、API Key、可用通道、用量统计和服务状态入口。',
-        items: ['确认右上角账号状态', '查看钱包余额和充值入口', '进入 API Key 管理页', '检查服务状态是否正常']
+        title: '查看价格与模型',
+        description: '先打开“价格与模型”，搜索目标模型并展开可用分组。页面会同时显示官方参考价、实际价格和分组倍率。',
+        items: ['搜索目标模型的完整 ID', '查看该模型有哪些可用分组', '区分官方参考价与实际价格', '记住所选分组名称和倍率']
       },
       billing: {
         title: '充值或选择套餐',
-        description: '根据实际调用量准备余额或套餐额度。生产接入前建议先用小额测试，确认模型、倍率和账单符合预期。',
-        items: ['进入钱包或套餐页面', '选择合适金额或计划', '等待支付结果回写', '在账单中确认余额变化']
+        description: '按量分组需要余额，订阅分组需要有效套餐。首次接入只准备小额测试额度，先确认模型、倍率和账单。',
+        items: ['确认分组是按量还是订阅', '按需充值或购买套餐', '等待订单状态完成', '在钱包中确认余额或套餐已生效']
       },
       token: {
         title: '创建 API Key',
-        description: '在控制台创建用于调用的 API Key，并按业务场景配置分组、额度、模型权限和安全限制。',
-        items: ['创建新的 API Key', '选择合适的用户分组', '按需设置额度和过期时间', '妥善保存密钥，避免泄露']
+        description: 'API Key 必须绑定正确分组，分组决定可用模型和计费倍率。测试、个人工具和生产服务建议分别创建 Key。',
+        items: ['填写便于识别的 Key 名称', '选择上一步确认的分组', '按需设置额度、有效期和 IP 限制', '创建后立即妥善保存密钥']
       },
       environment: {
-        title: '配置 Base URL',
-        description: '把 SDK 或 CLI 的官方地址替换为 SubAPIs 的基础地址，密钥使用你在控制台创建的 API Key。',
-        items: [
-          'OpenAI 兼容接口使用 /v1',
-          'Claude 消息接口使用 /v1/messages',
-          'Gemini 使用 v1beta 路径',
-          'Antigravity 使用专用路径'
-        ]
+        title: '复制客户端配置',
+        description: '在 API Key 列表点击“使用密钥”，选择 Claude Code、Codex CLI 或 WebSocket 配置。平台会带入当前 Base URL 和推荐模型。',
+        items: ['优先复制平台生成的配置', 'Claude Base URL 不追加 /v1', 'Codex Provider Base URL 使用 /v1', '修改已有文件前先保留备份']
       },
       firstCall: {
         title: '发起首次请求',
-        description: '先用简单对话请求验证连通性，再逐步接入到业务服务中，并通过用量统计观察消耗和错误。',
-        items: ['先执行测试请求', '确认返回内容和计费记录', '根据业务调整模型和限额', '生产环境启用监控和告警']
+        description: '用短文本完成首次调用，不要一上来就发送大型项目或长上下文。成功后再检查用量记录和实际倍率。',
+        items: ['发送只要求回复 OK 的请求', '确认客户端收到完整结束事件', '在用量页核对模型和费用', '保存请求 ID 作为后续排障依据']
       }
     },
     examples: {
       eyebrow: '调用示例',
-      title: '按接口类型选择对应路径',
-      description:
-        'SubAPIs 展示当前核心支持通道的入口。具体可用模型以控制台分组和渠道配置为准，不在首页或教程页夸大模型覆盖范围。'
+      title: '核心接口与首次请求',
+      description: 'Claude 客户端使用 Anthropic Messages；Codex 使用 OpenAI Responses。模型是否可用仍由 API Key 所属分组决定。'
     },
     sections: {
       models: {
         eyebrow: '模型分组',
-        title: '模型、分组与额度说明',
-        description:
-          '参考模型广场和令牌分组的教程结构，改写为 SubAPIs 的使用方式：先看可用通道，再按分组控制 API Key 能力边界。',
+        title: '模型、分组与实际价格',
+        description: '模型 ID 决定调用对象，API Key 分组决定它能否调用以及按什么倍率计费。这两项必须同时匹配。',
         articles: {
           market: {
-            title: '模型广场与可用通道',
-            description: '模型广场用于查看当前账号或分组可调用的模型、通道状态、倍率和价格信息。',
+            title: '价格与模型',
+            description: '按模型查看所有公开分组报价。卡片摘要展示最低实际价格，展开后可看到每个分组的倍率、输入价、输出价和缓存价。',
             items: [
-              '先确认分组可见的模型列表',
-              '查看每个模型的倍率和计费单位',
-              '区分已支持通道与按需扩展通道',
-              '生产前用测试 Key 验证一次调用'
+              '模型名必须与页面显示的 ID 完全一致',
+              '实际价格会随分组倍率自动换算',
+              '官方价格仅用于对照，不是最终扣费价',
+              '专属分组需登录后在可用分组中查看'
             ],
-            note: '教程页只列 SubAPIs 当前核心通道，具体可用范围以控制台为准。'
+            note: '价格页展示的是当前配置；最终扣费以请求产生时的用量记录为准。'
           },
           groups: {
-            title: '令牌分组介绍',
-            description:
-              'API Key 的分组决定它能访问哪些模型、额度和治理策略。分组选错时，常见表现是模型不可用或调用被拒绝。',
+            title: 'API Key 分组',
+            description: '一个 Key 绑定一个分组。分组选错时，即使模型名称正确，也会返回“Requested model is not supported by this API key/group”。',
             items: [
-              '为不同业务创建不同分组',
-              '按分组配置模型权限和倍率',
-              '给测试、生产环境使用不同 Key',
-              '变更分组后重新验证 CLI 配置'
+              'Claude 客户端选择支持 Anthropic 请求的分组',
+              'Codex 选择包含目标 GPT 模型的 ChatGPT 分组',
+              '不同客户端或环境使用独立 Key',
+              '切换分组后重新打开客户端并验证'
             ],
-            note: '如果提示模型不存在，优先检查 Key 所属分组。'
+            note: '排查模型不可用时，先核对 Key 分组，再核对模型 ID，不要连续盲目重试。'
           },
           pricing: {
             title: '额度、倍率与账单',
-            description: '充值后仍建议关注倍率和实际消耗。不同通道、模型和缓存命中会影响最终账单。',
+            description: '实际扣费由模型基础价格、分组倍率、用户专属倍率和缓存用量共同决定。倍率变化会同步到后续请求。',
             items: [
-              '在钱包中确认余额或套餐额度',
-              '在用量页查看请求和 Token 消耗',
-              '核对缓存读取和缓存创建费用',
-              '给高频业务设置额度上限'
+              '在用量页查看输入、输出和缓存 Token',
+              '核对记录中的实际倍率与实际费用',
+              '客户端的标题、压缩等辅助请求也会单独记账',
+              '为自动化 Key 设置额度与时间窗口限制'
             ],
-            note: '生产接入前先小流量压测，避免倍率配置不符合预期。'
-          },
-          routing: {
-            title: '路由与服务状态',
-            description: 'SubAPIs 的运营重点是把调用路径、状态和异常收敛到同一控制台，便于排查和降级。',
-            items: [
-              '查看服务状态确认通道健康度',
-              '观察延迟、错误和可用性趋势',
-              '对关键业务设置更保守的限流',
-              '异常时优先看请求日志和状态页'
-            ],
-            note: '不要只看 SDK 报错，控制台日志通常能更快定位是权限、余额、模型还是上游问题。'
+            note: '公告只负责通知；真正影响计费的是分组和渠道定价配置。'
           }
         }
       },
       cli: {
         eyebrow: 'CLI 工具',
-        title: 'CLI 配置教程',
-        description:
-          '覆盖环境检查、Claude Code、Codex、Gemini 和 CC-Switch 类工具的配置思路。具体命令以你实际安装的工具版本为准。',
+        title: 'Claude Code 与 Codex 配置',
+        description: '以下配置与控制台“使用密钥”生成器保持一致，并按当前公共设置自动带入 Base URL、推荐模型和 WebSocket 能力。',
         articles: {
           env: {
             title: '环境检查（通用步骤）',
-            description: '配置任何 CLI 前，先确认网络、环境变量、Node/Python 运行时和 API Key 是否可用。',
+            description: '先确认 Node.js、npm 和 SubAPIs 健康检查可用，再安装或启动 Claude Code、Codex。已有环境变量可能覆盖配置文件。',
             items: [
-              '确认能访问 SubAPIs 基础域名',
-              '确认 API Key 未复制多余空格',
-              '确认 Base URL 与接口类型匹配',
-              '先用 cURL 验证再配置复杂工具'
+              'node 和 npm 命令必须能正常输出版本',
+              '浏览器可用不等于终端网络一定可用',
+              '检查 Key 是否包含空格、引号或换行',
+              '已有 ANTHROPIC_* / OPENAI_* 变量可能覆盖文件'
             ],
-            note: '如果 cURL 都失败，先不要排查 CLI，优先看 Key、余额、分组和网络。'
+            note: '健康检查失败时先处理网络或域名；健康检查成功但模型请求失败，再检查 Key、余额、分组和模型名。'
           },
           claude: {
             title: 'Claude Code 配置',
-            description:
-              'Claude 类工具通常需要 Anthropic 风格的密钥和基础地址。Base URL 使用 SubAPIs 域名，消息接口走 /v1/messages。',
+            description: 'Claude Code 读取 ~/.claude/settings.json。SubAPIs 使用 ANTHROPIC_AUTH_TOKEN，Base URL 只填写域名，不追加 /v1。',
             items: [
-              '使用 SubAPIs 创建的 API Key',
-              '设置 ANTHROPIC_BASE_URL 为基础域名',
-              '确认分组允许 Claude 通道',
-              '首次请求用简单消息验证'
+              '创建支持 Anthropic 请求的分组 Key',
+              '在 Key 列表点击“使用密钥”并选择 Claude Code',
+              '将生成内容写入对应系统的 settings.json',
+              '重启终端，运行 claude 后用 /model 核对模型'
             ],
-            note: '不同 Claude 工具读取环境变量的名称可能不同，优先以工具自身文档为准。'
+            note: '不要把 ANTHROPIC_BASE_URL 写成 /v1/messages，也不要用官方登录来验证第三方网关；配置完成后以实际对话能否完整返回为准。'
           },
           codex: {
-            title: 'Codex / OpenAI 兼容配置',
-            description: 'OpenAI 兼容工具一般使用 /v1 作为基础路径，并通过 Bearer API Key 调用聊天或 Responses 接口。',
+            title: 'Codex CLI 配置',
+            description: 'Codex 需要 config.toml 和 auth.json 两个文件。Provider 使用 /v1，并固定通过 Responses 协议调用。',
             items: [
-              '设置 OPENAI_API_KEY',
-              '设置 OPENAI_BASE_URL 为 SubAPIs /v1',
-              '选择分组可用的 GPT 或兼容模型',
-              '调用失败时检查模型名和权限'
+              '创建包含目标 GPT 模型的 ChatGPT 分组 Key',
+              '在 Key 列表选择 Codex CLI 或 WebSocket 配置',
+              '分别保存 config.toml 与 auth.json',
+              '运行 codex，用 /status 与 /model 检查当前配置'
             ],
-            note: '不要把 Claude 路径和 OpenAI /v1 路径混用。'
-          },
-          gemini: {
-            title: 'Gemini CLI 配置',
-            description: 'Gemini 相关工具通常走 v1beta 风格路径。请确认你的分组确实开放 Gemini 通道。',
-            items: [
-              '确认 Gemini 通道已支持并可用',
-              'Base URL 使用 /v1beta',
-              '模型名以控制台可用列表为准',
-              '先跑最小 prompt 验证返回'
-            ],
-            note: 'Gemini 工具的环境变量命名差异较大，教程页只提供 SubAPIs 路径边界。'
+            note: 'wire_api 必须是 responses。若客户端仍请求官方地址，检查系统 OPENAI_BASE_URL、旧 Provider 或 IDE 插件配置是否覆盖了 config.toml。'
           },
           ccSwitch: {
-            title: 'CC-Switch 类工具使用',
-            description: '如果使用统一切换工具管理 Claude、Codex、Gemini，请把每个 Provider 的 Base URL 分开配置。',
+            title: '导入 CC-Switch',
+            description: 'SubAPIs 已在 API Key 列表提供“导入 CC-Switch”按钮，可生成包含 Base URL、Key 和用量查询的本地 Provider 配置。',
             items: [
-              'Claude Provider 使用基础域名',
-              'OpenAI Provider 使用 /v1',
-              'Gemini Provider 使用 /v1beta',
-              '每个 Provider 单独测试连通性'
+              '先安装并启动 CC-Switch',
+              '在 API Key 操作区点击“导入 CC-Switch”',
+              '确认目标客户端类型与 Key 分组一致',
+              '启用新 Provider 后在真实客户端发起测试'
             ],
-            note: '切换工具只负责本地配置管理，实际可用模型仍由 SubAPIs 分组决定。'
-          },
-          ccSwitchCli: {
-            title: 'CC-Switch-CLI 使用',
-            description: '命令行切换工具适合在多项目、多 Provider 间快速切换配置，但仍要保证每个配置项使用正确路径。',
-            items: [
-              '把 SubAPIs Key 写入对应 Provider',
-              '按 Provider 分别设置 Base URL',
-              '切换后立即执行最小请求',
-              '不要把测试配置覆盖生产配置'
-            ],
-            note: '如果 CLI 自动生成配置，请检查它是否把 /v1 或 /v1beta 重复拼接。'
-          },
-          cache: {
-            title: '缓存命中与排查',
-            description: '缓存命中率较高时，需要区分业务复用、上游缓存、工具侧重复请求和异常重试。',
-            items: [
-              '查看用量页的缓存创建和读取',
-              '对比相同 prompt 的请求时间',
-              '检查 CLI 是否重复发送上下文',
-              '必要时用独立 Key 进行隔离测试'
-            ],
-            note: '缓存命中高不一定是 bug，先结合调度日志和请求明细判断。'
+            note: '如果浏览器提示协议处理程序未注册，先启动 CC-Switch；导入只修改本地客户端配置，不会改变 Key 的分组权限。'
           }
         }
       },
       advanced: {
-        eyebrow: '进阶',
-        title: '进阶用法',
-        description: '把 SubAPIs 放进真实业务前，建议先规划迁移方式、风控边界和监控策略。',
+        eyebrow: '桌面客户端',
+        title: 'Claude Desktop 与配置切换',
+        description: '保留当前已实际使用的桌面端接入方式，省略尚未提供模板或没有稳定验证的第三方客户端。',
         articles: {
           desktop: {
-            title: 'Claude Desktop 场景',
-            description: '桌面客户端或本地 MCP 场景接入时，优先确保本地代理、Base URL 和 API Key 不被其他配置覆盖。',
+            title: 'Claude Desktop 第三方网关',
+            description: '在 Claude Desktop 开发者菜单的 Configure third-party inference 中填写 SubAPIs 网关信息。',
             items: [
-              '确认客户端支持自定义 Base URL',
-              '使用独立 API Key 便于追踪',
-              '不要把生产 Key 写入共享配置',
-              '出现异常先还原最小配置'
+              '开启 Developer Mode 并进入第三方推理配置',
+              'Auth scheme 选择 x-api-key',
+              '开启 Skip login-mode chooser',
+              '点击 Apply locally 后直接新建会话验证'
             ],
-            note: '桌面工具差异较大，SubAPIs 只定义网关侧地址和密钥。'
-          },
-          gateway: {
-            title: '从官方地址迁移到 SubAPIs',
-            description: '迁移时不要一次性替换所有业务。建议先灰度小流量，确认费用、延迟和错误率。',
-            items: [
-              '先替换测试环境 Base URL',
-              '确认模型名在分组中存在',
-              '对比官方地址和 SubAPIs 返回',
-              '逐步扩大到生产流量'
-            ],
-            note: '迁移的核心是可回滚，保留原配置可以降低上线风险。'
-          },
-          compatibleClaude: {
-            title: '兼容模型接入 Claude Code',
-            description: '如果某些兼容模型需要通过 Claude Code 类工具使用，优先确认工具、接口格式和模型能力是否匹配。',
-            items: [
-              '确认模型支持目标工具需要的消息格式',
-              '使用独立分组隔离实验配置',
-              '先验证纯文本请求再接入项目',
-              '不把实验模型直接用于生产自动化'
-            ],
-            note: '兼容接入是高级用法，失败时先回到官方接口形态验证。'
-          },
-          image: {
-            title: '绘图与多模态模型',
-            description: '绘图或图片能力需要单独确认通道、模型、计费模式和客户端是否支持，不应默认等同于文本模型。',
-            items: [
-              '确认分组开启图片或多模态能力',
-              '查看图片计费单位和倍率',
-              '测试上传、生成和返回格式',
-              '生产前限制单次图片数量和尺寸'
-            ],
-            note: '教程页只说明配置边界，实际可用模型以控制台为准。'
-          },
-          risk: {
-            title: '权限、限流与风控',
-            description: '通过分组、额度、过期时间、模型白名单和 IP 限制降低 Key 泄露或误用风险。',
-            items: [
-              '生产 Key 设置更严格额度',
-              '高风险业务开启模型限制',
-              '按团队或项目拆分 Key',
-              '发现异常立即轮换密钥'
-            ],
-            note: '不要把一个无限额 Key 同时用于测试、生产和个人工具。'
-          },
-          monitoring: {
-            title: '监控与故障排查',
-            description: '上线后关注请求趋势、错误率、余额消耗和服务状态，避免问题只在用户侧暴露。',
-            items: [
-              '定期查看状态页和用量页',
-              '异常时按时间范围检索日志',
-              '关注余额不足和限流错误',
-              '记录关键业务的模型与分组配置'
-            ],
-            note: '排查顺序建议：Key 权限 -> 余额 -> 模型名 -> Base URL -> 上游状态。'
+            note: '第三方网关模式不需要通过 Anthropic 官方账号登录测试。页面没有“测试成功”提示并不代表配置失败，以发送消息后的真实响应为准。'
           }
         }
       },
       faq: {
         eyebrow: '常见问题',
         title: '常见问题',
-        description: '整理 CLI 和 API 接入中最容易遇到的问题，便于快速定位。',
+        description: '先按错误类型定位，不要通过反复切模型、换账号或增加重试次数掩盖配置问题。',
         articles: {
           noModel: {
-            title: '提示模型不存在怎么办？',
-            description: '多数情况是模型名、令牌分组或通道权限不匹配。',
-            items: ['确认模型名完全一致', '检查 API Key 所属分组', '确认对应通道已启用', '用模型广场核对可用列表'],
-            note: '不要只改客户端模型名，先确认控制台是否真的开放该模型。'
+            title: '模型不支持或模型不存在',
+            description: '出现 Requested model is not supported by this API key/group 时，请求还没有进入模型生成阶段。',
+            items: ['在价格与模型页搜索完整模型 ID', '展开详情确认目标分组包含该模型', '检查正在使用的 Key 是否绑定该分组', '修改后重启客户端并发起全新请求'],
+            note: '同一个模型可能只在部分分组开放；换模型名之前先确认 Key 分组。'
           },
           auth: {
             title: '401 或认证失败怎么办？',
-            description: '认证失败通常与 Key 格式、复制错误、环境变量覆盖或请求头缺失有关。',
+            description: '401 通常由 Key 错误或旧环境变量覆盖配置导致，和模型能力无关。',
             items: [
-              '检查 Authorization Bearer 格式',
-              '确认 Key 没有多余换行',
-              '确认 CLI 读取的是最新环境变量',
-              '必要时重新创建测试 Key'
+              '重新从 Key 列表复制完整密钥',
+              '检查 Key 状态、过期时间与额度限制',
+              '清理旧的 ANTHROPIC_* 或 OPENAI_* 环境变量',
+              '用“使用密钥”重新生成最小配置'
             ],
-            note: '浏览器、终端和 IDE 插件可能读取不同环境变量。'
+            note: '终端、VS Code 和桌面客户端可能读取不同配置文件；先确定报错请求究竟由哪个客户端发出。'
           },
           billing: {
-            title: '充值后仍无法调用？',
-            description: '余额只是调用条件之一，还需要确认套餐、分组、通道状态和模型权限。',
-            items: ['确认支付结果已回写', '查看钱包余额是否更新', '确认 Key 未过期或超额', '检查通道和模型权限'],
-            note: '如果充值通道关闭或支付回写延迟，先看订单状态。'
+            title: '有余额但仍无法调用',
+            description: '余额、套餐、Key 额度和模型权限是相互独立的检查项。',
+            items: ['确认订单已完成且钱包余额已更新', '订阅分组确认套餐仍在有效期', '检查 Key 总额度与时间窗口额度', '核对分组状态和目标模型权限'],
+            note: '充值成功只解决余额问题，不会自动改变 API Key 分组或模型白名单。'
           },
           latency: {
-            title: '延迟高或请求卡住怎么办？',
-            description: '延迟可能来自上游、网络、模型排队、工具重试或上下文过大。',
+            title: '请求缓慢、中断或反复重试',
+            description: '先区分客户端未发送请求、网关拒绝、上游首字节慢和输出中途断开，四类问题的处理方式不同。',
             items: [
-              '查看服务状态页延迟趋势',
-              '缩小 prompt 测试最小请求',
-              '检查是否触发限流或重试',
-              '记录请求时间点便于查日志'
+              '确认 SubAPIs 用量或错误记录中是否出现该请求',
+              '保存客户端显示的请求 ID 与准确时间',
+              '用新会话和短消息做对照，但不要覆盖原证据',
+              '同时提供用户、分组、模型和是否流式'
             ],
-            note: '如果能提供具体 API Key 和时间点，调度日志会更容易定位。'
-          }
-        }
-      },
-      policies: {
-        eyebrow: '政策',
-        title: '条款与政策',
-        description: '把登录条款和使用边界放进教程页，方便用户在接入前确认合规要求。',
-        articles: {
-          terms: {
-            title: '服务条款',
-            description: '说明服务使用、客户内容、费用、暂停、终止和责任限制等基础规则。',
-            items: [
-              '接入前阅读服务条款',
-              '确认组织授权和使用边界',
-              '了解费用和退款规则',
-              '保存关键条款链接便于团队查看'
-            ],
-            note: '条款内容以后台配置的正式版本为准。'
-          },
-          aup: {
-            title: '使用政策（AUP）',
-            description: '说明禁止用途、高风险场景要求和面向用户披露义务。',
-            items: [
-              '禁止违法、欺诈、滥用和高危用途',
-              '高风险场景需要人工审核',
-              '面向用户聊天机器人需要披露 AI',
-              '服务未成年人需遵守额外要求'
-            ],
-            note: '如果业务场景接近高风险用途，先做人工审核和披露设计。'
-          },
-          regions: {
-            title: '支持地区',
-            description: '说明商业 API 和服务当前支持的国家、地区和额外限制。',
-            items: ['确认客户所在地区是否支持', '注意制裁和出口限制', '未列出地区先联系支持', '特定服务可能有额外限制'],
-            note: '地区列表可能更新，以正式支持地区页面为准。'
-          },
-          serviceTerms: {
-            title: '服务特定条款',
-            description: '说明团队版、企业版、Beta、微调、云托管、开发合作计划等服务补充条款。',
-            items: [
-              '团队或企业场景需告知用户',
-              'Beta 服务不适合生产依赖',
-              '微调材料属于客户内容',
-              '云托管服务还受云平台政策约束'
-            ],
-            note: '服务特定条款优先适用于对应服务。'
+            note: '请求 ID 是最有效的排障入口。不要发送完整 API Key；提供 Key 名称或末尾标识即可。'
           }
         }
       }
