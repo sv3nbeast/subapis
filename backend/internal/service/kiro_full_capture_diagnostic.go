@@ -29,7 +29,6 @@ var (
 	kiroFullCaptureSessions    atomic.Int64
 )
 
-const kiroFullCaptureTargetSessionID = "805fe2a8-2c53-47ae-8e5d-adee841aa9f6"
 const kiroFullCaptureMarker = "Try again"
 
 type kiroFullCaptureContextKey struct{}
@@ -64,10 +63,6 @@ type kiroFullCaptureBufferedFile struct {
 func maybeStartKiroFullCapture(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest, body []byte) context.Context {
 	if parsed == nil || parsed.SessionContext == nil || parsed.SessionContext.UserID != 1 || parsed.SessionContext.APIKeyID != 119 ||
 		parsed.GroupID == nil || *parsed.GroupID != 29 || !strings.EqualFold(strings.TrimSpace(parsed.Model), "claude-opus-5") {
-		return ctx
-	}
-	metadataUserID := ParseMetadataUserID(parsed.MetadataUserID)
-	if metadataUserID == nil || strings.TrimSpace(metadataUserID.SessionID) != kiroFullCaptureTargetSessionID {
 		return ctx
 	}
 	if !bytes.Contains(body, []byte(kiroFullCaptureMarker)) {

@@ -32,7 +32,6 @@ func TestKiroFullCaptureStoresBodyRoundTripAndRedactsCredentialsForTargetOnly(t 
 		Model:          "claude-opus-5",
 		Stream:         true,
 		GroupID:        &groupID,
-		MetadataUserID: FormatMetadataUserID(strings.Repeat("a", 64), "", kiroFullCaptureTargetSessionID, "2.1.241"),
 		SessionContext: &SessionContext{UserID: 1, APIKeyID: 119},
 	}
 	gin.SetMode(gin.TestMode)
@@ -51,9 +50,6 @@ func TestKiroFullCaptureStoresBodyRoundTripAndRedactsCredentialsForTargetOnly(t 
 	require.Nil(t, kiroFullCaptureFromContext(maybeStartKiroFullCapture(context.Background(), c, account, &nonTarget, clientBody)))
 	nonTarget = *parsed
 	nonTarget.SessionContext = &SessionContext{UserID: 1, APIKeyID: 1}
-	require.Nil(t, kiroFullCaptureFromContext(maybeStartKiroFullCapture(context.Background(), c, account, &nonTarget, clientBody)))
-	nonTarget = *parsed
-	nonTarget.MetadataUserID = FormatMetadataUserID(strings.Repeat("b", 64), "", "other-session", "2.1.241")
 	require.Nil(t, kiroFullCaptureFromContext(maybeStartKiroFullCapture(context.Background(), c, account, &nonTarget, clientBody)))
 	require.Nil(t, kiroFullCaptureFromContext(maybeStartKiroFullCapture(
 		context.Background(), c, account, parsed, []byte(`{"model":"claude-opus-5","content":"no marker"}`),
@@ -147,7 +143,6 @@ func TestKiroFullCaptureNianzsRouteCapturesTranslatedPayloadAndEventStream(t *te
 	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
 	require.NoError(t, err)
 	parsed.GroupID = &groupID
-	parsed.MetadataUserID = FormatMetadataUserID(strings.Repeat("c", 64), "", kiroFullCaptureTargetSessionID, "2.1.241")
 	parsed.SessionContext = &SessionContext{UserID: 1, APIKeyID: 119}
 
 	recorder := httptest.NewRecorder()
