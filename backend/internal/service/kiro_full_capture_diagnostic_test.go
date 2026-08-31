@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestKiroFullCaptureStoresUnredactedRoundTripForTargetOnly(t *testing.T) {
+func TestKiroFullCaptureStoresBodyRoundTripAndRedactsCredentialsForTargetOnly(t *testing.T) {
 	oldRoot := kiroFullCaptureRoot
 	oldMax := kiroFullCaptureMaxSessions
 	kiroFullCaptureRoot = t.TempDir()
@@ -32,6 +32,7 @@ func TestKiroFullCaptureStoresUnredactedRoundTripForTargetOnly(t *testing.T) {
 		Model:          "claude-opus-5",
 		Stream:         true,
 		GroupID:        &groupID,
+		MetadataUserID: FormatMetadataUserID(strings.Repeat("a", 64), "", kiroFullCaptureTargetSessionID, "2.1.241"),
 		SessionContext: &SessionContext{UserID: 1, APIKeyID: 119},
 	}
 	gin.SetMode(gin.TestMode)
@@ -51,16 +52,26 @@ func TestKiroFullCaptureStoresUnredactedRoundTripForTargetOnly(t *testing.T) {
 	nonTarget = *parsed
 	nonTarget.SessionContext = &SessionContext{UserID: 1, APIKeyID: 1}
 	require.Nil(t, kiroFullCaptureFromContext(maybeStartKiroFullCapture(context.Background(), c, account, &nonTarget, clientBody)))
+	nonTarget = *parsed
+	nonTarget.MetadataUserID = FormatMetadataUserID(strings.Repeat("b", 64), "", "other-session", "2.1.241")
+	require.Nil(t, kiroFullCaptureFromContext(maybeStartKiroFullCapture(context.Background(), c, account, &nonTarget, clientBody)))
 
 	clientHeaders, err := os.ReadFile(filepath.Join(session.dir, "01_client_request_headers.json"))
 	require.NoError(t, err)
-	require.Contains(t, string(clientHeaders), "client-secret-key")
+	require.NotContains(t, string(clientHeaders), "client-secret-key")
+	require.Contains(t, string(clientHeaders), `\u003credacted\u003e`)
+	session.writeClientResponseHeaders(http.Header{"Set-Cookie": []string{"client-response-cookie-secret"}})
+	clientResponseHeaders, err := os.ReadFile(filepath.Join(session.dir, "03_client_response_headers.json"))
+	require.NoError(t, err)
+	require.NotContains(t, string(clientResponseHeaders), "client-response-cookie-secret")
+	require.Contains(t, string(clientResponseHeaders), `\u003credacted\u003e`)
 	storedClientBody, err := os.ReadFile(filepath.Join(session.dir, "02_client_request_body.json"))
 	require.NoError(t, err)
 	require.Equal(t, clientBody, storedClientBody)
 
 	req := httptest.NewRequest(http.MethodPost, "https://q.us-east-1.amazonaws.com/generateAssistantResponse", nil)
 	req.Header.Set("Authorization", "Bearer upstream-secret-token")
+	req.Header.Set("Cookie", "upstream-cookie-secret")
 	payload := []byte(`{"conversationState":{"private":"upstream-payload-secret"}}`)
 	attempt := session.beginAttempt(account, "AmazonQ", req, payload)
 	require.NotNil(t, attempt)
@@ -78,13 +89,16 @@ func TestKiroFullCaptureStoresUnredactedRoundTripForTargetOnly(t *testing.T) {
 
 	requestHeaders, err := os.ReadFile(filepath.Join(attempt.dir, "01_upstream_request_headers.json"))
 	require.NoError(t, err)
-	require.Contains(t, string(requestHeaders), "upstream-secret-token")
+	require.NotContains(t, string(requestHeaders), "upstream-secret-token")
+	require.NotContains(t, string(requestHeaders), "upstream-cookie-secret")
+	require.Contains(t, string(requestHeaders), `\u003credacted\u003e`)
 	storedPayload, err := os.ReadFile(filepath.Join(attempt.dir, "02_upstream_request_body.json"))
 	require.NoError(t, err)
 	require.Equal(t, payload, storedPayload)
 	responseMetadata, err := os.ReadFile(filepath.Join(attempt.dir, "03_upstream_response.json"))
 	require.NoError(t, err)
-	require.Contains(t, string(responseMetadata), "provider-cookie-secret")
+	require.NotContains(t, string(responseMetadata), "provider-cookie-secret")
+	require.Contains(t, string(responseMetadata), `\u003credacted\u003e`)
 	storedRaw, err := os.ReadFile(filepath.Join(attempt.dir, "04_upstream_response.eventstream"))
 	require.NoError(t, err)
 	require.Equal(t, raw, storedRaw)
@@ -130,6 +144,7 @@ func TestKiroFullCaptureNianzsRouteCapturesTranslatedPayloadAndEventStream(t *te
 	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
 	require.NoError(t, err)
 	parsed.GroupID = &groupID
+	parsed.MetadataUserID = FormatMetadataUserID(strings.Repeat("c", 64), "", kiroFullCaptureTargetSessionID, "2.1.241")
 	parsed.SessionContext = &SessionContext{UserID: 1, APIKeyID: 119}
 
 	recorder := httptest.NewRecorder()

@@ -19,13 +19,16 @@ import (
 	"github.com/google/uuid"
 )
 
-// Temporary production diagnostic for the admin Opus 5 interruption incident. This branch is not
-// intended for permanent release: it stores unredacted request/response bytes.
+// Temporary production diagnostic for one Opus 5 interruption session. This branch is not
+// intended for permanent release: it stores unredacted request/response bodies while removing
+// credential-bearing headers.
 var (
-	kiroFullCaptureRoot              = "/app/data/kiro-full-capture-admin-opus5-20260831"
-	kiroFullCaptureMaxSessions int64 = 16
+	kiroFullCaptureRoot              = "/app/data/kiro-full-capture-96aa8a81"
+	kiroFullCaptureMaxSessions int64 = 4
 	kiroFullCaptureSessions    atomic.Int64
 )
+
+const kiroFullCaptureTargetSessionID = "d442d75a-5806-41de-a48a-355965bd6884"
 
 type kiroFullCaptureContextKey struct{}
 
@@ -59,6 +62,10 @@ type kiroFullCaptureBufferedFile struct {
 func maybeStartKiroFullCapture(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest, body []byte) context.Context {
 	if parsed == nil || parsed.SessionContext == nil || parsed.SessionContext.UserID != 1 || parsed.SessionContext.APIKeyID != 119 ||
 		parsed.GroupID == nil || *parsed.GroupID != 29 || !strings.EqualFold(strings.TrimSpace(parsed.Model), "claude-opus-5") {
+		return ctx
+	}
+	metadataUserID := ParseMetadataUserID(parsed.MetadataUserID)
+	if metadataUserID == nil || strings.TrimSpace(metadataUserID.SessionID) != kiroFullCaptureTargetSessionID {
 		return ctx
 	}
 	sequence := kiroFullCaptureSessions.Add(1)
@@ -103,7 +110,7 @@ func maybeStartKiroFullCapture(ctx context.Context, c *gin.Context, account *Acc
 	}
 	_ = writeKiroFullCaptureJSON(filepath.Join(dir, "00_metadata.json"), metadata)
 	if c != nil && c.Request != nil {
-		_ = writeKiroFullCaptureJSON(filepath.Join(dir, "01_client_request_headers.json"), c.Request.Header)
+		_ = writeKiroFullCaptureJSON(filepath.Join(dir, "01_client_request_headers.json"), kiroFullCaptureSafeHeaders(c.Request.Header))
 	}
 	_ = writeKiroFullCaptureFile(filepath.Join(dir, "02_client_request_body.json"), body)
 	return context.WithValue(ctx, kiroFullCaptureContextKey{}, session)
@@ -153,9 +160,14 @@ func (s *kiroFullCaptureSession) beginAttempt(account *Account, endpointName str
 	if req != nil {
 		metadata["method"] = req.Method
 		if req.URL != nil {
-			metadata["url"] = req.URL.String()
+			safeURL := *req.URL
+			safeURL.User = nil
+			safeURL.RawQuery = ""
+			safeURL.ForceQuery = false
+			safeURL.Fragment = ""
+			metadata["url"] = safeURL.String()
 		}
-		_ = writeKiroFullCaptureJSON(filepath.Join(dir, "01_upstream_request_headers.json"), req.Header)
+		_ = writeKiroFullCaptureJSON(filepath.Join(dir, "01_upstream_request_headers.json"), kiroFullCaptureSafeHeaders(req.Header))
 	}
 	_ = writeKiroFullCaptureJSON(filepath.Join(dir, "00_attempt_metadata.json"), metadata)
 	_ = writeKiroFullCaptureFile(filepath.Join(dir, "02_upstream_request_body.json"), payload)
@@ -179,7 +191,7 @@ func (a *kiroFullCaptureAttempt) wrapResponse(resp *http.Response) {
 		"status_code":       resp.StatusCode,
 		"content_length":    resp.ContentLength,
 		"transfer_encoding": resp.TransferEncoding,
-		"headers":           resp.Header,
+		"headers":           kiroFullCaptureSafeHeaders(resp.Header),
 	}
 	_ = writeKiroFullCaptureJSON(filepath.Join(a.dir, "03_upstream_response.json"), metadata)
 	if resp.Body == nil {
@@ -190,6 +202,28 @@ func (a *kiroFullCaptureAttempt) wrapResponse(resp *http.Response) {
 		return
 	}
 	resp.Body = &kiroFullCaptureResponseBody{source: resp.Body, capture: capture}
+}
+
+func kiroFullCaptureSafeHeaders(headers http.Header) http.Header {
+	if len(headers) == 0 {
+		return nil
+	}
+	safe := headers.Clone()
+	sensitive := map[string]struct{}{
+		"authorization":        {},
+		"proxy-authorization":  {},
+		"cookie":               {},
+		"set-cookie":           {},
+		"x-api-key":            {},
+		"x-amz-security-token": {},
+		"x-authorization":      {},
+	}
+	for name := range safe {
+		if _, exists := sensitive[strings.ToLower(strings.TrimSpace(name))]; exists {
+			safe[name] = []string{"<redacted>"}
+		}
+	}
+	return safe
 }
 
 func (b *kiroFullCaptureResponseBody) Read(p []byte) (int, error) {
@@ -213,7 +247,7 @@ func (s *kiroFullCaptureSession) writeClientResponseHeaders(headers http.Header)
 	if s == nil {
 		return
 	}
-	_ = writeKiroFullCaptureJSON(filepath.Join(s.dir, "03_client_response_headers.json"), headers)
+	_ = writeKiroFullCaptureJSON(filepath.Join(s.dir, "03_client_response_headers.json"), kiroFullCaptureSafeHeaders(headers))
 }
 
 func (s *kiroFullCaptureSession) writeClientResponseBody(body []byte, extension string) {
