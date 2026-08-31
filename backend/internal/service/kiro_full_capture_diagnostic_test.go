@@ -96,6 +96,15 @@ func TestKiroFullCaptureStoresUnredactedRoundTripForTargetOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte("client-sse-secret"), storedDownstream)
 
+	var finalDownstream bytes.Buffer
+	finalMirror, finalCloser := session.newClientResponseMirrorNamed(&finalDownstream, "05_client_response.sse")
+	_, err = finalMirror.Write([]byte("final-client-sse-secret"))
+	require.NoError(t, err)
+	require.NoError(t, finalCloser.Close())
+	storedFinalDownstream, err := os.ReadFile(filepath.Join(session.dir, "05_client_response.sse"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("final-client-sse-secret"), storedFinalDownstream)
+
 	info, err := os.Stat(filepath.Join(attempt.dir, "04_upstream_response.eventstream"))
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
@@ -150,8 +159,13 @@ func TestKiroFullCaptureNianzsRouteCapturesTranslatedPayloadAndEventStream(t *te
 	rawEventStream, err := os.ReadFile(filepath.Join(attemptDir, "04_upstream_response.eventstream"))
 	require.NoError(t, err)
 	require.NotEmpty(t, rawEventStream)
-	clientSSE, err := os.ReadFile(filepath.Join(sessionDir, "04_client_response.sse"))
+	translatedSSE, err := os.ReadFile(filepath.Join(sessionDir, "04_translated_response.sse"))
 	require.NoError(t, err)
+	clientSSE, err := os.ReadFile(filepath.Join(sessionDir, "05_client_response.sse"))
+	require.NoError(t, err)
+	require.NotEqual(t, translatedSSE, clientSSE, "final gateway normalization must remain observable as a separate stage")
+	require.Contains(t, string(translatedSSE), "_sub2api_kiro_usage_final")
+	require.NotContains(t, string(clientSSE), "_sub2api_kiro_usage_final")
 	var visible strings.Builder
 	for _, event := range nianzsSSEPayloadsByType(string(clientSSE), "content_block_delta") {
 		if event.Get("delta.type").String() == "text_delta" {
@@ -159,5 +173,6 @@ func TestKiroFullCaptureNianzsRouteCapturesTranslatedPayloadAndEventStream(t *te
 		}
 	}
 	require.Contains(t, visible.String(), "captured route response")
+	require.Equal(t, 1, bytes.Count(translatedSSE, []byte("event: message_stop")))
 	require.Equal(t, 1, bytes.Count(clientSSE, []byte("event: message_stop")))
 }

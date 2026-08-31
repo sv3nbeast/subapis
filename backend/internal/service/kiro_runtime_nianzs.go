@@ -650,7 +650,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 		streamDestination := io.Writer(pw)
 		var clientCaptureCloser io.Closer
 		if capture := kiroFullCaptureFromContext(ctx); capture != nil {
-			streamDestination, clientCaptureCloser = capture.newClientResponseMirror(streamDestination)
+			streamDestination, clientCaptureCloser = capture.newClientResponseMirrorNamed(streamDestination, "04_translated_response.sse")
 			if clientCaptureCloser != nil {
 				defer func() { _ = clientCaptureCloser.Close() }()
 			}

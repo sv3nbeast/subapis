@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -18,11 +19,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// Temporary production diagnostic for incident 175e6e7a. This branch is not
+// Temporary production diagnostic for the admin Opus 5 interruption incident. This branch is not
 // intended for permanent release: it stores unredacted request/response bytes.
 var (
-	kiroFullCaptureRoot              = "/app/data/kiro-full-capture-175e6e7a"
-	kiroFullCaptureMaxSessions int64 = 32
+	kiroFullCaptureRoot              = "/app/data/kiro-full-capture-admin-opus5-20260831"
+	kiroFullCaptureMaxSessions int64 = 16
 	kiroFullCaptureSessions    atomic.Int64
 )
 
@@ -38,14 +39,21 @@ type kiroFullCaptureAttempt struct {
 }
 
 type kiroFullCaptureResponseBody struct {
-	source io.ReadCloser
-	file   *os.File
-	once   sync.Once
+	source  io.ReadCloser
+	capture *kiroFullCaptureBufferedFile
+	once    sync.Once
 }
 
 type kiroFullCaptureMirrorWriter struct {
 	primary io.Writer
 	capture io.Writer
+}
+
+type kiroFullCaptureBufferedFile struct {
+	file   *os.File
+	writer *bufio.Writer
+	once   sync.Once
+	err    error
 }
 
 func maybeStartKiroFullCapture(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest, body []byte) context.Context {
@@ -87,6 +95,11 @@ func maybeStartKiroFullCapture(ctx context.Context, c *gin.Context, account *Acc
 		"account_name":   accountName,
 		"gateway_path":   requestPath(c),
 		"gateway_method": requestMethod(c),
+		"request_bytes":  len(body),
+	}
+	if c != nil {
+		metadata["gateway_request_id"] = strings.TrimSpace(c.GetString("request_id"))
+		metadata["client_request_id"] = strings.TrimSpace(c.GetString("client_request_id"))
 	}
 	_ = writeKiroFullCaptureJSON(filepath.Join(dir, "00_metadata.json"), metadata)
 	if c != nil && c.Request != nil {
@@ -172,17 +185,17 @@ func (a *kiroFullCaptureAttempt) wrapResponse(resp *http.Response) {
 	if resp.Body == nil {
 		return
 	}
-	f, err := os.OpenFile(filepath.Join(a.dir, "04_upstream_response.eventstream"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	capture, err := newKiroFullCaptureBufferedFile(filepath.Join(a.dir, "04_upstream_response.eventstream"))
 	if err != nil {
 		return
 	}
-	resp.Body = &kiroFullCaptureResponseBody{source: resp.Body, file: f}
+	resp.Body = &kiroFullCaptureResponseBody{source: resp.Body, capture: capture}
 }
 
 func (b *kiroFullCaptureResponseBody) Read(p []byte) (int, error) {
 	n, err := b.source.Read(p)
 	if n > 0 {
-		_, _ = b.file.Write(p[:n])
+		_, _ = b.capture.Write(p[:n])
 	}
 	return n, err
 }
@@ -191,8 +204,7 @@ func (b *kiroFullCaptureResponseBody) Close() error {
 	var sourceErr error
 	b.once.Do(func() {
 		sourceErr = b.source.Close()
-		_ = b.file.Sync()
-		_ = b.file.Close()
+		_ = b.capture.Close()
 	})
 	return sourceErr
 }
@@ -216,14 +228,22 @@ func (s *kiroFullCaptureSession) writeClientResponseBody(body []byte, extension 
 }
 
 func (s *kiroFullCaptureSession) newClientResponseMirror(primary io.Writer) (io.Writer, io.Closer) {
+	return s.newClientResponseMirrorNamed(primary, "04_client_response.sse")
+}
+
+func (s *kiroFullCaptureSession) newClientResponseMirrorNamed(primary io.Writer, filename string) (io.Writer, io.Closer) {
 	if s == nil || primary == nil {
 		return primary, nil
 	}
-	f, err := os.OpenFile(filepath.Join(s.dir, "04_client_response.sse"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	filename = filepath.Base(strings.TrimSpace(filename))
+	if filename == "." || filename == "" {
+		return primary, nil
+	}
+	capture, err := newKiroFullCaptureBufferedFile(filepath.Join(s.dir, filename))
 	if err != nil {
 		return primary, nil
 	}
-	return &kiroFullCaptureMirrorWriter{primary: primary, capture: f}, f
+	return &kiroFullCaptureMirrorWriter{primary: primary, capture: capture}, capture
 }
 
 func (w *kiroFullCaptureMirrorWriter) Write(p []byte) (int, error) {
@@ -232,6 +252,42 @@ func (w *kiroFullCaptureMirrorWriter) Write(p []byte) (int, error) {
 		_, _ = w.capture.Write(p[:n])
 	}
 	return n, err
+}
+
+func newKiroFullCaptureBufferedFile(path string) (*kiroFullCaptureBufferedFile, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	return &kiroFullCaptureBufferedFile{
+		file:   f,
+		writer: bufio.NewWriterSize(f, 256*1024),
+	}, nil
+}
+
+func (f *kiroFullCaptureBufferedFile) Write(p []byte) (int, error) {
+	if f == nil || f.writer == nil {
+		return 0, os.ErrInvalid
+	}
+	return f.writer.Write(p)
+}
+
+func (f *kiroFullCaptureBufferedFile) Close() error {
+	if f == nil {
+		return nil
+	}
+	f.once.Do(func() {
+		if err := f.writer.Flush(); err != nil {
+			f.err = err
+		}
+		if err := f.file.Sync(); f.err == nil && err != nil {
+			f.err = err
+		}
+		if err := f.file.Close(); f.err == nil && err != nil {
+			f.err = err
+		}
+	})
+	return f.err
 }
 
 func writeKiroFullCaptureJSON(path string, value any) error {
