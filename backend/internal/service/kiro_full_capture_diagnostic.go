@@ -2,6 +2,7 @@ package service
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -29,6 +30,7 @@ var (
 )
 
 const kiroFullCaptureTargetSessionID = "805fe2a8-2c53-47ae-8e5d-adee841aa9f6"
+const kiroFullCaptureMarker = "SUB2API_CAPTURE_96AA8A81_20260901"
 
 type kiroFullCaptureContextKey struct{}
 
@@ -66,6 +68,9 @@ func maybeStartKiroFullCapture(ctx context.Context, c *gin.Context, account *Acc
 	}
 	metadataUserID := ParseMetadataUserID(parsed.MetadataUserID)
 	if metadataUserID == nil || strings.TrimSpace(metadataUserID.SessionID) != kiroFullCaptureTargetSessionID {
+		return ctx
+	}
+	if !bytes.Contains(body, []byte(kiroFullCaptureMarker)) {
 		return ctx
 	}
 	sequence := kiroFullCaptureSessions.Add(1)

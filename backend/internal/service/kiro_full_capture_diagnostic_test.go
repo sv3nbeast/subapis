@@ -40,7 +40,7 @@ func TestKiroFullCaptureStoresBodyRoundTripAndRedactsCredentialsForTargetOnly(t 
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	c.Request.Header.Set("x-api-key", "client-secret-key")
 	account := &Account{ID: 2597, Name: "capture-account"}
-	clientBody := []byte(`{"model":"claude-opus-5","private":"client-body-secret"}`)
+	clientBody := []byte(`{"model":"claude-opus-5","private":"client-body-secret","marker":"` + kiroFullCaptureMarker + `"}`)
 
 	ctx := maybeStartKiroFullCapture(context.Background(), c, account, parsed, clientBody)
 	session := kiroFullCaptureFromContext(ctx)
@@ -55,6 +55,9 @@ func TestKiroFullCaptureStoresBodyRoundTripAndRedactsCredentialsForTargetOnly(t 
 	nonTarget = *parsed
 	nonTarget.MetadataUserID = FormatMetadataUserID(strings.Repeat("b", 64), "", "other-session", "2.1.241")
 	require.Nil(t, kiroFullCaptureFromContext(maybeStartKiroFullCapture(context.Background(), c, account, &nonTarget, clientBody)))
+	require.Nil(t, kiroFullCaptureFromContext(maybeStartKiroFullCapture(
+		context.Background(), c, account, parsed, []byte(`{"model":"claude-opus-5","content":"no marker"}`),
+	)))
 
 	clientHeaders, err := os.ReadFile(filepath.Join(session.dir, "01_client_request_headers.json"))
 	require.NoError(t, err)
@@ -140,7 +143,7 @@ func TestKiroFullCaptureNianzsRouteCapturesTranslatedPayloadAndEventStream(t *te
 	}()
 
 	groupID := int64(29)
-	body := []byte(`{"model":"claude-opus-5","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"capture route"}]}`)
+	body := []byte(`{"model":"claude-opus-5","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"` + kiroFullCaptureMarker + ` capture route"}]}`)
 	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
 	require.NoError(t, err)
 	parsed.GroupID = &groupID
