@@ -30,7 +30,7 @@ var (
 )
 
 const kiroFullCaptureTargetSessionID = "805fe2a8-2c53-47ae-8e5d-adee841aa9f6"
-const kiroFullCaptureMarker = "SUB2API_CAPTURE_96AA8A81_20260901"
+const kiroFullCaptureMarker = "Try again"
 
 type kiroFullCaptureContextKey struct{}
 
