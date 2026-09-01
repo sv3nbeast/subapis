@@ -96,6 +96,9 @@ func IsGatewayPreSemanticRetryableFailure(failoverErr *UpstreamFailoverError) bo
 	if failoverErr == nil || failoverErr.FailoverProhibited {
 		return false
 	}
+	if failoverErr.Reason == GatewayFailureReasonKiroContentProcessingFailed {
+		return false
+	}
 	switch failoverErr.FailureKind {
 	case UpstreamFailureRateLimited,
 		UpstreamFailureResponseHeaderTimeout,

@@ -2318,6 +2318,9 @@ func (h *GatewayHandler) resolveFailoverExhaustedError(c *gin.Context, failoverE
 	if status, errType, message, ok := resolveModelCapacityFailover(c, failoverErr); ok {
 		return status, errType, message
 	}
+	if status, errType, message, ok := resolveKiroContentProcessingFailover(c, failoverErr); ok {
+		return status, errType, message
+	}
 
 	statusCode := failoverErr.StatusCode
 	responseBody := failoverErr.ResponseBody

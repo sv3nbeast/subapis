@@ -414,6 +414,153 @@ func TestHandleKiroIncompleteStreamExhaustedReturns503(t *testing.T) {
 	require.Contains(t, w.Body.String(), `"type":"upstream_error"`)
 }
 
+func confirmedKiroContentProcessingFailure() *service.UpstreamFailoverError {
+	return &service.UpstreamFailoverError{
+		StatusCode:             http.StatusServiceUnavailable,
+		FailureKind:            service.UpstreamFailureIncompleteStream,
+		Reason:                 service.GatewayFailureReasonKiroContentProcessingFailed,
+		Scope:                  service.GatewayFailureScopeRequest,
+		ClientStatusCode:       http.StatusUnprocessableEntity,
+		ClientMessage:          service.KiroUpstreamContentProcessingFailedClientMessage,
+		RequestScopedTransient: true,
+		RetryableOnSameAccount: false,
+		SuppressTempUnschedule: true,
+		RetryAfter:             30 * time.Second,
+	}
+}
+
+func TestHandleKiroContentProcessingFailureReturnsActionable422(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	(&GatewayHandler{}).handleFailoverExhausted(c, confirmedKiroContentProcessingFailure(), service.PlatformKiro, false)
+
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	require.Empty(t, w.Header().Get("Retry-After"))
+	require.Equal(t, "upstream_provider", w.Header().Get("X-SubAPIs-Error-Source"))
+	require.Equal(t, kiroNoSemanticOutputErrorCode, w.Header().Get("X-SubAPIs-Error-Code"))
+	require.Equal(t, "false", w.Header().Get("X-SubAPIs-Retryable"))
+	require.JSONEq(t, `{
+		"type":"error",
+		"error":{
+			"type":"upstream_content_processing_failed",
+			"message":"模型已接收请求，但未生成任何响应内容。疑似触发内容风控策略或模型处理异常。请修改内容或者切换模型后重试。"
+		}
+	}`, w.Body.String())
+	status, exists := c.Get(service.OpsUpstreamStatusCodeKey)
+	require.True(t, exists)
+	require.Equal(t, http.StatusOK, status, "ops must preserve that the provider accepted the request")
+	detail, exists := c.Get(service.OpsUpstreamErrorDetailKey)
+	require.True(t, exists)
+	require.Contains(t, detail, "error_code=upstream_no_semantic_output")
+}
+
+func TestHandleKiroContentProcessingFailurePreservesProtocolErrorShapes(t *testing.T) {
+	tests := []struct {
+		name      string
+		path      string
+		invoke    func(*GatewayHandler, *gin.Context, *service.UpstreamFailoverError)
+		field     string
+		wantValue string
+	}{
+		{
+			name: "chat completions",
+			path: "/v1/chat/completions",
+			invoke: func(h *GatewayHandler, c *gin.Context, failoverErr *service.UpstreamFailoverError) {
+				h.handleCCFailoverExhausted(c, failoverErr, false)
+			},
+			field: "type", wantValue: kiroContentProcessingFailedErrorType,
+		},
+		{
+			name: "responses",
+			path: "/v1/responses",
+			invoke: func(h *GatewayHandler, c *gin.Context, failoverErr *service.UpstreamFailoverError) {
+				h.handleResponsesFailoverExhausted(c, failoverErr, false)
+			},
+			field: "code", wantValue: kiroContentProcessingFailedErrorType,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, tt.path, nil)
+			tt.invoke(&GatewayHandler{}, c, confirmedKiroContentProcessingFailure())
+
+			require.Equal(t, http.StatusUnprocessableEntity, w.Code)
+			var payload struct {
+				Error map[string]any `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+			require.Equal(t, tt.wantValue, payload.Error[tt.field])
+			require.Equal(t, service.KiroUpstreamContentProcessingFailedClientMessage, payload.Error["message"])
+		})
+	}
+}
+
+func TestHandleKiroContentProcessingFailureAfterCommittedStreamEmitsErrorEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	(&GatewayHandler{}).handleFailoverExhausted(c, confirmedKiroContentProcessingFailure(), service.PlatformKiro, true)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), `"type":"upstream_content_processing_failed"`)
+	require.Contains(t, w.Body.String(), service.KiroUpstreamContentProcessingFailedClientMessage)
+	streamErr, ok := service.GetOpsStreamError(c)
+	require.True(t, ok)
+	require.Equal(t, http.StatusUnprocessableEntity, streamErr.IntendedStatus)
+}
+
+func TestOpenAIHandlersReturnKiroContentProcessingFailure(t *testing.T) {
+	t.Run("OpenAI native error carries stable code", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+		(&OpenAIGatewayHandler{}).handleFailoverExhausted(c, confirmedKiroContentProcessingFailure(), false)
+
+		require.Equal(t, http.StatusUnprocessableEntity, w.Code)
+		require.Contains(t, w.Body.String(), `"type":"upstream_content_processing_failed"`)
+		require.Contains(t, w.Body.String(), `"code":"upstream_no_semantic_output"`)
+		require.Contains(t, w.Body.String(), service.KiroUpstreamContentProcessingFailedClientMessage)
+	})
+
+	t.Run("Anthropic compatibility keeps Anthropic error envelope", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/messages", nil)
+
+		(&OpenAIGatewayHandler{}).handleAnthropicFailoverExhausted(c, confirmedKiroContentProcessingFailure(), false)
+
+		require.Equal(t, http.StatusUnprocessableEntity, w.Code)
+		require.Contains(t, w.Body.String(), `"type":"upstream_content_processing_failed"`)
+		require.Contains(t, w.Body.String(), service.KiroUpstreamContentProcessingFailedClientMessage)
+	})
+}
+
+func TestBuildOpenAIWSKiroContentProcessingFailure(t *testing.T) {
+	payload, ok := buildOpenAIWSKiroContentProcessingFailure(confirmedKiroContentProcessingFailure())
+	require.True(t, ok)
+	require.JSONEq(t, `{
+		"type":"error",
+		"error":{
+			"type":"upstream_content_processing_failed",
+			"code":"upstream_no_semantic_output",
+			"message":"模型已接收请求，但未生成任何响应内容。疑似触发内容风控策略或模型处理异常。请修改内容或者切换模型后重试。",
+			"source":"upstream_provider",
+			"retryable":false
+		}
+	}`, string(payload))
+
+	_, ok = buildOpenAIWSKiroContentProcessingFailure(newKiroMetadataOnlyEOFFailover())
+	require.False(t, ok, "one credential is not enough to claim a content-shaped failure")
+}
+
 func withPlatform(ctx context.Context, platform string) context.Context {
 	return context.WithValue(ctx, ctxkey.Platform, platform)
 }

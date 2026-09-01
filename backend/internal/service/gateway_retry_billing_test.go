@@ -81,6 +81,11 @@ func TestIsGatewayPreSemanticRetryableFailure(t *testing.T) {
 		FailureKind:        UpstreamFailureIncompleteStream,
 		FailoverProhibited: true,
 	}))
+	require.False(t, IsGatewayPreSemanticRetryableFailure(&UpstreamFailoverError{
+		StatusCode:  503,
+		FailureKind: UpstreamFailureIncompleteStream,
+		Reason:      GatewayFailureReasonKiroContentProcessingFailed,
+	}))
 	require.False(t, IsGatewayPreSemanticRetryableFailure(&UpstreamFailoverError{StatusCode: 400}))
 	require.True(t, IsGatewayPreSemanticNetworkError(io.ErrUnexpectedEOF))
 	require.False(t, IsGatewayPreSemanticNetworkError(context.Canceled))

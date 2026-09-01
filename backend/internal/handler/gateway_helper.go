@@ -262,6 +262,38 @@ func resolveModelCapacityFailover(c *gin.Context, failoverErr *service.UpstreamF
 	return status, "overloaded_error", message, true
 }
 
+const (
+	kiroContentProcessingFailedErrorType = "upstream_content_processing_failed"
+	kiroNoSemanticOutputErrorCode        = "upstream_no_semantic_output"
+)
+
+func resolveKiroContentProcessingFailover(c *gin.Context, failoverErr *service.UpstreamFailoverError) (int, string, string, bool) {
+	if failoverErr == nil || failoverErr.Reason != service.GatewayFailureReasonKiroContentProcessingFailed {
+		return 0, "", "", false
+	}
+	status := failoverErr.ClientStatusCode
+	if status <= 0 {
+		status = http.StatusUnprocessableEntity
+	}
+	message := strings.TrimSpace(failoverErr.ClientMessage)
+	if message == "" {
+		message = service.KiroUpstreamContentProcessingFailedClientMessage
+	}
+	if c != nil {
+		c.Header("X-SubAPIs-Error-Source", "upstream_provider")
+		c.Header("X-SubAPIs-Error-Code", kiroNoSemanticOutputErrorCode)
+		c.Header("X-SubAPIs-Retryable", "false")
+		c.Writer.Header().Del("Retry-After")
+	}
+	service.SetOpsUpstreamError(
+		c,
+		http.StatusOK,
+		"Kiro upstream accepted request without semantic output",
+		"error_code="+kiroNoSemanticOutputErrorCode+";reason="+string(failoverErr.Reason),
+	)
+	return status, kiroContentProcessingFailedErrorType, message, true
+}
+
 func copyFailoverRetryAfter(c *gin.Context, headers http.Header) {
 	if c == nil || headers == nil {
 		return

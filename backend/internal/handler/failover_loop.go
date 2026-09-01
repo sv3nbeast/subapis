@@ -358,6 +358,17 @@ func (s *FailoverState) handleKiroMetadataOnlyEOF(ctx context.Context, accountID
 	failoverErr.SuppressTempUnschedule = true
 
 	if len(s.KiroMetadataOnlyEOFAccounts) >= kiroMetadataOnlyEOFMaxAccounts || s.SwitchCount >= s.MaxSwitches {
+		if len(s.KiroMetadataOnlyEOFAccounts) >= kiroMetadataOnlyEOFMaxAccounts {
+			// Two independent credentials accepted the same logical request and
+			// returned only context metadata. Surface a request-specific upstream
+			// processing failure instead of a generic gateway 503. Keep the original
+			// incomplete-stream kind for internal evidence and accounting.
+			failoverErr.Reason = service.GatewayFailureReasonKiroContentProcessingFailed
+			failoverErr.ClientStatusCode = http.StatusUnprocessableEntity
+			failoverErr.ClientMessage = service.KiroUpstreamContentProcessingFailedClientMessage
+			failoverErr.NextAccountAction = service.NextAccountStop
+			failoverErr.RetryAfter = 0
+		}
 		logger.FromContext(ctx).Warn("gateway.kiro_metadata_only_eof_exhausted",
 			zap.String("request_id", requestIDFromContext(ctx)),
 			zap.Int64("account_id", accountID),

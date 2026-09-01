@@ -1497,6 +1497,9 @@ func (h *OpenAIGatewayHandler) resolveAnthropicFailoverExhaustedError(c *gin.Con
 	if status, errType, message, ok := resolveModelCapacityFailover(c, failoverErr); ok {
 		return status, errType, message
 	}
+	if status, errType, message, ok := resolveKiroContentProcessingFailover(c, failoverErr); ok {
+		return status, errType, message
+	}
 
 	statusCode := failoverErr.StatusCode
 	responseBody := failoverErr.ResponseBody
@@ -2795,6 +2798,10 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 		h.handleStreamingAwareError(c, status, errType, message, streamStarted)
 		return
 	}
+	if status, errType, message, ok := resolveKiroContentProcessingFailover(c, failoverErr); ok {
+		h.handleStreamingAwareErrorWithCode(c, status, errType, kiroNoSemanticOutputErrorCode, message, streamStarted, true)
+		return
+	}
 	if failoverErr != nil && failoverErr.IsOpenAIRequestBodyTooLarge() {
 		message := failoverErr.ClientMessage
 		if strings.TrimSpace(message) == "" {
@@ -3154,6 +3161,15 @@ func closeOpenAIWSFailoverExhausted(conn *coderws.Conn, failoverErr *service.Ups
 		closeOpenAIClientWS(conn, coderws.StatusTryAgainLater, message)
 		return
 	}
+	if payload, ok := buildOpenAIWSKiroContentProcessingFailure(failoverErr); ok {
+		if conn != nil {
+			writeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = conn.Write(writeCtx, coderws.MessageText, payload)
+			cancel()
+		}
+		closeOpenAIClientWS(conn, coderws.StatusPolicyViolation, "upstream content processing failed")
+		return
+	}
 	switch failoverErr.StatusCode {
 	case http.StatusTooManyRequests:
 		closeOpenAIClientWS(conn, coderws.StatusTryAgainLater, "upstream rate limit exceeded, please retry later")
@@ -3164,6 +3180,30 @@ func closeOpenAIWSFailoverExhausted(conn *coderws.Conn, failoverErr *service.Ups
 	default:
 		closeOpenAIClientWS(conn, coderws.StatusInternalError, "upstream websocket proxy failed")
 	}
+}
+
+func buildOpenAIWSKiroContentProcessingFailure(failoverErr *service.UpstreamFailoverError) ([]byte, bool) {
+	if failoverErr == nil || failoverErr.Reason != service.GatewayFailureReasonKiroContentProcessingFailed {
+		return nil, false
+	}
+	message := strings.TrimSpace(failoverErr.ClientMessage)
+	if message == "" {
+		message = service.KiroUpstreamContentProcessingFailedClientMessage
+	}
+	payload, err := json.Marshal(gin.H{
+		"type": "error",
+		"error": gin.H{
+			"type":      kiroContentProcessingFailedErrorType,
+			"code":      kiroNoSemanticOutputErrorCode,
+			"message":   message,
+			"source":    "upstream_provider",
+			"retryable": false,
+		},
+	})
+	if err != nil {
+		return nil, false
+	}
+	return payload, true
 }
 
 func openAIWSModelCapacityCloseReason(failoverErr *service.UpstreamFailoverError) (string, bool) {

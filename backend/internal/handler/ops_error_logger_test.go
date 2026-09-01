@@ -79,6 +79,14 @@ func TestApplyOpsIdentityFieldsFromContext_PrefersAPIKeyAndFallsBackToSubject(t 
 	require.Equal(t, accountID, *entry.AccountID)
 }
 
+func TestKiroContentProcessingFailureClassifiesAsNonRetryableUpstream(t *testing.T) {
+	const errType = "upstream_content_processing_failed"
+	require.True(t, isKnownOpsErrorType(errType))
+	require.Equal(t, "upstream", classifyOpsPhase(errType, service.KiroUpstreamContentProcessingFailedClientMessage, ""))
+	require.False(t, classifyOpsIsRetryable(errType, http.StatusUnprocessableEntity))
+	require.Equal(t, "P2", classifyOpsSeverity(errType, http.StatusUnprocessableEntity))
+}
+
 func resetOpsErrorLoggerStateForTest(t *testing.T) {
 	t.Helper()
 

@@ -1609,6 +1609,7 @@ func isKnownOpsErrorType(t string) bool {
 		"billing_error",
 		"subscription_error",
 		"upstream_error",
+		"upstream_content_processing_failed",
 		"overloaded_error",
 		"api_error",
 		"not_found_error",
@@ -1686,7 +1687,7 @@ func classifyOpsPhase(errType, message, code string) string {
 		return "upstream"
 	case "invalid_request_error":
 		return "request"
-	case "upstream_error", "overloaded_error":
+	case "upstream_error", "upstream_content_processing_failed", "overloaded_error":
 		return "upstream"
 	case "api_error":
 		if isOpsNoAvailableAccountMessage(msg) {
@@ -1728,6 +1729,8 @@ func classifyOpsIsRetryable(errType string, statusCode int) bool {
 		return false
 	case "upstream_error", "overloaded_error":
 		return statusCode >= 500 || statusCode == 429 || statusCode == 529
+	case "upstream_content_processing_failed":
+		return false
 	default:
 		return statusCode >= 500
 	}

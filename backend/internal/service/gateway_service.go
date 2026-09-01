@@ -802,6 +802,8 @@ const (
 
 const AWSModelCapacityUnavailableClientMessage = "AWS 官方当前模型容量不足，请稍后重试或切换其他模型。"
 
+const KiroUpstreamContentProcessingFailedClientMessage = "模型已接收请求，但未生成任何响应内容。疑似触发内容风控策略或模型处理异常。请修改内容或者切换模型后重试。"
+
 type GatewayFailureStage string
 
 const (
@@ -827,7 +829,10 @@ const (
 
 type GatewayFailureReason string
 
-const GatewayFailureReasonKiroMetadataOnlyEOF GatewayFailureReason = "kiro_metadata_only_eof"
+const (
+	GatewayFailureReasonKiroMetadataOnlyEOF         GatewayFailureReason = "kiro_metadata_only_eof"
+	GatewayFailureReasonKiroContentProcessingFailed GatewayFailureReason = "kiro_content_processing_failed"
+)
 
 // UpstreamFailoverError indicates an upstream error that should trigger account failover.
 type UpstreamFailoverError struct {
@@ -944,6 +949,9 @@ func (e *UpstreamFailoverError) ShouldReportAccountScheduleFailure() bool {
 		return false
 	}
 	if e.FailureKind == UpstreamFailureModelCapacity {
+		return false
+	}
+	if e.Reason == GatewayFailureReasonKiroMetadataOnlyEOF || e.Reason == GatewayFailureReasonKiroContentProcessingFailed {
 		return false
 	}
 	return !e.IsCredentialFailure() || e.Scope == GatewayFailureScopeAccount
