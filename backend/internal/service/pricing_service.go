@@ -24,6 +24,8 @@ import (
 var (
 	openAIModelDatePattern     = regexp.MustCompile(`-\d{8}$`)
 	openAIModelBasePattern     = regexp.MustCompile(`^(gpt-\d+(?:\.\d+)?)(?:-|$)`)
+	claudeFamilyVersionPattern = regexp.MustCompile(`^claude-(opus|sonnet|haiku)-(\d+)\.(\d+)(.*)$`)
+	claudeLegacyVersionPattern = regexp.MustCompile(`^claude-(\d+)\.(\d+)-(opus|sonnet|haiku)(.*)$`)
 	openAIGPT54FallbackPricing = &LiteLLMModelPricing{
 		InputCostPerToken:               2.5e-06, // $2.5 per MTok
 		OutputCostPerToken:              1.5e-05, // $15 per MTok
@@ -811,7 +813,27 @@ func normalizeModelNameForPricing(model string) string {
 		}
 		return canonical
 	}
+	if canonical := canonicalizeClaudeModelAliasSpelling(lastSegment(model)); canonical != "" {
+		return canonical
+	}
 	return normalizeGeminiThinkingTierAlias(model)
+}
+
+// canonicalizeClaudeModelAliasSpelling normalizes the decimal model IDs used
+// by Kiro (for example claude-opus-4.8) to the hyphenated keys used by the
+// pricing catalog. This is pricing-only normalization; it never changes the
+// model forwarded upstream.
+func canonicalizeClaudeModelAliasSpelling(model string) string {
+	if !strings.HasPrefix(model, "claude-") {
+		return ""
+	}
+	if matches := claudeFamilyVersionPattern.FindStringSubmatch(model); len(matches) == 5 {
+		return "claude-" + matches[1] + "-" + matches[2] + "-" + matches[3] + matches[4]
+	}
+	if matches := claudeLegacyVersionPattern.FindStringSubmatch(model); len(matches) == 5 {
+		return "claude-" + matches[1] + "-" + matches[2] + "-" + matches[3] + matches[4]
+	}
+	return ""
 }
 
 // normalizeGeminiThinkingTierAlias maps Antigravity's Gemini 3.6 Flash
@@ -865,14 +887,17 @@ func (s *PricingService) matchByModelFamily(model string) *LiteLLMModelPricing {
 	families := []modelFamily{
 		{name: "fable-5", match: []string{"claude-fable-5", "claude-fable"}, pricing: []string{"claude-fable-5"}},
 		{name: "opus-5", match: []string{"claude-opus-5"}, pricing: []string{"claude-opus-5"}},
+		{name: "opus-4.8", match: []string{"claude-opus-4-8", "claude-opus-4.8"}, pricing: []string{"claude-opus-4-8"}},
 		{name: "opus-4.7", match: []string{"claude-opus-4-7", "claude-opus-4.7"}, pricing: []string{"claude-opus-4-7", "claude-opus-4.7", "claude-opus-4-6"}},
 		{name: "opus-4.6", match: []string{"claude-opus-4-6", "claude-opus-4.6"}},
 		{name: "opus-4.5", match: []string{"claude-opus-4-5", "claude-opus-4.5"}},
 		{name: "opus-4", match: []string{"claude-opus-4", "claude-3-opus"}},
+		{name: "sonnet-4.6", match: []string{"claude-sonnet-4-6", "claude-sonnet-4.6"}, pricing: []string{"claude-sonnet-4-6"}},
 		{name: "sonnet-4.5", match: []string{"claude-sonnet-4-5", "claude-sonnet-4.5"}},
 		{name: "sonnet-4", match: []string{"claude-sonnet-4", "claude-3-5-sonnet"}},
 		{name: "sonnet-3.5", match: []string{"claude-3-5-sonnet", "claude-3.5-sonnet"}},
 		{name: "sonnet-3", match: []string{"claude-3-sonnet"}},
+		{name: "haiku-4.5", match: []string{"claude-haiku-4-5", "claude-haiku-4.5"}, pricing: []string{"claude-haiku-4-5"}},
 		{name: "haiku-3.5", match: []string{"claude-3-5-haiku", "claude-3.5-haiku"}},
 		{name: "haiku-3", match: []string{"claude-3-haiku"}},
 	}
@@ -942,12 +967,22 @@ func (s *PricingService) matchByModelFamily(model string) *LiteLLMModelPricing {
 		lookups = matched.match
 	}
 	for _, pattern := range lookups {
-		for key, pricing := range s.pricingData {
+		if pricing, ok := s.pricingData[pattern]; ok {
+			logger.LegacyPrintf("service.pricing", "[Pricing] Fuzzy matched %s -> %s", model, pattern)
+			return pricing
+		}
+		matchingKeys := make([]string, 0)
+		for key := range s.pricingData {
 			keyLower := strings.ToLower(key)
 			if strings.Contains(keyLower, pattern) {
-				logger.LegacyPrintf("service.pricing", "[Pricing] Fuzzy matched %s -> %s", model, key)
-				return pricing
+				matchingKeys = append(matchingKeys, key)
 			}
+		}
+		if len(matchingKeys) > 0 {
+			sort.Strings(matchingKeys)
+			key := matchingKeys[0]
+			logger.LegacyPrintf("service.pricing", "[Pricing] Fuzzy matched %s -> %s", model, key)
+			return s.pricingData[key]
 		}
 	}
 

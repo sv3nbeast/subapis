@@ -42,6 +42,133 @@ func TestPricingNonEmptyInvalidRemoteURLStillReturnsValidationError(t *testing.T
 	require.Contains(t, err.Error(), "invalid pricing url")
 }
 
+func TestPricingService_ClaudeDecimalAliasesUseCanonicalExactPricing(t *testing.T) {
+	opus48 := &LiteLLMModelPricing{InputCostPerToken: 5e-6}
+	opus47 := &LiteLLMModelPricing{InputCostPerToken: 4.7e-6}
+	opus46 := &LiteLLMModelPricing{InputCostPerToken: 4.6e-6}
+	sonnet46 := &LiteLLMModelPricing{InputCostPerToken: 3e-6}
+	haiku45 := &LiteLLMModelPricing{InputCostPerToken: 1e-6}
+	legacySonnet35 := &LiteLLMModelPricing{InputCostPerToken: 3.5e-6}
+	opus5 := &LiteLLMModelPricing{InputCostPerToken: 5.1e-6}
+
+	pricingSvc := &PricingService{pricingData: map[string]*LiteLLMModelPricing{
+		"claude-opus-4-20250514":  {InputCostPerToken: 15e-6},
+		"claude-opus-4-1":         {InputCostPerToken: 15e-6},
+		"claude-3-haiku-20240307": {InputCostPerToken: 0.25e-6},
+		"claude-opus-4-8":         opus48,
+		"claude-opus-4-7":         opus47,
+		"claude-opus-4-6":         opus46,
+		"claude-sonnet-4-6":       sonnet46,
+		"claude-haiku-4-5":        haiku45,
+		"claude-3-5-sonnet":       legacySonnet35,
+		"claude-opus-5":           opus5,
+	}}
+
+	tests := []struct {
+		alias string
+		want  *LiteLLMModelPricing
+	}{
+		{alias: "claude-opus-4.8", want: opus48},
+		{alias: "amazonq/claude-opus-4.8", want: opus48},
+		{alias: "claude-opus-4.8-thinking", want: opus48},
+		{alias: "claude-opus-4.7-thinking", want: opus47},
+		{alias: "claude-opus-4.6", want: opus46},
+		{alias: "claude-sonnet-4.6", want: sonnet46},
+		{alias: "claude-haiku-4.5", want: haiku45},
+		{alias: "claude-3.5-sonnet", want: legacySonnet35},
+		{alias: "claude-opus-5-thinking", want: opus5},
+	}
+
+	for i := 0; i < 100; i++ {
+		for _, tt := range tests {
+			require.Same(t, tt.want, pricingSvc.GetModelPricing(tt.alias), "iteration=%d alias=%s", i, tt.alias)
+		}
+	}
+
+	require.Same(t, opus48, pricingSvc.GetIdentifiedModelPricing("claude-opus-4.8"))
+	require.Same(t, haiku45, pricingSvc.GetIdentifiedModelPricing("claude-haiku-4.5"))
+}
+
+func TestPricingService_ClaudeAliasNormalizationLeavesExactAndOtherModelsUntouched(t *testing.T) {
+	opus48 := &LiteLLMModelPricing{InputCostPerToken: 5e-6}
+	opus5 := &LiteLLMModelPricing{InputCostPerToken: 5.1e-6}
+	gpt := &LiteLLMModelPricing{InputCostPerToken: 2.5e-6}
+	grok := &LiteLLMModelPricing{InputCostPerToken: 3e-6}
+	pricingSvc := &PricingService{pricingData: map[string]*LiteLLMModelPricing{
+		"claude-opus-4-8": opus48,
+		"claude-opus-5":   opus5,
+		"gpt-5.4":         gpt,
+		"grok-4.6":        grok,
+	}}
+
+	require.Same(t, opus48, pricingSvc.GetModelPricing("claude-opus-4-8"))
+	require.Same(t, opus5, pricingSvc.GetModelPricing("claude-opus-5"))
+	require.Same(t, gpt, pricingSvc.GetModelPricing("gpt-5.4"))
+	require.Same(t, grok, pricingSvc.GetModelPricing("grok-4.6"))
+	require.Nil(t, pricingSvc.GetModelPricing("vendor-claudeish-4.8"))
+}
+
+func TestDefaultPricing_ProductionKiroClaudeAliasesMatchCanonicalEntries(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "resources", "model-pricing", "model_prices_and_context_window.json"))
+	require.NoError(t, err)
+
+	pricingSvc := &PricingService{}
+	pricingSvc.pricingData, err = pricingSvc.parsePricingData(data)
+	require.NoError(t, err)
+
+	tests := []struct {
+		alias     string
+		canonical string
+	}{
+		{alias: "claude-opus-4.8", canonical: "claude-opus-4-8"},
+		{alias: "claude-opus-4.8-thinking", canonical: "claude-opus-4-8"},
+		{alias: "claude-opus-4.7", canonical: "claude-opus-4-7"},
+		{alias: "claude-opus-4.7-thinking", canonical: "claude-opus-4-7"},
+		{alias: "claude-opus-4.6", canonical: "claude-opus-4-6"},
+		{alias: "claude-sonnet-4.6", canonical: "claude-sonnet-4-6"},
+		{alias: "claude-haiku-4.5", canonical: "claude-haiku-4-5"},
+		{alias: "claude-haiku-4.5-thinking", canonical: "claude-haiku-4-5"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.alias, func(t *testing.T) {
+			want := pricingSvc.GetModelPricing(tt.canonical)
+			require.NotNil(t, want)
+			require.Same(t, want, pricingSvc.GetModelPricing(tt.alias))
+		})
+	}
+}
+
+func TestAccountStatsPricing_KiroDecimalUpstreamModelUsesCanonicalPrice(t *testing.T) {
+	pricingSvc := &PricingService{pricingData: map[string]*LiteLLMModelPricing{
+		"claude-opus-4-20250514": {
+			InputCostPerToken:           15e-6,
+			OutputCostPerToken:          75e-6,
+			CacheCreationInputTokenCost: 18.75e-6,
+			CacheReadInputTokenCost:     1.5e-6,
+		},
+		"claude-opus-4-8": {
+			InputCostPerToken:           5e-6,
+			OutputCostPerToken:          25e-6,
+			CacheCreationInputTokenCost: 6.25e-6,
+			CacheReadInputTokenCost:     0.5e-6,
+		},
+	}}
+	billingSvc := NewBillingService(&config.Config{}, pricingSvc)
+	tokens := UsageTokens{
+		InputTokens:         100_000,
+		OutputTokens:        2_000,
+		CacheCreationTokens: 50_000,
+		CacheReadTokens:     300_000,
+	}
+
+	got := tryAccountStatsModelFilePricing(billingSvc, "claude-opus-4.8", tokens, "")
+
+	require.NotNil(t, got)
+	want := 100_000*5e-6 + 2_000*25e-6 + 50_000*6.25e-6 + 300_000*0.5e-6
+	require.InDelta(t, want, *got, 1e-12)
+}
+
 func TestParsePricingData_ParsesPriorityAndServiceTierFields(t *testing.T) {
 	svc := &PricingService{}
 	body := []byte(`{
