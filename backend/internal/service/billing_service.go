@@ -1002,6 +1002,16 @@ func (s *BillingService) GetModelPricing(model string) (*ModelPricing, error) {
 	model = strings.ToLower(model)
 	model = normalizeBillingModelAlias(model)
 
+	// Fable 5.1 launched ahead of the remotely refreshed pricing catalog. Keep
+	// its verified rates authoritative here so a stale remote entry cannot
+	// silently understate account-cost statistics. Channel overrides are still
+	// applied afterwards by GetModelPricingWithChannel.
+	if strings.Contains(model, "fable-5-1") || strings.Contains(model, "fable5.1") {
+		if pricing := s.fallbackPrices["claude-fable-5-1"]; pricing != nil {
+			return s.applyModelSpecificPricingPolicy(model, cloneModelPricing(pricing)), nil
+		}
+	}
+
 	// 1. 优先从动态价格服务获取
 	if s.pricingService != nil {
 		litellmPricing := s.pricingService.GetModelPricing(model)
