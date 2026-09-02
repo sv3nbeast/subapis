@@ -543,6 +543,7 @@ func TestIsModelRateLimited_AnthropicFableFamilyKey(t *testing.T) {
 		expected       bool
 	}{
 		{"claude-fable-5", true},
+		{"claude-fable-5-1", true},
 		{"claude-fable-5[1m]", true},      // 家族 key 覆盖变体
 		{"Claude-Fable-5-20260601", true}, // 大小写不敏感
 		{"claude-sonnet-4-6", false},      // 其他模型不受影响
@@ -561,6 +562,7 @@ func TestIsModelRateLimited_AnthropicFableFamilyKey(t *testing.T) {
 
 func TestIsAnthropicFableModel(t *testing.T) {
 	require.True(t, isAnthropicFableModel("claude-fable-5"))
+	require.True(t, isAnthropicFableModel("claude-fable-5-1"))
 	require.True(t, isAnthropicFableModel("claude-fable-5[1m]"))
 	require.True(t, isAnthropicFableModel("Claude-Fable-5"))
 	require.False(t, isAnthropicFableModel("claude-sonnet-4-6"))

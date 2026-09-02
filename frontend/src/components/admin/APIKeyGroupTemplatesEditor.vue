@@ -239,6 +239,7 @@ function defaultModels(groupID: number): Record<string, unknown> {
       };
     case "anthropic":
       return {
+        "claude-fable-5-1": { name: "Claude Fable 5.1", limit: { context: 1048576, output: 32000 }, options: { thinking: { type: "adaptive" } } },
         "claude-fable-5": { name: "Claude Fable 5", limit: { context: 1048576, output: 128000 } },
         "claude-sonnet-5": { name: "Claude Sonnet 5", limit: { context: 1000000, output: 128000 } },
         "claude-opus-5": { name: "Claude Opus 5", limit: { context: 1000000, output: 128000 } },

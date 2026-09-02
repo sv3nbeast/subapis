@@ -263,6 +263,37 @@ func TestNormalizeAnthropicOpus5Thinking_LeavesCompatibleAndOtherModelsUnchanged
 	}
 }
 
+func TestNormalizeAnthropicFable51RequestBody_RemovesUnsupportedLegacyFields(t *testing.T) {
+	body := []byte(`{"model":"claude-fable-5-1","temperature":0.2,"top_p":0.9,"top_k":40,"max_tokens":128000,"thinking":{"type":"enabled","budget_tokens":24576},"messages":[{"role":"user","content":"keep temperature text"}],"metadata":{"top_p":0.5}}`)
+
+	result := normalizeAnthropicFable51RequestBody(body, "claude-fable-5-1")
+
+	require.False(t, gjson.GetBytes(result, "temperature").Exists())
+	require.False(t, gjson.GetBytes(result, "top_p").Exists())
+	require.False(t, gjson.GetBytes(result, "top_k").Exists())
+	require.Equal(t, int64(32000), gjson.GetBytes(result, "max_tokens").Int())
+	require.Equal(t, "adaptive", gjson.GetBytes(result, "thinking.type").String())
+	require.False(t, gjson.GetBytes(result, "thinking.budget_tokens").Exists())
+	require.Equal(t, 0.5, gjson.GetBytes(result, "metadata.top_p").Float())
+	require.Equal(t, "keep temperature text", gjson.GetBytes(result, "messages.0.content").String())
+	require.Equal(t, result, normalizeAnthropicFable51RequestBody(result, "claude-fable-5-1"))
+}
+
+func TestNormalizeAnthropicFable51RequestBody_OtherModelsUnchanged(t *testing.T) {
+	body := []byte(`{"model":"claude-fable-5","temperature":0.2,"max_tokens":128000,"thinking":{"type":"enabled","budget_tokens":24576},"messages":[]}`)
+	require.Equal(t, body, normalizeAnthropicFable51RequestBody(body, "claude-fable-5"))
+}
+
+func BenchmarkNormalizeAnthropicFable51RequestBody_1MiB(b *testing.B) {
+	body := []byte(`{"model":"claude-fable-5-1","temperature":0.2,"top_p":0.9,"top_k":40,"max_tokens":128000,"thinking":{"type":"enabled","budget_tokens":24576},"messages":[{"role":"user","content":"` + strings.Repeat("x", 1<<20) + `"}]}`)
+	b.ReportAllocs()
+	b.SetBytes(int64(len(body)))
+	b.ResetTimer()
+	for range b.N {
+		_ = normalizeAnthropicFable51RequestBody(body, "claude-fable-5-1")
+	}
+}
+
 func TestSanitizeAnthropicUpstreamRequestBody_DropsTopLevelSpeedOnly(t *testing.T) {
 	body := []byte(`{"model":"claude-opus-4-7","speed":"fast","max_tokens":64000,"messages":[{"role":"user","content":[{"type":"text","text":"keep speed mention"}]}],"metadata":{"speed":"nested"}}`)
 
@@ -502,6 +533,26 @@ func TestApplyAnthropicThinkingAliasToRequest_Opus5PreservesXHighWithAdaptiveThi
 
 	require.Equal(t, "adaptive", req.Thinking.Type)
 	require.Equal(t, "xhigh", req.OutputConfig.Effort)
+}
+
+func TestApplyAnthropicThinkingAliasToRequest_Fable51NormalizesConvertedRequests(t *testing.T) {
+	temperature := 0.2
+	topP := 0.9
+	req := &apicompat.AnthropicRequest{
+		Model:       "claude-fable-5-1",
+		MaxTokens:   128000,
+		Temperature: &temperature,
+		TopP:        &topP,
+		Thinking:    &apicompat.AnthropicThinking{Type: "enabled", BudgetTokens: 24576},
+	}
+
+	applyAnthropicThinkingAliasToRequest(req, "claude-fable-5-1")
+
+	require.Nil(t, req.Temperature)
+	require.Nil(t, req.TopP)
+	require.Equal(t, 32000, req.MaxTokens)
+	require.Equal(t, "adaptive", req.Thinking.Type)
+	require.Zero(t, req.Thinking.BudgetTokens)
 }
 
 func TestInjectClaudeCodePrompt_PreservesFieldOrder(t *testing.T) {

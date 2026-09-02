@@ -244,6 +244,9 @@ describe('UseKeyModal', () => {
       }
     })
     expect(config.provider.anthropic.models['claude-opus-4-8'].limit).toEqual({ context: 200000, output: 128000 })
+    expect(config.provider.anthropic.models['claude-fable-5-1'].limit).toEqual({ context: 1048576, output: 32000 })
+    expect(config.provider.anthropic.models['claude-fable-5-1'].options.thinking).toEqual({ type: 'adaptive' })
+    expect(config.provider.anthropic.models['claude-fable-5-1'].options.thinking).not.toHaveProperty('budgetTokens')
     expect(config.provider.anthropic.models['claude-opus-5'].limit).toEqual({ context: 1000000, output: 128000 })
     expect(config.provider.anthropic.models['claude-sonnet-5'].limit).toEqual({ context: 1000000, output: 128000 })
     expect(config.provider.anthropic.models['claude-sonnet-4-6'].limit).toEqual({ context: 200000, output: 64000 })
@@ -448,6 +451,7 @@ describe('UseKeyModal', () => {
     expect(fable.limit).toEqual({ context: 1048576, output: 128000 })
     expect(fable.options.thinking).toEqual({ type: 'adaptive' })
     expect(fable.options.thinking).not.toHaveProperty('budgetTokens')
+    expect(parsed.provider['antigravity-claude'].models['claude-fable-5-1']).toBeUndefined()
   })
 
   const customTemplateProfile = (overrides: Record<string, unknown> = {}) => ({

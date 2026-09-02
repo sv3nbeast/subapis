@@ -92,4 +92,7 @@ func TestDefaultModelsContainCurrentModelsWithoutDuplicates(t *testing.T) {
 	if !seen["claude-opus-5"] {
 		t.Fatalf("DefaultModels must include claude-opus-5")
 	}
+	if !seen["claude-fable-5-1"] {
+		t.Fatalf("DefaultModels must include claude-fable-5-1")
+	}
 }

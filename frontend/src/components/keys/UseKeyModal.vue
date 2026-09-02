@@ -1297,13 +1297,17 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     'claude-haiku-4-5': claudeModel('Claude Haiku 4.5', 200000, 64000),
     'claude-haiku-4-5-20251001': claudeModel('Claude Haiku 4.5 (Versioned)', 200000, 64000)
   }
+  const anthropicClaudeModels = {
+    'claude-fable-5-1': claudeModel('Claude Fable 5.1', 1048576, 32000, { type: 'adaptive' }),
+    ...claudeModels
+  }
 
   if (platform === 'gemini') {
     provider[platform].npm = '@ai-sdk/google'
     provider[platform].models = geminiModels
   } else if (platform === 'anthropic') {
     provider[platform].npm = '@ai-sdk/anthropic'
-    provider[platform].models = claudeModels
+    provider[platform].models = anthropicClaudeModels
   } else if (platform === 'grok') {
     provider[platform].npm = '@ai-sdk/openai-compatible'
     provider[platform].name = 'Grok'

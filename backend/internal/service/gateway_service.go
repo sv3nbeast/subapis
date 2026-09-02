@@ -1971,7 +1971,9 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 	// max_tokens：本次 Claude CLI 2.1.156 抓包里主请求为 64000，Haiku 辅助请求为 32000。
 	if !gjson.GetBytes(out, "max_tokens").Exists() {
 		maxTokens := 64000
-		if strings.Contains(strings.ToLower(modelID), "haiku") {
+		if isAnthropicFable51Model(modelID) {
+			maxTokens = 32000
+		} else if strings.Contains(strings.ToLower(modelID), "haiku") {
 			maxTokens = 32000
 		}
 		if next, ok := setJSONValueBytes(out, "max_tokens", maxTokens); ok {
@@ -2098,6 +2100,67 @@ func normalizeAnthropicOpus5ThinkingRequest(req *apicompat.AnthropicRequest, mod
 
 func isAnthropicOpus5Model(model string) bool {
 	return strings.EqualFold(strings.TrimSpace(model), "claude-opus-5")
+}
+
+func isAnthropicFable51Model(model string) bool {
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case "claude-fable-5-1", "claude-fable-5-1-thinking":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeAnthropicFable51RequestBody(body []byte, model string) []byte {
+	if len(body) == 0 || !isAnthropicFable51Model(model) {
+		return body
+	}
+
+	out := body
+	for _, field := range []string{"temperature", "top_p", "top_k"} {
+		if gjson.GetBytes(out, field).Exists() {
+			if next, ok := deleteJSONPathBytes(out, field); ok {
+				out = next
+			}
+		}
+	}
+	if maxTokens := gjson.GetBytes(out, "max_tokens"); maxTokens.Exists() && maxTokens.Int() > 32000 {
+		if next, ok := setJSONValueBytes(out, "max_tokens", 32000); ok {
+			out = next
+		}
+	}
+	thinkingType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(out, "thinking.type").String()))
+	if thinkingType == "enabled" || thinkingType == "adaptive" {
+		if thinkingType != "adaptive" {
+			if next, ok := setJSONValueBytes(out, "thinking.type", "adaptive"); ok {
+				out = next
+			}
+		}
+		if gjson.GetBytes(out, "thinking.budget_tokens").Exists() {
+			if next, ok := deleteJSONPathBytes(out, "thinking.budget_tokens"); ok {
+				out = next
+			}
+		}
+	}
+	return out
+}
+
+func normalizeAnthropicFable51Request(req *apicompat.AnthropicRequest) {
+	if req == nil || !isAnthropicFable51Model(req.Model) {
+		return
+	}
+	req.Temperature = nil
+	req.TopP = nil
+	if req.MaxTokens > 32000 {
+		req.MaxTokens = 32000
+	}
+	if req.Thinking != nil {
+		thinkingType := strings.ToLower(strings.TrimSpace(req.Thinking.Type))
+		if thinkingType == "enabled" || thinkingType == "adaptive" {
+			req.Thinking.Type = "adaptive"
+			req.Thinking.BudgetTokens = 0
+		}
+	}
 }
 
 func sanitizeAnthropicUpstreamRequestBody(body []byte) []byte {
@@ -2364,6 +2427,7 @@ func applyAnthropicThinkingAliasToRequest(req *apicompat.AnthropicRequest, reque
 		req.MaxTokens = BudgetRectifyMaxTokens
 	}
 	normalizeAnthropicOpus5ThinkingRequest(req, req.Model)
+	normalizeAnthropicFable51Request(req)
 }
 
 func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account *Account, fp *Fingerprint) string {
@@ -7092,6 +7156,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 		passthroughBody = ensureAnthropicThinkingForModelAlias(passthroughBody, originalModel)
 		passthroughBody = normalizeAnthropicOpus5Thinking(passthroughBody, passthroughModel)
+		passthroughBody = normalizeAnthropicFable51RequestBody(passthroughBody, passthroughModel)
 		passthroughBody = sanitizeAnthropicUpstreamRequestBody(passthroughBody)
 		passthroughBody = PrepareSharedAnthropicThinkingHistory(passthroughBody, account, passthroughModel)
 		if migratedBody, migrated := migrateAnthropicInlineSystemMessages(passthroughBody); migrated {
@@ -7292,6 +7357,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	}
 	body = ensureAnthropicThinkingForModelAlias(body, originalModel)
 	body = normalizeAnthropicOpus5Thinking(body, reqModel)
+	body = normalizeAnthropicFable51RequestBody(body, reqModel)
 	body = sanitizeAnthropicUpstreamRequestBody(body)
 	if err := replaceBody(PrepareSharedAnthropicThinkingHistory(body, account, reqModel)); err != nil {
 		return nil, err

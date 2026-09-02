@@ -244,7 +244,7 @@ func TestIsCountTokensUnsupported404(t *testing.T) {
 }
 
 // TestDefaultBetaPolicy_Context1M_CurrentModelsWhitelist 验证默认策略下 context-1m-2025-08-07 的分模型行为：
-//   - claude-sonnet-5 系列与 claude-opus-5：pass（放行），保留 1M 上下文能力
+//   - claude-sonnet-5、claude-opus-5 与 claude-fable-5-1：pass（放行），保留 1M 上下文能力
 //   - Sonnet 4.x、Opus 4.x、Haiku：filter（过滤），因为上游不支持
 func TestDefaultBetaPolicy_Context1M_CurrentModelsWhitelist(t *testing.T) {
 	settings := DefaultBetaPolicySettings()
@@ -277,6 +277,8 @@ func TestDefaultBetaPolicy_Context1M_CurrentModelsWhitelist(t *testing.T) {
 		// —— 直连 Anthropic API —— Opus 5 已验证支持 1M
 		{"claude-opus-5", BetaPolicyActionPass, "opus-5 canonical"},
 		{"claude-opus-5-thinking", BetaPolicyActionPass, "opus-5 thinking alias"},
+		{"claude-fable-5-1", BetaPolicyActionPass, "fable-5.1 canonical"},
+		{"claude-fable-5-1-thinking", BetaPolicyActionPass, "fable-5.1 compatibility alias"},
 		// —— Vertex AI 归一化后的 sonnet-5 —— 也应放行
 		{"claude-sonnet-5@20260701", BetaPolicyActionPass, "sonnet-5 Vertex-normalized dated form"},
 		// —— AWS Bedrock 各跨区域前缀 sonnet-5 —— 也应放行

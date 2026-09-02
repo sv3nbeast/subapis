@@ -885,6 +885,7 @@ func (s *PricingService) matchByModelFamily(model string) *LiteLLMModelPricing {
 	}
 
 	families := []modelFamily{
+		{name: "fable-5.1", match: []string{"claude-fable-5-1", "claude-fable-5.1"}, pricing: []string{"claude-fable-5-1"}},
 		{name: "fable-5", match: []string{"claude-fable-5", "claude-fable"}, pricing: []string{"claude-fable-5"}},
 		{name: "opus-5", match: []string{"claude-opus-5"}, pricing: []string{"claude-opus-5"}},
 		{name: "opus-4.8", match: []string{"claude-opus-4-8", "claude-opus-4.8"}, pricing: []string{"claude-opus-4-8"}},
