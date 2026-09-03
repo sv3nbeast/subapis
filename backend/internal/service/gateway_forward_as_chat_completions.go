@@ -136,18 +136,9 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()
 		}
-		safeErr := sanitizeUpstreamErrorMessage(err.Error())
-		setOpsUpstreamError(c, 0, safeErr, "")
-		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-			Platform:           account.Platform,
-			AccountID:          account.ID,
-			AccountName:        account.Name,
-			UpstreamStatusCode: 0,
-			Kind:               "request_error",
-			Message:            safeErr,
+		return nil, s.handleUpstreamTransportError(ctx, c, account, err, OpsUpstreamErrorEvent{
+			UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()),
 		})
-		writeGatewayCCError(c, http.StatusBadGateway, "server_error", "Upstream request failed")
-		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -162,7 +153,10 @@ func (s *GatewayService) ForwardAsChatCompletions(
 
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
 			softRateLimit := IsAnthropicSoftRateLimitResponse(account, resp.StatusCode, resp.Header, respBody)
+			retryableOnSameAccount := softRateLimit
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				ProxyID:            opsUpstreamProxyID(account),
+				ProxyName:          opsUpstreamProxyName(account),
 				Platform:           account.Platform,
 				AccountID:          account.ID,
 				AccountName:        account.Name,
@@ -171,14 +165,18 @@ func (s *GatewayService) ForwardAsChatCompletions(
 				Kind:               "failover",
 				Message:            upstreamMsg,
 			})
-			if s.rateLimitService != nil && !softRateLimit {
-				s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, mappedModel)
+			if !softRateLimit {
+				shouldDisable := false
+				if s.rateLimitService != nil {
+					shouldDisable = s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, mappedModel)
+				}
+				retryableOnSameAccount = !shouldDisable && account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode)
 			}
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
 				ResponseHeaders:        resp.Header.Clone(),
-				RetryableOnSameAccount: softRateLimit,
+				RetryableOnSameAccount: retryableOnSameAccount,
 				AnthropicSoftRateLimit: softRateLimit,
 				RequestedModel:         originalModel,
 			}
@@ -317,7 +315,7 @@ func hasKiroNativeToolProgressInput(anthropicBody []byte) bool {
 // extractCCReasoningEffortFromBody reads reasoning effort from a Chat Completions
 // request body. It checks both nested (reasoning.effort) and flat (reasoning_effort)
 // formats used by OpenAI-compatible clients.
-func extractCCReasoningEffortFromBody(body []byte) *string {
+func extractCCReasoningEffortFromBody(body []byte, modelCandidates ...string) *string {
 	raw := strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String())
 	if raw == "" {
 		raw = strings.TrimSpace(gjson.GetBytes(body, "reasoning_effort").String())
@@ -325,7 +323,11 @@ func extractCCReasoningEffortFromBody(body []byte) *string {
 	if raw == "" {
 		return nil
 	}
-	normalized := normalizeOpenAIReasoningEffort(raw)
+	model := firstNonEmpty(modelCandidates...)
+	if model == "" {
+		model = strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	}
+	normalized := normalizeOpenAIReasoningEffortForModel(raw, model)
 	if normalized == "" {
 		return nil
 	}

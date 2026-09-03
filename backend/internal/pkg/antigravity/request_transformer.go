@@ -236,6 +236,7 @@ type modelInfo struct {
 // 只有在此映射表中的模型才会注入身份提示词
 // 注意：模型映射逻辑在网关层完成；这里仅用于按模型前缀判断是否注入身份提示词。
 var modelInfoMap = map[string]modelInfo{
+	"claude-fable-5-1":  {DisplayName: "Claude Fable 5.1", CanonicalID: "claude-fable-5-1"},
 	"claude-fable-5":    {DisplayName: "Claude Fable 5", CanonicalID: "claude-fable-5"},
 	"claude-opus-4-5":   {DisplayName: "Claude Opus 4.5", CanonicalID: "claude-opus-4-5-20250929"},
 	"claude-opus-4-6":   {DisplayName: "Claude Opus 4.6", CanonicalID: "claude-opus-4-6"},
@@ -1005,6 +1006,25 @@ func isWebSearchTool(tool ClaudeTool) bool {
 	}
 }
 
+func isCodeExecutionTool(tool ClaudeTool) bool {
+	return strings.TrimSpace(tool.Type) == "code_execution"
+}
+
+// hasMixedToolInvocations 判断构建后的工具声明是否同时包含函数声明与内置工具
+// （googleSearch）。仅在两者并存时需要开启 includeServerSideToolInvocations。
+func hasMixedToolInvocations(declarations []GeminiToolDeclaration) bool {
+	hasFunc, hasBuiltin := false, false
+	for _, d := range declarations {
+		if len(d.FunctionDeclarations) > 0 {
+			hasFunc = true
+		}
+		if d.GoogleSearch != nil || d.CodeExecution != nil {
+			hasBuiltin = true
+		}
+	}
+	return hasFunc && hasBuiltin
+}
+
 // buildTools 构建 tools
 func buildTools(tools []ClaudeTool) []GeminiToolDeclaration {
 	if len(tools) == 0 {
@@ -1012,11 +1032,18 @@ func buildTools(tools []ClaudeTool) []GeminiToolDeclaration {
 	}
 
 	hasWebSearch := hasWebSearchTool(tools)
+	hasCodeExecution := false
+	for _, tool := range tools {
+		if isCodeExecutionTool(tool) {
+			hasCodeExecution = true
+			break
+		}
+	}
 
 	// 普通工具
 	var funcDecls []GeminiFunctionDecl
 	for _, tool := range tools {
-		if isWebSearchTool(tool) {
+		if isWebSearchTool(tool) || isCodeExecutionTool(tool) {
 			continue
 		}
 		// 跳过无效工具名称
@@ -1085,6 +1112,11 @@ func buildTools(tools []ClaudeTool) []GeminiToolDeclaration {
 					},
 				},
 			},
+		})
+	}
+	if hasCodeExecution {
+		declarations = append(declarations, GeminiToolDeclaration{
+			CodeExecution: &GeminiCodeExecution{},
 		})
 	}
 	if len(declarations) == 0 {

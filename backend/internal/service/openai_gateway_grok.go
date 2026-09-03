@@ -39,9 +39,170 @@ func applyGrokCLIHeaders(headers http.Header) {
 	if headers == nil {
 		return
 	}
-	headers.Set("User-Agent", grokUpstreamUserAgent)
+	headers.Set("User-Agent", defaultGrokUpstreamUserAgent())
 	headers.Set("X-Grok-Client-Version", grokCLIVersion)
 	headers.Set("X-Grok-Client-Mode", "interactive")
+}
+
+// sanitizeGrokResponsesInput promotes Responses Lite additional_tools into
+// top-level tools and removes the private carrier rejected by xAI.
+func sanitizeGrokResponsesInput(body []byte) ([]byte, error) {
+	if !bytes.Contains(body, []byte(`"additional_tools"`)) {
+		return body, nil
+	}
+	input := gjson.GetBytes(body, "input")
+	if !input.Exists() || !input.IsArray() {
+		return body, nil
+	}
+	rawItems := input.Array()
+	filtered := make([]json.RawMessage, 0, len(rawItems))
+	topLevelTools := gjson.GetBytes(body, "tools")
+	mergedTools := make([]json.RawMessage, 0)
+	seenTools := make(map[string]struct{})
+	appendTool := func(tool gjson.Result) bool {
+		key := grokResponsesToolDedupKey(tool)
+		if _, exists := seenTools[key]; exists {
+			return false
+		}
+		seenTools[key] = struct{}{}
+		mergedTools = append(mergedTools, json.RawMessage(tool.Raw))
+		return true
+	}
+	if topLevelTools.IsArray() {
+		for _, tool := range topLevelTools.Array() {
+			seenTools[grokResponsesToolDedupKey(tool)] = struct{}{}
+			mergedTools = append(mergedTools, json.RawMessage(tool.Raw))
+		}
+	}
+	promoted := false
+	for _, item := range rawItems {
+		if strings.TrimSpace(item.Get("type").String()) == "additional_tools" {
+			if tools := item.Get("tools"); tools.IsArray() {
+				for _, tool := range tools.Array() {
+					if appendTool(tool) {
+						promoted = true
+					}
+				}
+			}
+			continue
+		}
+		filtered = append(filtered, json.RawMessage(item.Raw))
+	}
+	if len(filtered) == len(rawItems) {
+		return body, nil
+	}
+	encoded, err := json.Marshal(filtered)
+	if err != nil {
+		return nil, err
+	}
+	body, err = sjson.SetRawBytes(body, "input", encoded)
+	if err != nil || !promoted {
+		return body, err
+	}
+	encodedTools, err := json.Marshal(mergedTools)
+	if err != nil {
+		return nil, err
+	}
+	return sjson.SetRawBytes(body, "tools", encodedTools)
+}
+
+func grokResponsesToolDedupKey(tool gjson.Result) string {
+	toolType := strings.TrimSpace(tool.Get("type").String())
+	if toolType != "" {
+		if name := strings.TrimSpace(tool.Get("name").String()); name != "" {
+			return "type:" + toolType + "\x00name:" + name
+		}
+		if toolType == "mcp" {
+			if label := strings.TrimSpace(tool.Get("server_label").String()); label != "" {
+				return "type:mcp\x00server_label:" + label
+			}
+		}
+	}
+	return "json:" + normalizeCompatSeedJSON(json.RawMessage(tool.Raw))
+}
+
+func isGrokCompactionReplayDecodeError(statusCode int, body []byte) bool {
+	if (statusCode != http.StatusBadRequest && statusCode != http.StatusUnprocessableEntity) || len(body) == 0 {
+		return false
+	}
+	for _, candidate := range grokStructuredErrorMessageCandidates(body) {
+		message := strings.ToLower(candidate)
+		decodeSignal := strings.Contains(message, "decode") ||
+			strings.Contains(message, "deserialize") ||
+			strings.Contains(message, "decoder")
+		replaySignal := strings.Contains(message, "compaction") ||
+			strings.Contains(message, "summary") ||
+			strings.Contains(message, "encrypted_content") ||
+			strings.Contains(message, "response history")
+		if decodeSignal && replaySignal {
+			return true
+		}
+	}
+	return false
+}
+
+func sanitizeGrokCompactionReplayBody(body []byte) ([]byte, bool, error) {
+	converted, err := convertOpenAICompactInputsForGrok(body)
+	if err != nil {
+		return nil, false, fmt.Errorf("convert Grok compaction replay: %w", err)
+	}
+	var requestBody map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(converted))
+	decoder.UseNumber()
+	if err := decoder.Decode(&requestBody); err != nil {
+		return nil, false, err
+	}
+
+	changed := !bytes.Equal(converted, body)
+	if trimOpenAIEncryptedReasoningItems(requestBody) {
+		changed = true
+	}
+	if dropEmptyGrokReplayReasoning(requestBody) {
+		changed = true
+	}
+	if previousID, _ := requestBody["previous_response_id"].(string); strings.TrimSpace(previousID) != "" && !HasFunctionCallOutput(requestBody) {
+		delete(requestBody, "previous_response_id")
+		if _, exists := requestBody["store"]; !exists {
+			requestBody["store"] = false
+		}
+		changed = true
+	}
+	if !changed {
+		return body, false, nil
+	}
+	retryBody, err := marshalOpenAIUpstreamJSON(requestBody)
+	if err != nil {
+		return nil, false, err
+	}
+	return retryBody, true, nil
+}
+
+func dropEmptyGrokReplayReasoning(requestBody map[string]any) bool {
+	items, ok := requestBody["input"].([]any)
+	if !ok {
+		return false
+	}
+	filtered := items[:0]
+	changed := false
+	for _, rawItem := range items {
+		item, ok := rawItem.(map[string]any)
+		if !ok || strings.TrimSpace(grokStringValue(item["type"])) != "reasoning" {
+			filtered = append(filtered, rawItem)
+			continue
+		}
+		summary, _ := item["summary"].([]any)
+		content, hasContent := item["content"]
+		_, hasEncrypted := item["encrypted_content"]
+		if hasEncrypted || len(summary) > 0 || (hasContent && content != nil) {
+			filtered = append(filtered, rawItem)
+			continue
+		}
+		changed = true
+	}
+	if changed {
+		requestBody["input"] = filtered
+	}
+	return changed
 }
 
 func (s *OpenAIGatewayService) forwardGrokResponses(
@@ -122,15 +283,24 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
 	// A compaction/reasoning blob is bound to the xAI response/cache identity
-	// that produced it. If a client replays stale state, recover once by sending
-	// the visible conversation without that opaque item.
-	if resp.StatusCode == http.StatusBadRequest {
+	// that produced it. Recover once by preserving visible history and dropping
+	// only opaque replay state that the current decoder cannot consume.
+	if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity {
 		firstBody := s.readUpstreamErrorBody(resp)
 		_ = resp.Body.Close()
-		if isGrokInvalidEncryptedContentResponse(resp.StatusCode, firstBody) {
-			retryBody, changed, trimErr := trimGrokInvalidEncryptedContentRetryBody(patchedBody)
+		invalidEncryptedContent := isGrokInvalidEncryptedContentResponse(resp.StatusCode, firstBody)
+		compactionDecodeError := isGrokCompactionReplayDecodeError(resp.StatusCode, firstBody)
+		if invalidEncryptedContent || compactionDecodeError {
+			var retryBody []byte
+			var changed bool
+			var trimErr error
+			if invalidEncryptedContent {
+				retryBody, changed, trimErr = trimGrokInvalidEncryptedContentRetryBody(patchedBody)
+			} else {
+				retryBody, changed, trimErr = sanitizeGrokCompactionReplayBody(patchedBody)
+			}
 			if trimErr != nil {
-				return nil, fmt.Errorf("prepare Grok invalid encrypted_content retry: %w", trimErr)
+				return nil, fmt.Errorf("prepare Grok replay decode retry: %w", trimErr)
 			}
 			if changed {
 				retryReq, buildErr := buildGrokResponsesRequest(upstreamCtx, c, account, retryBody, token)
@@ -143,7 +313,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 					return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 				}
 				patchedBody = retryBody
-				logger.FromContext(ctx).Info("grok.responses_invalid_encrypted_content_retry",
+				logger.FromContext(ctx).Info("grok.responses_replay_decode_retry",
 					zap.Int64("account_id", account.ID),
 					zap.String("upstream_error_preview", truncateOpenAIWSLogValue(string(firstBody), 240)),
 				)
@@ -206,6 +376,8 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 			upstreamMsg = fmt.Sprintf("xAI upstream returned status %d", resp.StatusCode)
 		}
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			ProxyID:            opsUpstreamProxyID(account),
+			ProxyName:          opsUpstreamProxyName(account),
 			Platform:           account.Platform,
 			AccountID:          account.ID,
 			AccountName:        account.Name,
@@ -216,10 +388,16 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		})
 		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
 		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
+			retryable, retryDelay, retryDeadline, retryMax := grokSameAccountRetryMetadata(account, resp.StatusCode, respBody)
 			return nil, &UpstreamFailoverError{
-				StatusCode:             resp.StatusCode,
-				ResponseBody:           respBody,
-				RetryableOnSameAccount: shouldRetryOpenAIAccountOnSameAccount(account, resp.StatusCode, respBody, false),
+				StatusCode:               resp.StatusCode,
+				ResponseBody:             respBody,
+				ResponseHeaders:          resp.Header.Clone(),
+				RetryableOnSameAccount:   retryable,
+				RequestScopedTransient:   retryable && resp.StatusCode == http.StatusTooManyRequests,
+				SameAccountRetryDelay:    retryDelay,
+				SameAccountRetryDeadline: retryDeadline,
+				SameAccountRetryMax:      retryMax,
 			}
 		}
 		return s.handleErrorResponse(ctx, resp, c, account, patchedBody, upstreamModel)
@@ -343,6 +521,14 @@ func patchGrokResponsesBody(body []byte, upstreamModel string) ([]byte, error) {
 	// Convert those items back to the reasoning shape xAI accepts when the
 	// client replays the compact result on a later Responses turn.
 	out, err = convertOpenAICompactInputsForGrok(out)
+	if err != nil {
+		return nil, err
+	}
+	out, err = sanitizeGrokResponsesInput(out)
+	if err != nil {
+		return nil, err
+	}
+	out, err = sanitizeGrokResponsesModelInput(out)
 	if err != nil {
 		return nil, err
 	}
@@ -853,7 +1039,7 @@ func normalizeGrokResponsesReasoningEffort(body []byte, upstreamModel string) ([
 		if !value.Exists() {
 			continue
 		}
-		normalized, keep := normalizeGrokReasoningEffortValue(value.String())
+		normalized, keep := normalizeGrokReasoningEffortValue(value.String(), upstreamModel)
 		if !supportsEffort || !keep {
 			out, err = sjson.DeleteBytes(out, field)
 		} else {
@@ -864,7 +1050,7 @@ func normalizeGrokResponsesReasoningEffort(body []byte, upstreamModel string) ([
 		}
 	}
 	if camel := gjson.GetBytes(out, "reasoningEffort"); camel.Exists() {
-		normalized, keep := normalizeGrokReasoningEffortValue(camel.String())
+		normalized, keep := normalizeGrokReasoningEffortValue(camel.String(), upstreamModel)
 		out, err = sjson.DeleteBytes(out, "reasoningEffort")
 		if err != nil {
 			return nil, fmt.Errorf("remove Grok reasoningEffort: %w", err)
@@ -890,7 +1076,7 @@ func normalizeGrokChatReasoningEffort(body []byte, upstreamModel string) ([]byte
 	if raw == "" {
 		raw = strings.TrimSpace(gjson.GetBytes(body, "reasoningEffort").String())
 	}
-	normalized, keep := normalizeGrokReasoningEffortValue(raw)
+	normalized, keep := normalizeGrokReasoningEffortValue(raw, upstreamModel)
 	keep = keep && grokSupportsReasoningEffort(upstreamModel)
 	out := body
 	var err error
@@ -910,24 +1096,36 @@ func normalizeGrokChatReasoningEffort(body []byte, upstreamModel string) ([]byte
 	return out, err
 }
 
-func normalizeGrokReasoningEffortValue(raw string) (string, bool) {
+func normalizeGrokReasoningEffortValue(raw, model string) (string, bool) {
 	value := strings.NewReplacer("-", "", "_", "", " ", "").Replace(strings.ToLower(strings.TrimSpace(raw)))
 	switch value {
 	case "none", "low", "medium", "high":
 		return value, true
 	case "minimal":
 		return "low", true
-	case "xhigh", "extrahigh", "max", "ultra":
+	case "xhigh", "extrahigh":
+		if GrokSupportsXHighReasoningEffort(model) {
+			return "xhigh", true
+		}
+		return "high", true
+	case "max", "ultra":
 		return "high", true
 	default:
 		return "", false
 	}
 }
 
+// GrokSupportsXHighReasoningEffort reports whether the model advertises and
+// forwards the xhigh reasoning effort (Grok 4.6 and its undated alias).
+func GrokSupportsXHighReasoningEffort(model string) bool {
+	model = strings.ToLower(xai.StripGrokProviderPrefix(strings.TrimSpace(model)))
+	return model == "grok-4.6" || model == "grok-4.6-latest"
+}
+
 func grokSupportsReasoningEffort(model string) bool {
 	model = strings.ToLower(xai.StripGrokProviderPrefix(strings.TrimSpace(model)))
 	switch model {
-	case xai.DefaultTextModel, "grok-4.5-latest", "grok-4.6", "grok-4.6-latest",
+	case "grok-4.5", "grok-4.5-latest", "grok-4.6", "grok-4.6-latest",
 		"grok-4.3", "grok-4.3-latest",
 		"grok-3-mini", "grok-3-mini-fast", "grok-4.20-0309-reasoning",
 		"grok-4.20-reasoning", "grok-4.20-multi-agent-0309":
@@ -947,13 +1145,13 @@ func sanitizeGrokResponsesUnsupportedFields(body []byte) ([]byte, error) {
 	}
 
 	var payload any
-	if err := json.Unmarshal(body, &payload); err != nil {
+	if err := decodeOpenAIJSONUseNumber(body, &payload); err != nil {
 		return nil, err
 	}
 	if !deleteJSONFields(payload, grokResponsesUnsupportedRecursiveFields) {
 		return body, nil
 	}
-	return json.Marshal(payload)
+	return marshalOpenAIUpstreamJSON(payload)
 }
 
 func deleteJSONFields(value any, fields map[string]struct{}) bool {
@@ -997,16 +1195,22 @@ var grokResponsesSupportedToolTypes = map[string]struct{}{
 	"x_search":           {},
 }
 
+const grokSafeFunctionParameters = `{"type":"object","properties":{},"additionalProperties":true}`
+
 func sanitizeGrokResponsesTools(body []byte) ([]byte, error) {
 	tools := gjson.GetBytes(body, "tools")
 	if !tools.Exists() {
-		if gjson.GetBytes(body, "tool_choice").Exists() {
-			return sjson.DeleteBytes(body, "tool_choice")
-		}
-		return body, nil
+		return deleteGrokOrphanToolControls(body)
 	}
 	if !tools.IsArray() {
-		return body, nil
+		// xAI rejects tool_choice when tools is null/object. Drop the malformed
+		// collection and any orphan tool controls instead of forwarding a pair
+		// the Grok Responses endpoint cannot interpret.
+		body, err := sjson.DeleteBytes(body, "tools")
+		if err != nil {
+			return nil, err
+		}
+		return deleteGrokOrphanToolControls(body)
 	}
 
 	rawTools := tools.Array()
@@ -1018,18 +1222,44 @@ func sanitizeGrokResponsesTools(body []byte) ([]byte, error) {
 			raw := json.RawMessage(tool.Raw)
 			if toolType == "function" && (!tool.Get("parameters").Exists() || tool.Get("parameters").Type == gjson.Null) {
 				var payload map[string]any
-				if err := json.Unmarshal(raw, &payload); err != nil {
+				if err := decodeOpenAIJSONUseNumber(raw, &payload); err != nil {
 					return nil, err
 				}
 				payload["parameters"] = map[string]any{"type": "object", "properties": map[string]any{}}
-				encoded, err := json.Marshal(payload)
+				encoded, err := marshalOpenAIUpstreamJSON(payload)
 				if err != nil {
 					return nil, err
 				}
 				raw = encoded
 				toolsChanged = true
+			} else if toolType == "function" && grokFunctionParametersHaveInvalidUnionRoot(tool.Get("parameters")) {
+				var err error
+				raw, err = sjson.SetRawBytes(raw, "parameters", []byte(grokSafeFunctionParameters))
+				if err != nil {
+					return nil, err
+				}
+				if strict := tool.Get("strict"); strict.Exists() && strict.Bool() {
+					raw, err = sjson.SetBytes(raw, "strict", false)
+					if err != nil {
+						return nil, err
+					}
+				}
+				toolsChanged = true
 			}
 			filteredTools = append(filteredTools, raw)
+		}
+	}
+	if !grokRawToolsContainType(filteredTools, "tool_search") {
+		for index, raw := range filteredTools {
+			if !gjson.GetBytes(raw, "defer_loading").Exists() {
+				continue
+			}
+			cleaned, deleteErr := sjson.DeleteBytes(raw, "defer_loading")
+			if deleteErr != nil {
+				return nil, deleteErr
+			}
+			filteredTools[index] = cleaned
+			toolsChanged = true
 		}
 	}
 
@@ -1049,6 +1279,9 @@ func sanitizeGrokResponsesTools(body []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if len(filteredTools) == 0 {
+		return deleteGrokOrphanToolControls(body)
+	}
 
 	toolChoice := gjson.GetBytes(body, "tool_choice")
 	if !toolChoice.Exists() {
@@ -1056,6 +1289,51 @@ func sanitizeGrokResponsesTools(body []byte) ([]byte, error) {
 	}
 	if shouldDropGrokToolChoice(toolChoice, filteredTools) {
 		body, err = sjson.DeleteBytes(body, "tool_choice")
+		if err != nil {
+			return nil, err
+		}
+	}
+	return body, nil
+}
+
+func grokFunctionParametersHaveInvalidUnionRoot(parameters gjson.Result) bool {
+	if !parameters.Exists() || !parameters.IsObject() {
+		return false
+	}
+	for _, keyword := range []string{"anyOf", "oneOf"} {
+		branches := parameters.Get(keyword)
+		if !branches.IsArray() {
+			continue
+		}
+		values := branches.Array()
+		if len(values) == 0 {
+			continue
+		}
+		for _, branch := range values {
+			if !strings.EqualFold(strings.TrimSpace(branch.Get("type").String()), "object") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func grokRawToolsContainType(tools []json.RawMessage, want string) bool {
+	for _, tool := range tools {
+		if strings.TrimSpace(gjson.GetBytes(tool, "type").String()) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func deleteGrokOrphanToolControls(body []byte) ([]byte, error) {
+	var err error
+	for _, field := range []string{"tool_choice", "parallel_tool_calls"} {
+		if !gjson.GetBytes(body, field).Exists() {
+			continue
+		}
+		body, err = sjson.DeleteBytes(body, field)
 		if err != nil {
 			return nil, err
 		}
@@ -1121,7 +1399,7 @@ func (s *OpenAIGatewayService) bridgeGrokComposerImageInputs(
 	}
 
 	var reqBody map[string]any
-	if err := json.Unmarshal(body, &reqBody); err != nil {
+	if err := decodeOpenAIJSONUseNumber(body, &reqBody); err != nil {
 		return body, OpenAIUsage{}, false, fmt.Errorf("parse grok composer image bridge request: %w", err)
 	}
 
@@ -1251,7 +1529,7 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 		proxyURL = account.Proxy.URL()
 	}
 
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 	if err != nil {
 		return "", OpenAIUsage{}, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
@@ -1265,6 +1543,8 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 			upstreamMsg = fmt.Sprintf("xAI image bridge upstream returned status %d", resp.StatusCode)
 		}
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			ProxyID:            opsUpstreamProxyID(account),
+			ProxyName:          opsUpstreamProxyName(account),
 			Platform:           account.Platform,
 			AccountID:          account.ID,
 			AccountName:        account.Name,
@@ -1275,10 +1555,16 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 		})
 		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, grokComposerImageBridgeVisionModel)
 		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
+			retryable, retryDelay, retryDeadline, retryMax := grokSameAccountRetryMetadata(account, resp.StatusCode, respBody)
 			return "", OpenAIUsage{}, &UpstreamFailoverError{
-				StatusCode:             resp.StatusCode,
-				ResponseBody:           respBody,
-				RetryableOnSameAccount: shouldRetryOpenAIAccountOnSameAccount(account, resp.StatusCode, respBody, false),
+				StatusCode:               resp.StatusCode,
+				ResponseBody:             respBody,
+				ResponseHeaders:          resp.Header.Clone(),
+				RetryableOnSameAccount:   retryable,
+				RequestScopedTransient:   retryable && resp.StatusCode == http.StatusTooManyRequests,
+				SameAccountRetryDelay:    retryDelay,
+				SameAccountRetryDeadline: retryDeadline,
+				SameAccountRetryMax:      retryMax,
 			}
 		}
 		return "", OpenAIUsage{}, fmt.Errorf("grok composer image bridge upstream error: %s", upstreamMsg)
@@ -1424,6 +1710,7 @@ func buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Acc
 	if err != nil {
 		return nil, err
 	}
+	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileGrok))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
@@ -1722,7 +2009,7 @@ func persistGrokTransientModelCooldown(account *Account, decision GrokUpstreamFa
 		return false
 	}
 	model := strings.TrimSpace(decision.Model)
-	if model == "" || !isGrokHeavyTransientModel(model) {
+	if model == "" {
 		return false
 	}
 	cooldown := decision.Cooldown

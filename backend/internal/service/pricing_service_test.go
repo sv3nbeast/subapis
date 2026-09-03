@@ -237,9 +237,8 @@ func TestBillingService_GPT56CacheWritePricingUsesOfficialMultiplier(t *testing.
 			require.NoError(t, err)
 			require.InDelta(t, tt.input*1.25, pricing.CacheCreationPricePerToken, 1e-12)
 			require.InDelta(t, tt.inputPriority*1.25, pricing.CacheCreationPricePerTokenPriority, 1e-12)
-			require.Equal(t, 272000, pricing.LongContextInputThreshold)
-			require.InDelta(t, 2.0, pricing.LongContextInputMultiplier, 1e-12)
-			require.InDelta(t, 1.5, pricing.LongContextOutputMultiplier, 1e-12)
+			// 阶梯由目录数据驱动：条目无 above/long_context 字段时不再由策略强补。
+			require.Zero(t, pricing.LongContextInputThreshold)
 
 			tokens := UsageTokens{InputTokens: 700, OutputTokens: 50, CacheCreationTokens: 200, CacheReadTokens: 100}
 			standard, err := svc.CalculateCostWithServiceTier(tt.model, tokens, 1, "")
@@ -256,6 +255,32 @@ func TestBillingService_GPT56CacheWritePricingUsesOfficialMultiplier(t *testing.
 		})
 	}
 }
+
+// gpt56LadderCatalogJSON 三个 5.6 模型的目录条目：above_272k 绝对价 + priority 平价，
+// cache_write 缺失由策略按 1.25 倍输入价补齐。
+const gpt56LadderCatalogJSON = `{
+	"gpt-5.6-sol": {"litellm_provider": "openai", "mode": "chat",
+		"input_cost_per_token": 5e-06, "input_cost_per_token_priority": 1e-05,
+		"output_cost_per_token": 3e-05, "output_cost_per_token_priority": 6e-05,
+		"cache_read_input_token_cost": 5e-07, "cache_read_input_token_cost_priority": 1e-06,
+		"input_cost_per_token_above_272k_tokens": 1e-05,
+		"output_cost_per_token_above_272k_tokens": 4.5e-05,
+		"cache_read_input_token_cost_above_272k_tokens": 1e-06},
+	"gpt-5.6-terra": {"litellm_provider": "openai", "mode": "chat",
+		"input_cost_per_token": 2e-06, "input_cost_per_token_priority": 4e-06,
+		"output_cost_per_token": 1.2e-05, "output_cost_per_token_priority": 2.4e-05,
+		"cache_read_input_token_cost": 2e-07, "cache_read_input_token_cost_priority": 4e-07,
+		"input_cost_per_token_above_272k_tokens": 4e-06,
+		"output_cost_per_token_above_272k_tokens": 1.8e-05,
+		"cache_read_input_token_cost_above_272k_tokens": 4e-07},
+	"gpt-5.6-luna": {"litellm_provider": "openai", "mode": "chat",
+		"input_cost_per_token": 2e-07, "input_cost_per_token_priority": 4e-07,
+		"output_cost_per_token": 1.2e-06, "output_cost_per_token_priority": 2.4e-06,
+		"cache_read_input_token_cost": 2e-08, "cache_read_input_token_cost_priority": 4e-08,
+		"input_cost_per_token_above_272k_tokens": 4e-07,
+		"output_cost_per_token_above_272k_tokens": 1.8e-06,
+		"cache_read_input_token_cost_above_272k_tokens": 4e-08}
+}`
 
 func TestBillingService_GPT56UsesLongContextPricingAcrossModelsAndTiers(t *testing.T) {
 	models := []struct {
@@ -285,7 +310,7 @@ func TestBillingService_GPT56UsesLongContextPricingAcrossModelsAndTiers(t *testi
 	for _, model := range models {
 		for _, tier := range tiers {
 			t.Run(model.name+"/"+tier.name, func(t *testing.T) {
-				svc := NewBillingService(&config.Config{}, nil)
+				svc := NewBillingService(&config.Config{}, newStubPricingServiceFromJSON(t, gpt56LadderCatalogJSON))
 				serviceTier := ""
 				if tier.name != "standard" {
 					serviceTier = tier.name
@@ -302,7 +327,7 @@ func TestBillingService_GPT56UsesLongContextPricingAcrossModelsAndTiers(t *testi
 }
 
 func TestBillingService_GPT56LongContextBoundaryIsExclusive(t *testing.T) {
-	svc := NewBillingService(&config.Config{}, nil)
+	svc := NewBillingService(&config.Config{}, newStubPricingServiceFromJSON(t, gpt56LadderCatalogJSON))
 	tokens := UsageTokens{InputTokens: 100000, CacheCreationTokens: 100000, CacheReadTokens: 72000, OutputTokens: 10}
 
 	cost, err := svc.CalculateCost("gpt-5.6-sol", tokens, 1)
@@ -412,9 +437,8 @@ func assertGPT56FallbackPricing(t *testing.T, pricing *ModelPricing, input, cach
 	require.InDelta(t, cached, pricing.CacheReadPricePerToken, 1e-12)
 	require.InDelta(t, cacheWrite, pricing.CacheCreationPricePerToken, 1e-12)
 	require.InDelta(t, output, pricing.OutputPricePerToken, 1e-12)
-	require.Equal(t, 272000, pricing.LongContextInputThreshold)
-	require.InDelta(t, 2.0, pricing.LongContextInputMultiplier, 1e-12)
-	require.InDelta(t, 1.5, pricing.LongContextOutputMultiplier, 1e-12)
+	// 静态兜底只兜基础价；阶梯由目录数据（above_272k 折算或显式字段）驱动。
+	require.Zero(t, pricing.LongContextInputThreshold)
 }
 
 func TestParsePricingData_KeepsImageOnlyPricing(t *testing.T) {
@@ -564,9 +588,8 @@ func TestGetModelPricing_Gpt54UsesStaticFallbackWhenRemoteMissing(t *testing.T) 
 	require.InDelta(t, 2.5e-6, got.InputCostPerToken, 1e-12)
 	require.InDelta(t, 1.5e-5, got.OutputCostPerToken, 1e-12)
 	require.InDelta(t, 2.5e-7, got.CacheReadInputTokenCost, 1e-12)
-	require.Equal(t, 272000, got.LongContextInputTokenThreshold)
-	require.InDelta(t, 2.0, got.LongContextInputCostMultiplier, 1e-12)
-	require.InDelta(t, 1.5, got.LongContextOutputCostMultiplier, 1e-12)
+	// 静态兜底只兜基础价，不携带长上下文阶梯（阶梯由目录数据驱动）。
+	require.Zero(t, got.LongContextInputTokenThreshold)
 }
 
 func TestGetModelPricing_Gpt55UsesDedicatedStaticFallbackWhenRemoteMissing(t *testing.T) {

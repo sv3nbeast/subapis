@@ -89,6 +89,7 @@ const { t } = useI18n()
 const props = defineProps<{
   interval: IntervalFormEntry
   mode: BillingMode
+  enableMultipliers?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -105,6 +106,10 @@ const isEmpty = computed(() => {
     (iv.cache_write_5m_price == null || iv.cache_write_5m_price === '') &&
     (iv.cache_write_1h_price == null || iv.cache_write_1h_price === '') &&
     (iv.cache_read_price == null || iv.cache_read_price === '') &&
+    (iv.input_multiplier == null || iv.input_multiplier === '') &&
+    (iv.output_multiplier == null || iv.output_multiplier === '') &&
+    (iv.cache_write_multiplier == null || iv.cache_write_multiplier === '') &&
+    (iv.cache_read_multiplier == null || iv.cache_read_multiplier === '') &&
     (iv.per_request_price == null || iv.per_request_price === '')
 })
 
@@ -123,3 +128,9 @@ function toIntOrNull(val: string): number | null {
   return isNaN(n) ? null : n
 }
 </script>
+
+<style scoped>
+.pricing-interval-grid {
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+}
+</style>

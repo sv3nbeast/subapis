@@ -2,6 +2,32 @@
 
 这个文件用于记录官方 `Wei-Shaw/sub2api` 的同步状态，避免后续继续靠临时记忆判断。
 
+## 2026-09-04：同步官方 `0.2.0` 候选
+
+- 同步前 `main` / `sv3nbeast/main`：`2abf8f89ae4f3d4999f4a574ecb64f545c652ffc`
+- 共同祖先：`0e82efe48951cb7da1f8554639afdeab05bf16b8`
+- 官方目标 `origin/main`：`b1748c4ea99ce2120401a269142aa071e18a84da`
+- 官方范围：688 个提交（440 个非 merge、248 个 merge）；例行项含 7 个 sponsors 更新、12 个版本同步提交。
+- 融合分支：`codex/official-sync-review`
+
+主要更新与融合结论：
+
+- 模型/协议：吸收 Claude Fable 5.1、Grok 4.6、CN provider、Responses 严格字段、多模态与 client-tools 兼容；本地已验证模型映射和费率继续优先。
+- 网关/调度：吸收 Anthropic SSE overload、OpenAI WS 终态、后续轮次 429、容量恢复、Team 熔断和错误归属；手工保留本地输出前/输出后 failover 边界、当前轮 WS 重放和原始上游错误语义。
+- 缓存/计费：吸收 API-key cache identity、reasoning 回注、remote compaction、渠道分时/区间倍率、Fast/free Fast、分组汇总和 Grok 新用量窗口；保留 Kiro 跨账号逻辑缓存连续性、失败不预热、并发去重、旧/新 Grok Billing 双契约和本地账单费率。
+- 管理端：吸收插件、模型广场、quota monitor、adaptive protocol 与批量账号配置；恢复精简首页、筛选全选、利润控制、腾讯/阿里验证码、OpenAI 命名空间扁平化及 `SubAPIs` 品牌。
+- 本地专有能力：保留 Kiro 长历史/工具/语义尾处理、AWSQ/KRS 隔离、Antigravity 429 的 5s/10s 同号重试后切号、附赠订阅分组及稳定身份调度。
+- 清单状态：所有功能性官方提交已按主题吸收或由本地等价/增强实现覆盖，无未决定项；完整逐提交依据保存在 `/tmp/sub2api-threeway-sync.md`。
+
+门禁结果：
+
+- `git diff --check`、前端 typecheck、前端 build：通过。
+- i18n 与本地契约：17 个测试文件、177 项测试全部通过。
+- 所有变更后端 Go 包使用全新缓存运行 `-count=1`：通过；`go build ./...`：通过。
+- 强制网关回归审查：`PASS`，无 P0/P1；流式/WS/缓存/TTFT 聚焦用例在 `-race` 下通过。
+- 相对同步前快照的前端意外删除：0。
+- 本记录对应最终候选生成前状态；未执行 push 或生产发布。
+
 ## 使用规则
 
 每次准备同步官方更新前，先执行：

@@ -450,6 +450,7 @@ export const useAppStore = defineStore('app', () => {
         available_channels_enabled: false,
         model_plaza_enabled: false,
         model_plaza_require_auth: true,
+        plugin_management_enabled: false,
         public_model_market_enabled: false,
         public_model_market_reference_usd_cny_rate: 7.2,
         public_model_market_settlement_usd_cny_rate: 1,

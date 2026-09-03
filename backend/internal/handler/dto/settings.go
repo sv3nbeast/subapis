@@ -28,6 +28,8 @@ type CustomEndpoint struct {
 // SystemSettings represents the admin settings API response payload.
 type SystemSettings struct {
 	RegistrationEnabled              bool                     `json:"registration_enabled"`
+	OpenAITTFTMode                   string                   `json:"openai_ttft_mode"`
+	PluginManagementEnabled          bool                     `json:"plugin_management_enabled"`
 	EmailVerifyEnabled               bool                     `json:"email_verify_enabled"`
 	RegistrationEmailSuffixWhitelist []string                 `json:"registration_email_suffix_whitelist"`
 	RegistrationEmailSuffixBlacklist []string                 `json:"registration_email_suffix_blacklist"`
@@ -304,6 +306,7 @@ type SystemSettings struct {
 	ChannelMonitorMode                   string `json:"channel_monitor_mode"`
 	ChannelMonitorDefaultIntervalSeconds int    `json:"channel_monitor_default_interval_seconds"`
 	ChannelMonitorHideThroughput         bool   `json:"channel_monitor_hide_throughput"`
+	ChannelMonitorShowQuota              bool   `json:"channel_monitor_show_quota"`
 
 	// Grok model mapping policy (admin settings; empty account mapping falls back to these).
 	GrokDefaultTextModel           string `json:"grok_default_text_model"`
@@ -424,10 +427,12 @@ type PublicSettings struct {
 	ChannelMonitorMode                   string `json:"channel_monitor_mode"`
 	ChannelMonitorDefaultIntervalSeconds int    `json:"channel_monitor_default_interval_seconds"`
 	ChannelMonitorHideThroughput         bool   `json:"channel_monitor_hide_throughput"`
+	ChannelMonitorShowQuota              bool   `json:"channel_monitor_show_quota"`
 
 	AvailableChannelsEnabled              bool    `json:"available_channels_enabled"`
 	ModelPlazaEnabled                     bool    `json:"model_plaza_enabled"`
 	ModelPlazaRequireAuth                 bool    `json:"model_plaza_require_auth"`
+	PluginManagementEnabled               bool    `json:"plugin_management_enabled"`
 	PublicModelMarketEnabled              bool    `json:"public_model_market_enabled"`
 	PublicModelMarketReferenceUSDCNYRate  float64 `json:"public_model_market_reference_usd_cny_rate"`
 	PublicModelMarketSettlementUSDCNYRate float64 `json:"public_model_market_settlement_usd_cny_rate"`
@@ -460,6 +465,10 @@ type OverloadCooldownSettings struct {
 type RateLimit429CooldownSettings struct {
 	Enabled         bool `json:"enabled"`
 	CooldownSeconds int  `json:"cooldown_seconds"`
+}
+
+type OpenAIImagesOAuthUnavailableCooldownSettings struct {
+	CooldownMinutes int `json:"cooldown_minutes"`
 }
 
 // PanelRateLimitSettings 面板 API 限流配置 DTO

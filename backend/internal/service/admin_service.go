@@ -153,15 +153,16 @@ type AdminService interface {
 
 // CreateUserInput represents input for creating a new user via admin operations.
 type CreateUserInput struct {
-	Email         string
-	Password      string
-	Username      string
-	Notes         string
-	Role          string // 空字符串表示使用默认角色(user);合法值 admin/user
-	Balance       *float64
-	Concurrency   int
-	RPMLimit      int
-	AllowedGroups []int64
+	Email                string
+	Password             string
+	Username             string
+	Notes                string
+	Role                 string // 空字符串表示使用默认角色(user);合法值 admin/user
+	Balance              *float64
+	Concurrency          int
+	RPMLimit             int
+	AllowedGroups        []int64
+	RestrictPublicGroups bool
 	// ActorAdminID 执行本次操作的管理员ID(来自JWT)，仅用于权限敏感操作的审计日志。
 	ActorAdminID int64
 }
@@ -177,6 +178,8 @@ type UpdateUserInput struct {
 	RPMLimit      *int     // 使用指针区分"未提供"和"设置为0"
 	Status        string
 	AllowedGroups *[]int64 // 使用指针区分"未提供"和"设置为空数组"
+	// RestrictPublicGroups 指针区分"未提供"和"显式开关"。
+	RestrictPublicGroups *bool
 	// GroupRates 用户专属分组倍率配置
 	// map[groupID]*rate，nil 表示删除该分组的专属倍率
 	GroupRates map[int64]*float64
@@ -223,16 +226,18 @@ type AdminBoundAuthIdentityChannel struct {
 }
 
 type CreateGroupInput struct {
-	Name             string
-	Description      string
-	Platform         string
-	RateMultiplier   float64
-	IsExclusive      bool
-	SubscriptionType string   // standard/subscription
-	DailyLimitUSD    *float64 // 日限额 (USD)
-	WeeklyLimitUSD   *float64 // 周限额 (USD)
-	MonthlyLimitUSD  *float64 // 月限额 (USD)
-	ModelQuotaRatios map[string]float64
+	Name                      string
+	Description               string
+	Platform                  string
+	RateMultiplier            float64
+	IsExclusive               bool
+	SubscriptionType          string   // standard/subscription
+	DailyLimitUSD             *float64 // 日限额 (USD)
+	WeeklyLimitUSD            *float64 // 周限额 (USD)
+	MonthlyLimitUSD           *float64 // 月限额 (USD)
+	ModelQuotaRatios          map[string]float64
+	LongContextPricingEnabled bool
+	ModelPricing              []ChannelModelPricing
 	// 图片生成计费配置（antigravity/gemini 平台使用）
 	AllowImageGeneration         bool
 	AllowBatchImageGeneration    bool
@@ -243,21 +248,27 @@ type CreateGroupInput struct {
 	VideoRateIndependent         bool
 	VideoRateMultiplier          *float64
 	// 高峰时段倍率配置（PeakRateMultiplier 为 nil 时按 1.0 处理）
-	PeakRateEnabled      bool
-	PeakStart            string
-	PeakEnd              string
-	PeakRateMultiplier   *float64
-	ProfitControlEnabled bool
-	ProfitMinMargin      *float64
-	ProfitSafetyBuffer   *float64
-	ImagePrice1K         *float64
-	ImagePrice2K         *float64
-	ImagePrice4K         *float64
-	VideoPrice480P       *float64
-	VideoPrice720P       *float64
-	VideoPrice1080P      *float64
-	ClaudeCodeOnly       bool   // 仅允许 Claude Code 客户端
-	FallbackGroupID      *int64 // 降级分组 ID
+	PeakRateEnabled              bool
+	PeakStart                    string
+	PeakEnd                      string
+	PeakRateMultiplier           *float64
+	ProfitControlEnabled         bool
+	ProfitMinMargin              *float64
+	ProfitSafetyBuffer           *float64
+	ImagePrice1K                 *float64
+	ImagePrice2K                 *float64
+	ImagePrice4K                 *float64
+	VideoPrice480P               *float64
+	VideoPrice720P               *float64
+	VideoPrice1080P              *float64
+	VideoModelPrices             map[string]map[string]float64
+	WebSearchPricePerCall        *float64
+	SearchPricePer1k             *float64
+	AudioRealtimePricePerMin     *float64
+	AudioTtsPricePerMillionChars *float64
+	AudioSttPricePerHour         *float64
+	ClaudeCodeOnly               bool   // 仅允许 Claude Code 客户端
+	FallbackGroupID              *int64 // 降级分组 ID
 	// 无效请求兜底分组 ID（仅 anthropic 平台使用）
 	FallbackGroupIDOnInvalidRequest *int64
 	// 模型路由配置（仅 anthropic 平台使用）
@@ -270,6 +281,8 @@ type CreateGroupInput struct {
 	AllowMessagesDispatch        bool
 	AllowNonStreamMessages       bool
 	AllowLive                    bool
+	ForceOpenAIFast              bool
+	FreeOpenAIFast               bool
 	DefaultMappedModel           string
 	RequireOAuthOnly             bool
 	RequirePrivacySet            bool
@@ -278,9 +291,10 @@ type CreateGroupInput struct {
 	GrokChatUpstreamMode         string
 	GrokChatResponsesGrayPercent int
 	// RPMLimit 分组 RPM 上限（0 = 不限制）
-	RPMLimit                int
-	MaxReasoningEffort      string
-	ReasoningEffortMappings []ReasoningEffortMapping
+	RPMLimit                    int
+	MaxReasoningEffort          string
+	MaxReasoningEffortOverLimit string
+	ReasoningEffortMappings     []ReasoningEffortMapping
 	// Kiro 模拟缓存配置（仅 Kiro 平台生效）
 	KiroCacheEmulationEnabled                        bool
 	KiroAutoStickyEnabled                            *bool
@@ -298,17 +312,19 @@ type CreateGroupInput struct {
 }
 
 type UpdateGroupInput struct {
-	Name             string
-	Description      *string
-	Platform         string
-	RateMultiplier   *float64 // 使用指针以支持设置为0
-	IsExclusive      *bool
-	Status           string
-	SubscriptionType string   // standard/subscription
-	DailyLimitUSD    *float64 // 日限额 (USD)
-	WeeklyLimitUSD   *float64 // 周限额 (USD)
-	MonthlyLimitUSD  *float64 // 月限额 (USD)
-	ModelQuotaRatios map[string]float64
+	Name                      string
+	Description               *string
+	Platform                  string
+	RateMultiplier            *float64 // 使用指针以支持设置为0
+	IsExclusive               *bool
+	Status                    string
+	SubscriptionType          string   // standard/subscription
+	DailyLimitUSD             *float64 // 日限额 (USD)
+	WeeklyLimitUSD            *float64 // 周限额 (USD)
+	MonthlyLimitUSD           *float64 // 月限额 (USD)
+	ModelQuotaRatios          map[string]float64
+	LongContextPricingEnabled *bool
+	ModelPricing              *[]ChannelModelPricing
 	// 图片生成计费配置（antigravity/gemini 平台使用）
 	AllowImageGeneration         *bool
 	AllowBatchImageGeneration    *bool
@@ -319,21 +335,27 @@ type UpdateGroupInput struct {
 	VideoRateIndependent         *bool
 	VideoRateMultiplier          *float64
 	// 高峰时段倍率配置（nil 表示不修改）
-	PeakRateEnabled      *bool
-	PeakStart            *string
-	PeakEnd              *string
-	PeakRateMultiplier   *float64
-	ProfitControlEnabled *bool
-	ProfitMinMargin      *float64
-	ProfitSafetyBuffer   *float64
-	ImagePrice1K         *float64
-	ImagePrice2K         *float64
-	ImagePrice4K         *float64
-	VideoPrice480P       *float64
-	VideoPrice720P       *float64
-	VideoPrice1080P      *float64
-	ClaudeCodeOnly       *bool  // 仅允许 Claude Code 客户端
-	FallbackGroupID      *int64 // 降级分组 ID
+	PeakRateEnabled              *bool
+	PeakStart                    *string
+	PeakEnd                      *string
+	PeakRateMultiplier           *float64
+	ProfitControlEnabled         *bool
+	ProfitMinMargin              *float64
+	ProfitSafetyBuffer           *float64
+	ImagePrice1K                 *float64
+	ImagePrice2K                 *float64
+	ImagePrice4K                 *float64
+	VideoPrice480P               *float64
+	VideoPrice720P               *float64
+	VideoPrice1080P              *float64
+	VideoModelPrices             map[string]map[string]float64
+	WebSearchPricePerCall        *float64
+	SearchPricePer1k             *float64
+	AudioRealtimePricePerMin     *float64
+	AudioTtsPricePerMillionChars *float64
+	AudioSttPricePerHour         *float64
+	ClaudeCodeOnly               *bool  // 仅允许 Claude Code 客户端
+	FallbackGroupID              *int64 // 降级分组 ID
 	// 无效请求兜底分组 ID（仅 anthropic 平台使用）
 	FallbackGroupIDOnInvalidRequest *int64
 	// 模型路由配置（仅 anthropic 平台使用）
@@ -346,6 +368,8 @@ type UpdateGroupInput struct {
 	AllowMessagesDispatch        *bool
 	AllowNonStreamMessages       *bool
 	AllowLive                    *bool
+	ForceOpenAIFast              *bool
+	FreeOpenAIFast               *bool
 	DefaultMappedModel           *string
 	RequireOAuthOnly             *bool
 	RequirePrivacySet            *bool
@@ -354,9 +378,10 @@ type UpdateGroupInput struct {
 	GrokChatUpstreamMode         *string
 	GrokChatResponsesGrayPercent *int
 	// RPMLimit 分组 RPM 上限（0 = 不限制），nil 表示未提供不改动。
-	RPMLimit                *int
-	MaxReasoningEffort      *string
-	ReasoningEffortMappings *[]ReasoningEffortMapping
+	RPMLimit                    *int
+	MaxReasoningEffort          *string
+	MaxReasoningEffortOverLimit *string
+	ReasoningEffortMappings     *[]ReasoningEffortMapping
 	// Kiro 模拟缓存配置（仅 Kiro 平台生效），nil 表示未提供不改动。
 	KiroCacheEmulationEnabled                        *bool
 	KiroAutoStickyEnabled                            *bool
@@ -498,11 +523,12 @@ type UserGroupRPMStatus struct {
 
 // BulkUpdateAccountsResult is the aggregated response for bulk updates.
 type BulkUpdateAccountsResult struct {
-	Success    int                       `json:"success"`
-	Failed     int                       `json:"failed"`
-	SuccessIDs []int64                   `json:"success_ids"`
-	FailedIDs  []int64                   `json:"failed_ids"`
-	Results    []BulkUpdateAccountResult `json:"results"`
+	Success                   int                       `json:"success"`
+	Failed                    int                       `json:"failed"`
+	SuccessIDs                []int64                   `json:"success_ids"`
+	FailedIDs                 []int64                   `json:"failed_ids"`
+	Results                   []BulkUpdateAccountResult `json:"results"`
+	LongContextInheritedCount int                       `json:"long_context_inherited_count,omitempty"`
 }
 
 type CreateProxyInput struct {
@@ -3645,7 +3671,8 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 				normalizedExtra[key] = v
 			}
 		}
-		account.Extra = preserveAnthropicStableIdentityManagedExtra(account.Extra, normalizedExtra)
+		normalizedExtra = preserveAnthropicStableIdentityManagedExtra(account.Extra, normalizedExtra)
+		account.Extra = prepareCodexFingerprintExtraForUpdate(account, normalizedExtra)
 		if account.Platform == PlatformAntigravity && wasOveragesEnabled && !account.IsOveragesEnabled() {
 			delete(account.Extra, "antigravity_credits_overages") // 清理旧版 overages 运行态
 			// 清除 AICredits 限流 key
@@ -3668,6 +3695,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			}
 		}
 		NormalizeFixedQuotaWindows(account.Extra)
+	}
+	if input.Extra == nil {
+		account.Extra = prepareCodexFingerprintExtraForUpdate(account, account.Extra)
 	}
 	if requestedRateSyncEnabledUpdate != nil && *requestedRateSyncEnabledUpdate {
 		if requestedProbeEnabledUpdate != nil && !*requestedProbeEnabledUpdate {
@@ -3886,6 +3916,7 @@ func (s *adminServiceImpl) ReauthorizeGrokOAuthAccountIfUnchanged(
 
 // UpdateAccountExtra 仅对 Extra JSONB 做 key 级合并，避免覆盖其它运行态键。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
+	updates = sanitizedCodexFingerprintExtraUpdates(updates)
 	if len(updates) == 0 {
 		return nil
 	}
@@ -3936,6 +3967,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if input == nil {
 		return nil, infraerrors.BadRequest("INVALID_BULK_ACCOUNT_UPDATE", "bulk account update input is required")
 	}
+	input.Extra = sanitizedCodexFingerprintExtraUpdates(input.Extra)
 	if AnthropicStableCanaryExtraUpdateTouchesManagedFields(input.Extra) {
 		return nil, fmt.Errorf("%w: enrollment fields require the dedicated canary lifecycle", ErrAnthropicStableCanaryReserved)
 	}
@@ -4113,9 +4145,10 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// Prepare bulk updates for columns and JSONB fields.
 	repoUpdates := AccountBulkUpdate{
-		Credentials:  input.Credentials,
-		Extra:        input.Extra,
-		ProbeEnabled: input.ProbeEnabled,
+		Credentials:                input.Credentials,
+		Extra:                      input.Extra,
+		ProbeEnabled:               input.ProbeEnabled,
+		EnsureCodexFingerprintSeed: ShouldEnsureCodexFingerprintSeedForExtraUpdates(input.Extra),
 	}
 	if bulkCredentialsChangeInvalidatesProbe(input.Credentials) || input.ProxyID != nil {
 		if repoUpdates.Extra == nil {
@@ -5338,7 +5371,7 @@ func (s *adminServiceImpl) ResetAccountQuota(ctx context.Context, id int64) erro
 		return infraerrors.New(http.StatusBadRequest, "SPARK_SHADOW_NO_QUOTA_RESET",
 			"cannot reset quota for a spark shadow account; manage it on the parent account")
 	}
-	return s.accountRepo.ResetQuotaUsed(ctx, id)
+	return s.accountRepo.ResetQuotaUsedAndClearRateLimitCooldown(ctx, id)
 }
 
 // EnsureOpenAIPrivacy 检查 OpenAI OAuth 账号是否已设置 privacy_mode，

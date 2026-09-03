@@ -182,7 +182,10 @@ func extractKiroModelTokenLimitPage(body []byte) (map[string]int, string, error)
 		if entry.TokenLimits.MaxInputTokens <= 0 {
 			continue
 		}
-		modelID := upstreamModelEntryID(entry)
+		modelID := strings.TrimSpace(entry.ModelID)
+		if modelID == "" {
+			modelID = upstreamModelEntryID(entry)
+		}
 		for _, key := range kiroModelLimitLookupKeys(modelID) {
 			if key != "" {
 				limits[key] = entry.TokenLimits.MaxInputTokens

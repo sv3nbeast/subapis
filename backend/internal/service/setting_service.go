@@ -158,6 +158,7 @@ const backendModeDBTimeout = 5 * time.Second
 
 // cachedGatewayForwardingSettings 缓存网关转发行为设置（进程内缓存，60s TTL）
 type cachedGatewayForwardingSettings struct {
+	openAITTFTMode                   string
 	fingerprintUnification           bool
 	metadataPassthrough              bool
 	cchSigning                       bool
@@ -176,6 +177,15 @@ var gatewayForwardingSF singleflight.Group
 const gatewayForwardingCacheTTL = 60 * time.Second
 const gatewayForwardingErrorTTL = 5 * time.Second
 const gatewayForwardingDBTimeout = 5 * time.Second
+
+func (s *SettingService) GetOpenAITTFTMode(ctx context.Context) string {
+	if cached, ok := gatewayForwardingCache.Load().(*cachedGatewayForwardingSettings); ok && cached != nil {
+		if cached.expiresAt == 0 || time.Now().UnixNano() < cached.expiresAt {
+			return normalizeOpenAITTFTMode(cached.openAITTFTMode)
+		}
+	}
+	return OpenAITTFTModeSemantic
+}
 
 // cachedAntigravityUserAgentVersion 缓存 Antigravity UA 版本号（进程内缓存，60s TTL）
 type cachedAntigravityUserAgentVersion struct {
@@ -287,6 +297,7 @@ type SettingService struct {
 	// instance owns its own cache, no shared package-level state.
 	openAIQuotaAutoPauseSettingsCache atomic.Value // *cachedOpenAIQuotaAutoPauseSettings
 	openAIQuotaAutoPauseSettingsSF    singleflight.Group
+	openAIAPIKeyHealthBreakerCache    atomic.Value // *cachedOpenAIAPIKeyHealthBreakerSettings
 
 	channelMonitorRuntimeListenersMu sync.Mutex
 	channelMonitorRuntimeListeners   []func()
@@ -1480,6 +1491,7 @@ type ChannelMonitorRuntime struct {
 	Mode                   string
 	DefaultIntervalSeconds int
 	HideThroughput         bool
+	ShowQuota              bool
 }
 
 func normalizeChannelMonitorMode(raw string) string {
@@ -1508,6 +1520,7 @@ func (s *SettingService) GetChannelMonitorRuntime(ctx context.Context) ChannelMo
 		SettingKeyChannelMonitorMode,
 		SettingKeyChannelMonitorDefaultIntervalSeconds,
 		SettingKeyChannelMonitorHideThroughput,
+		SettingKeyChannelMonitorShowQuota,
 	})
 	if err != nil {
 		return ChannelMonitorRuntime{Enabled: true, Mode: ChannelMonitorModeV1, DefaultIntervalSeconds: channelMonitorIntervalFallback, HideThroughput: true}
@@ -1517,6 +1530,7 @@ func (s *SettingService) GetChannelMonitorRuntime(ctx context.Context) ChannelMo
 		Mode:                   normalizeChannelMonitorMode(vals[SettingKeyChannelMonitorMode]),
 		DefaultIntervalSeconds: parseChannelMonitorInterval(vals[SettingKeyChannelMonitorDefaultIntervalSeconds]),
 		HideThroughput:         !isFalseSettingValue(vals[SettingKeyChannelMonitorHideThroughput]),
+		ShowQuota:              vals[SettingKeyChannelMonitorShowQuota] == "true",
 	}
 }
 
@@ -2266,9 +2280,11 @@ type PublicSettingsInjectionPayload struct {
 	ChannelMonitorMode                    string  `json:"channel_monitor_mode"`
 	ChannelMonitorDefaultIntervalSeconds  int     `json:"channel_monitor_default_interval_seconds"`
 	ChannelMonitorHideThroughput          bool    `json:"channel_monitor_hide_throughput"`
+	ChannelMonitorShowQuota               bool    `json:"channel_monitor_show_quota"`
 	AvailableChannelsEnabled              bool    `json:"available_channels_enabled"`
 	ModelPlazaEnabled                     bool    `json:"model_plaza_enabled"`
 	ModelPlazaRequireAuth                 bool    `json:"model_plaza_require_auth"`
+	PluginManagementEnabled               bool    `json:"plugin_management_enabled"`
 	PublicModelMarketEnabled              bool    `json:"public_model_market_enabled"`
 	PublicModelMarketReferenceUSDCNYRate  float64 `json:"public_model_market_reference_usd_cny_rate"`
 	PublicModelMarketSettlementUSDCNYRate float64 `json:"public_model_market_settlement_usd_cny_rate"`
@@ -2352,9 +2368,11 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		ChannelMonitorMode:                    settings.ChannelMonitorMode,
 		ChannelMonitorDefaultIntervalSeconds:  settings.ChannelMonitorDefaultIntervalSeconds,
 		ChannelMonitorHideThroughput:          settings.ChannelMonitorHideThroughput,
+		ChannelMonitorShowQuota:               settings.ChannelMonitorShowQuota,
 		AvailableChannelsEnabled:              settings.AvailableChannelsEnabled,
 		ModelPlazaEnabled:                     settings.ModelPlazaEnabled,
 		ModelPlazaRequireAuth:                 settings.ModelPlazaRequireAuth,
+		PluginManagementEnabled:               settings.PluginManagementEnabled,
 		PublicModelMarketEnabled:              settings.PublicModelMarketEnabled,
 		PublicModelMarketReferenceUSDCNYRate:  settings.PublicModelMarketReferenceUSDCNYRate,
 		PublicModelMarketSettlementUSDCNYRate: settings.PublicModelMarketSettlementUSDCNYRate,
@@ -5833,6 +5851,39 @@ func (s *SettingService) SetRateLimit429CooldownSettings(ctx context.Context, se
 	}
 
 	return s.settingRepo.Set(ctx, SettingKeyRateLimit429CooldownSettings, string(data))
+}
+
+func (s *SettingService) GetOpenAIImagesOAuthUnavailableCooldownSettings(ctx context.Context) (*OpenAIImagesOAuthUnavailableCooldownSettings, error) {
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyOpenAIImagesOAuthUnavailableCooldownSettings)
+	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			return DefaultOpenAIImagesOAuthUnavailableCooldownSettings(), nil
+		}
+		return nil, fmt.Errorf("get OpenAI images OAuth unavailable cooldown settings: %w", err)
+	}
+	if value == "" {
+		return DefaultOpenAIImagesOAuthUnavailableCooldownSettings(), nil
+	}
+	var settings OpenAIImagesOAuthUnavailableCooldownSettings
+	if err := json.Unmarshal([]byte(value), &settings); err != nil ||
+		settings.CooldownMinutes <= 0 || settings.CooldownMinutes > openAIImagesOAuthUnavailableMaxCooldownMinutes {
+		return DefaultOpenAIImagesOAuthUnavailableCooldownSettings(), nil
+	}
+	return &settings, nil
+}
+
+func (s *SettingService) SetOpenAIImagesOAuthUnavailableCooldownSettings(ctx context.Context, settings *OpenAIImagesOAuthUnavailableCooldownSettings) error {
+	if settings == nil {
+		return fmt.Errorf("settings cannot be nil")
+	}
+	if settings.CooldownMinutes <= 0 || settings.CooldownMinutes > openAIImagesOAuthUnavailableMaxCooldownMinutes {
+		return fmt.Errorf("cooldown_minutes must be between 1-%d", openAIImagesOAuthUnavailableMaxCooldownMinutes)
+	}
+	data, err := json.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("marshal OpenAI images OAuth unavailable cooldown settings: %w", err)
+	}
+	return s.settingRepo.Set(ctx, SettingKeyOpenAIImagesOAuthUnavailableCooldownSettings, string(data))
 }
 
 // GetOIDCConnectOAuthConfig 返回用于登录的“最终生效” OIDC 配置。

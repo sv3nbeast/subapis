@@ -438,12 +438,27 @@ func (s *AccountUsageService) GetUsage(ctx context.Context, accountID int64, for
 	if err != nil {
 		return nil, fmt.Errorf("get account failed: %w", err)
 	}
+	return s.getUsageForAccount(ctx, account, forceProbe)
+}
+
+// GetUsageForAccount is the already-loaded-account entry point used by quota
+// monitoring, avoiding a second account/proxy/group lookup on cache misses.
+func (s *AccountUsageService) GetUsageForAccount(ctx context.Context, account *Account, force ...bool) (*UsageInfo, error) {
+	forceProbe := len(force) > 0 && force[0]
+	return s.getUsageForAccount(ctx, account, forceProbe)
+}
+
+func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *Account, forceProbe bool) (*UsageInfo, error) {
+	if account == nil {
+		return nil, ErrAccountNotFound
+	}
+	accountID := account.ID
 
 	// Dedicated UI load-test accounts must remain fully interactive without ever
 	// contacting Anthropic with synthetic credentials. Reuse the same persisted
 	// passive snapshot that the account table loads on mount.
 	if account.IsSyntheticUITest() && account.IsAnthropicOAuthOrSetupToken() {
-		return s.GetPassiveUsage(ctx, accountID)
+		return s.getPassiveUsageForAccount(ctx, account)
 	}
 
 	if account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth {
@@ -782,6 +797,9 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 					if updates := buildCodexSparkWindowExtraUpdates(quotaUsage, now); len(updates) > 0 {
 						mergeAccountExtra(account, updates)
 						s.persistOpenAICodexProbeSnapshot(account.ID, updates)
+						if account.ParentAccountID != nil {
+							notifyOpenAIAutoReset(*account.ParentAccountID)
+						}
 						if usage.UpdatedAt == nil {
 							usage.UpdatedAt = &now
 						}
@@ -889,7 +907,7 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 	if accessToken == "" && !account.IsOpenAIAgentIdentity() {
 		return nil, fmt.Errorf("no access token available")
 	}
-	modelID := openaipkg.DefaultTestModel
+	modelID := openaipkg.CodexUsageProbeModel
 	payload := createOpenAITestPayload(modelID, true)
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -919,9 +937,10 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 	}
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("OpenAI-Beta", "responses=experimental")
-	req.Header.Set("Originator", openaipkg.CodexDefaultOriginator)
-	req.Header.Set("Version", openAICodexProbeVersion)
-	req.Header.Set("User-Agent", codexCLIUserAgent)
+	canonical := resolveCodexOutboundIdentity("")
+	req.Header.Set("Originator", canonical.originator)
+	req.Header.Set("Version", canonical.version)
+	req.Header.Set("User-Agent", canonical.userAgent)
 	if s.identityCache != nil {
 		// 网关自身拉 usage 不存在客户端入站,按 plain CLI 形式取指纹即可。
 		if fp, fpErr := s.identityCache.GetFingerprint(reqCtx, account.ID, UAFormPlainCLI); fpErr == nil && fp != nil && strings.TrimSpace(fp.UserAgent) != "" {
@@ -974,7 +993,9 @@ func (s *AccountUsageService) persistOpenAICodexProbeSnapshot(accountID int64, u
 	go func() {
 		updateCtx, updateCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer updateCancel()
-		_ = s.accountRepo.UpdateExtra(updateCtx, accountID, updates)
+		if err := s.accountRepo.UpdateExtra(updateCtx, accountID, updates); err == nil {
+			notifyOpenAIAutoReset(accountID)
+		}
 	}()
 }
 

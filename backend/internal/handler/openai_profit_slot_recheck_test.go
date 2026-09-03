@@ -5,8 +5,7 @@ package handler
 // 槽位终检与生图跳门回归（handler 半程）：
 //   - 槽位获取成功后的利润终检：越线账号释放槽位并要求调用方排除重选，
 //     不写响应、不绑定粘连；
-//   - openAIResponsesRequiredCapability 的生图意图映射钉死（scheduler 的
-//     跳门条件依赖 CapabilityResponses ⇔ 显式生图意图这一耦合）。
+//   - openAIResponsesRequiredCapability 的请求能力映射覆盖生图与原生远程压缩。
 
 import (
 	"context"
@@ -105,7 +104,8 @@ func TestAcquireResponsesAccountSlotProfitRecheck(t *testing.T) {
 		c.Request = httptest.NewRequest("POST", "/v1/responses", nil).WithContext(profitSlotTestContext(t, gw, groupID, false))
 		streamStarted := false
 
-		release, result := h.acquireResponsesAccountSlot(c, &groupID, "", newSelection(profitSlotTestAccount(1, 0.8)), false, &streamStarted, zap.NewNop())
+		release, result, err := h.acquireResponsesAccountSlot(c, &groupID, "", newSelection(profitSlotTestAccount(1, 0.8)), false, &streamStarted, zap.NewNop())
+		require.NoError(t, err)
 		require.Equal(t, openAISlotAcquireProfitVetoed, result)
 		require.Nil(t, release)
 		require.Zero(t, w.Body.Len(), "利润终检否决不得写出任何响应")
@@ -120,7 +120,8 @@ func TestAcquireResponsesAccountSlotProfitRecheck(t *testing.T) {
 		c.Request = httptest.NewRequest("POST", "/v1/responses", nil).WithContext(profitSlotTestContext(t, gw, groupID, false))
 		streamStarted := false
 
-		release, result := h.acquireResponsesAccountSlot(c, &groupID, "", newSelection(profitSlotTestAccount(2, 0.3)), false, &streamStarted, zap.NewNop())
+		release, result, err := h.acquireResponsesAccountSlot(c, &groupID, "", newSelection(profitSlotTestAccount(2, 0.3)), false, &streamStarted, zap.NewNop())
+		require.NoError(t, err)
 		require.Equal(t, openAISlotAcquireOK, result)
 		require.NotNil(t, release)
 		release()
@@ -134,17 +135,18 @@ func TestAcquireResponsesAccountSlotProfitRecheck(t *testing.T) {
 		c.Request = httptest.NewRequest("POST", "/v1/responses", nil).WithContext(profitSlotTestContext(t, gw, groupID, true))
 		streamStarted := false
 
-		release, result := h.acquireResponsesAccountSlot(c, &groupID, "", newSelection(profitSlotTestAccount(3, 0.8)), false, &streamStarted, zap.NewNop())
+		release, result, err := h.acquireResponsesAccountSlot(c, &groupID, "", newSelection(profitSlotTestAccount(3, 0.8)), false, &streamStarted, zap.NewNop())
+		require.NoError(t, err)
 		require.Equal(t, openAISlotAcquireOK, result, "生图意图跳门：过贵账号照常获取（图片边界不装门）")
 		require.NotNil(t, release)
 		release()
 	})
 }
 
-// scheduler 跳门条件依赖"CapabilityResponses 仅在显式生图意图时被要求"这一
-// 映射；后续若扩展该 capability 的用途，本测试失败提示同步收窄跳门条件。
-func TestOpenAIResponsesRequiredCapabilityPinsImageIntentMapping(t *testing.T) {
+func TestOpenAIResponsesRequiredCapabilityForRequest(t *testing.T) {
 	require.Equal(t, service.OpenAIEndpointCapabilityResponses, openAIResponsesRequiredCapability(true, service.PlatformOpenAI))
 	require.Equal(t, service.OpenAIEndpointCapabilityChatCompletions, openAIResponsesRequiredCapability(false, service.PlatformOpenAI))
 	require.Equal(t, service.OpenAIEndpointCapabilityChatCompletions, openAIResponsesRequiredCapability(true, service.PlatformGrok))
+	require.Equal(t, service.OpenAIEndpointCapabilityResponses, openAIResponsesRequiredCapabilityForRequest(false, true, service.PlatformOpenAI))
+	require.Equal(t, service.OpenAIEndpointCapabilityChatCompletions, openAIResponsesRequiredCapabilityForRequest(false, true, service.PlatformGrok))
 }

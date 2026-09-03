@@ -39,6 +39,14 @@ func (s *GatewayService) ForwardAsResponses(
 		return s.forwardDroidOpenAI(ctx, c, account, body, droidEndpointOpenAI, startTime)
 	}
 
+	normalizedBody, normalized, err := normalizeOpenAIResponsesLegacyIngress(body)
+	if err != nil {
+		return nil, err
+	}
+	if normalized {
+		body = normalizedBody
+	}
+
 	// 1. Lower Codex client-side tools to function tools understood by Anthropic.
 	adaptedBody, clientToolMapping, err := adaptResponsesClientToolsForAnthropic(body)
 	if err != nil {
@@ -244,18 +252,9 @@ func (s *GatewayService) ForwardAsResponses(
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()
 		}
-		safeErr := sanitizeUpstreamErrorMessage(err.Error())
-		setOpsUpstreamError(c, 0, safeErr, "")
-		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-			Platform:           account.Platform,
-			AccountID:          account.ID,
-			AccountName:        account.Name,
-			UpstreamStatusCode: 0,
-			Kind:               "request_error",
-			Message:            safeErr,
+		return nil, s.handleUpstreamTransportError(ctx, c, account, err, OpsUpstreamErrorEvent{
+			UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()),
 		})
-		writeResponsesError(c, http.StatusBadGateway, "server_error", "Upstream request failed")
-		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -270,7 +269,10 @@ func (s *GatewayService) ForwardAsResponses(
 
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
 			softRateLimit := IsAnthropicSoftRateLimitResponse(account, resp.StatusCode, resp.Header, respBody)
+			retryableOnSameAccount := softRateLimit
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				ProxyID:            opsUpstreamProxyID(account),
+				ProxyName:          opsUpstreamProxyName(account),
 				Platform:           account.Platform,
 				AccountID:          account.ID,
 				AccountName:        account.Name,
@@ -279,14 +281,18 @@ func (s *GatewayService) ForwardAsResponses(
 				Kind:               "failover",
 				Message:            upstreamMsg,
 			})
-			if s.rateLimitService != nil && !softRateLimit {
-				s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, mappedModel)
+			if !softRateLimit {
+				shouldDisable := false
+				if s.rateLimitService != nil {
+					shouldDisable = s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, mappedModel)
+				}
+				retryableOnSameAccount = !shouldDisable && account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode)
 			}
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
 				ResponseHeaders:        resp.Header.Clone(),
-				RetryableOnSameAccount: softRateLimit,
+				RetryableOnSameAccount: retryableOnSameAccount,
 				AnthropicSoftRateLimit: softRateLimit,
 				RequestedModel:         originalModel,
 			}
@@ -509,12 +515,16 @@ func liftResponsesAdditionalTools(requestBody map[string]any) (bool, error) {
 
 // ExtractResponsesReasoningEffortFromBody reads Responses API reasoning.effort
 // and normalizes it for usage logging.
-func ExtractResponsesReasoningEffortFromBody(body []byte) *string {
+func ExtractResponsesReasoningEffortFromBody(body []byte, modelCandidates ...string) *string {
 	raw := strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String())
 	if raw == "" {
 		return nil
 	}
-	normalized := normalizeOpenAIReasoningEffort(raw)
+	model := firstNonEmpty(modelCandidates...)
+	if model == "" {
+		model = strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	}
+	normalized := normalizeOpenAIReasoningEffortForModel(raw, model)
 	if normalized == "" {
 		return nil
 	}
@@ -537,17 +547,39 @@ func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 		}
 		return
 	}
-	if src.InputTokens > 0 {
-		dst.InputTokens = src.InputTokens
+	if src.PromptTokens > 0 || src.PromptCacheHitTokens != nil || src.PromptCacheMissTokens != nil {
+		cacheReadTokens := src.CacheReadInputTokens
+		if cacheReadTokens == 0 && src.CachedTokens > 0 {
+			cacheReadTokens = src.CachedTokens
+		}
+		if cacheReadTokens == 0 && src.PromptTokensDetails != nil && src.PromptTokensDetails.CachedTokens > 0 {
+			cacheReadTokens = src.PromptTokensDetails.CachedTokens
+		}
+		if cacheReadTokens == 0 && src.PromptCacheHitTokens != nil {
+			cacheReadTokens = max(*src.PromptCacheHitTokens, 0)
+		}
+		if src.PromptCacheMissTokens != nil {
+			dst.InputTokens = max(*src.PromptCacheMissTokens, 0)
+		} else {
+			dst.InputTokens = max(src.PromptTokens-cacheReadTokens-src.CacheCreationInputTokens, 0)
+		}
+		dst.CacheReadInputTokens = cacheReadTokens
+		dst.CacheCreationInputTokens = src.CacheCreationInputTokens
+	} else {
+		if src.InputTokens > 0 {
+			dst.InputTokens = src.InputTokens
+		}
+		if src.CacheReadInputTokens > 0 {
+			dst.CacheReadInputTokens = src.CacheReadInputTokens
+		} else if src.CachedTokens > 0 {
+			dst.CacheReadInputTokens = src.CachedTokens
+		}
+		if src.CacheCreationInputTokens > 0 {
+			dst.CacheCreationInputTokens = src.CacheCreationInputTokens
+		}
 	}
 	if src.OutputTokens > 0 {
 		dst.OutputTokens = src.OutputTokens
-	}
-	if src.CacheReadInputTokens > 0 {
-		dst.CacheReadInputTokens = src.CacheReadInputTokens
-	}
-	if src.CacheCreationInputTokens > 0 {
-		dst.CacheCreationInputTokens = src.CacheCreationInputTokens
 	}
 	if src.KiroCredits > 0 {
 		dst.KiroCredits = src.KiroCredits
@@ -1199,7 +1231,12 @@ func (s *GatewayService) handleResponsesStreamingResponseWithOptions(
 
 // appendRawJSON appends a JSON fragment string to existing raw JSON.
 func appendRawJSON(existing json.RawMessage, fragment string) json.RawMessage {
-	if len(existing) == 0 {
+	// Anthropic initializes tool_use.input to {} in content_block_start, then
+	// streams the actual input through input_json_delta events. Treat that empty
+	// object as a placeholder instead of prefixing it to the streamed JSON.
+	var existingObject map[string]json.RawMessage
+	isEmptyObject := json.Unmarshal(existing, &existingObject) == nil && existingObject != nil && len(existingObject) == 0
+	if len(existing) == 0 || isEmptyObject {
 		return json.RawMessage(fragment)
 	}
 	return json.RawMessage(string(existing) + fragment)

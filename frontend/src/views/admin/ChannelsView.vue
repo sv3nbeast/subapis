@@ -449,6 +449,8 @@
                   :key="idx"
                   :entry="entry"
                   :platform="section.platform"
+                  enable-time-pricing
+                  enable-tier-multipliers
                   @update="updatePricingEntry(sIdx, idx, $event)"
                   @remove="removePricingEntry(sIdx, idx)"
                 />
@@ -612,7 +614,7 @@ import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 import type { AccountStatsPricingRule, Channel, ChannelModelPricing, CreateChannelRequest, UpdateChannelRequest } from '@/api/admin/channels'
 import type { PricingFormEntry } from '@/components/admin/channel/types'
-import { mTokToPerToken, perTokenToMTok, apiIntervalsToForm, formIntervalsToAPI, findModelConflict, validateIntervals } from '@/components/admin/channel/types'
+import { apiIntervalsToForm, apiTimePricingToForm, createDefaultTimePricingForm, findModelConflict, formIntervalsToAPI, formTimePricingToAPI, isValidPositiveMultiplier, mTokToPerToken, perTokenToMTok, validateIntervals, validateTimePricing } from '@/components/admin/channel/types'
 import type { AdminGroup, GroupPlatform } from '@/types'
 import type { Column } from '@/components/common/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -874,10 +876,13 @@ function addPricingEntry(sectionIdx: number) {
     cache_write_5m_price: null,
     cache_write_1h_price: null,
     cache_read_price: null,
+    fast_multiplier: null,
+    flex_multiplier: null,
     image_input_price: null,
     image_output_price: null,
     per_request_price: null,
-    intervals: []
+    intervals: [],
+    time_pricing: createDefaultTimePricingForm()
   })
 }
 
@@ -903,7 +908,8 @@ function createEmptyPricingEntry(): PricingFormEntry {
     image_input_price: null,
     image_output_price: null,
     per_request_price: null,
-    intervals: []
+    intervals: [],
+    time_pricing: createDefaultTimePricingForm()
   }
 }
 
@@ -993,10 +999,13 @@ function pricingEntryToAPI(entry: PricingFormEntry, platform: GroupPlatform): Ch
     cache_write_5m_price: mTokToPerToken(entry.cache_write_5m_price),
     cache_write_1h_price: mTokToPerToken(entry.cache_write_1h_price),
     cache_read_price: mTokToPerToken(entry.cache_read_price),
+    fast_multiplier: entry.fast_multiplier != null && entry.fast_multiplier !== '' ? Number(entry.fast_multiplier) : null,
+    flex_multiplier: entry.flex_multiplier != null && entry.flex_multiplier !== '' ? Number(entry.flex_multiplier) : null,
     image_input_price: mTokToPerToken(entry.image_input_price),
     image_output_price: mTokToPerToken(entry.image_output_price),
     per_request_price: entry.per_request_price != null && entry.per_request_price !== '' ? Number(entry.per_request_price) : null,
-    intervals: formIntervalsToAPI(entry.intervals || [])
+    intervals: formIntervalsToAPI(entry.intervals || []),
+    time_pricing: formTimePricingToAPI(entry.time_pricing)
   }
 }
 
@@ -1011,10 +1020,13 @@ function pricingAPIToForm(pricing: ChannelModelPricing): PricingFormEntry {
     cache_write_5m_price: perTokenToMTok(pricing.cache_write_5m_price),
     cache_write_1h_price: perTokenToMTok(pricing.cache_write_1h_price),
     cache_read_price: perTokenToMTok(pricing.cache_read_price),
+    fast_multiplier: pricing.fast_multiplier,
+    flex_multiplier: pricing.flex_multiplier,
     image_input_price: perTokenToMTok(pricing.image_input_price),
     image_output_price: perTokenToMTok(pricing.image_output_price),
     per_request_price: pricing.per_request_price,
-    intervals: apiIntervalsToForm(pricing.intervals || [])
+    intervals: apiIntervalsToForm(pricing.intervals || []),
+    time_pricing: apiTimePricingToForm(pricing.time_pricing)
   }
 }
 
@@ -1462,12 +1474,14 @@ async function handleSubmit() {
   for (const section of form.platforms.filter(s => s.enabled)) {
     for (const entry of section.model_pricing) {
       if (entry.enabled === false) continue
-      if (!entry.intervals || entry.intervals.length === 0) continue
-      const intervalErr = validateIntervals(entry.intervals, entry.billing_mode, t)
-      if (intervalErr) {
+      const validationError =
+        (!isValidPositiveMultiplier(entry.fast_multiplier) || !isValidPositiveMultiplier(entry.flex_multiplier))
+          ? t('admin.channels.form.multiplierPositive')
+          : validateIntervals(entry.intervals || [], entry.billing_mode, t) || validateTimePricing(entry.time_pricing, t)
+      if (validationError) {
         const platformLabel = t('admin.groups.platforms.' + section.platform, section.platform)
         const modelLabel = entry.models.join(', ') || '未命名'
-        appStore.showError(`${platformLabel} - ${modelLabel}: ${intervalErr}`)
+        appStore.showError(`${platformLabel} - ${modelLabel}: ${validationError}`)
         activeTab.value = section.platform
         return
       }
@@ -1475,12 +1489,14 @@ async function handleSubmit() {
     for (const rule of section.account_stats_pricing_rules) {
       for (const entry of rule.pricing) {
         if (entry.enabled === false) continue
-        if (!entry.intervals || entry.intervals.length === 0) continue
-        const intervalErr = validateIntervals(entry.intervals, entry.billing_mode, t)
-        if (intervalErr) {
+        const validationError =
+          (!isValidPositiveMultiplier(entry.fast_multiplier) || !isValidPositiveMultiplier(entry.flex_multiplier))
+            ? t('admin.channels.form.multiplierPositive')
+            : validateIntervals(entry.intervals || [], entry.billing_mode, t) || validateTimePricing(entry.time_pricing, t)
+        if (validationError) {
           const platformLabel = t('admin.groups.platforms.' + section.platform, section.platform)
           const modelLabel = entry.models.join(', ') || '未命名'
-          appStore.showError(`${platformLabel} - ${modelLabel}: ${intervalErr}`)
+          appStore.showError(`${platformLabel} - ${modelLabel}: ${validationError}`)
           activeTab.value = section.platform
           return
         }

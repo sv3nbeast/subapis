@@ -24,6 +24,38 @@ type gatewayModelsResponseForTest struct {
 	Data   []gatewayModelItemForTest `json:"data"`
 }
 
+type codexModelsResponseForTest struct {
+	Models []struct {
+		Slug                     string                       `json:"slug"`
+		SupportedReasoningLevels []codexReasoningLevelForTest `json:"supported_reasoning_levels"`
+		InputModalities          []string                     `json:"input_modalities"`
+		ModelMessages            map[string]json.RawMessage   `json:"model_messages"`
+		TruncationPolicy         map[string]json.RawMessage   `json:"truncation_policy"`
+		AvailabilityNUX          json.RawMessage              `json:"availability_nux"`
+		Upgrade                  json.RawMessage              `json:"upgrade"`
+	} `json:"models"`
+}
+
+type codexReasoningLevelForTest struct {
+	Effort string `json:"effort"`
+}
+
+func codexModelSlugsForTest(models []struct {
+	Slug                     string                       `json:"slug"`
+	SupportedReasoningLevels []codexReasoningLevelForTest `json:"supported_reasoning_levels"`
+	InputModalities          []string                     `json:"input_modalities"`
+	ModelMessages            map[string]json.RawMessage   `json:"model_messages"`
+	TruncationPolicy         map[string]json.RawMessage   `json:"truncation_policy"`
+	AvailabilityNUX          json.RawMessage              `json:"availability_nux"`
+	Upgrade                  json.RawMessage              `json:"upgrade"`
+}) []string {
+	slugs := make([]string, 0, len(models))
+	for _, model := range models {
+		slugs = append(slugs, model.Slug)
+	}
+	return slugs
+}
+
 type gatewayModelItemForTest struct {
 	ID        string `json:"id"`
 	Object    string `json:"object"`
@@ -40,6 +72,17 @@ func (s *gatewayModelsAccountRepoStub) ListSchedulableByGroupID(ctx context.Cont
 	out := make([]service.Account, len(accounts))
 	copy(out, accounts)
 	return out, nil
+}
+
+func (s *gatewayModelsAccountRepoStub) ListByGroup(ctx context.Context, groupID int64) ([]service.Account, error) {
+	return s.ListSchedulableByGroupID(ctx, groupID)
+}
+
+func (s *gatewayModelsAccountRepoStub) ListModelAvailabilityCandidates(ctx context.Context, groupID *int64, _ []string, _ bool) ([]service.Account, error) {
+	if groupID == nil {
+		return nil, nil
+	}
+	return s.ListSchedulableByGroupID(ctx, *groupID)
 }
 
 func newGatewayModelsHandlerForTest(repo service.AccountRepository) *GatewayHandler {
@@ -129,6 +172,62 @@ func TestGatewayModels_GeminiGroupFiltersMappedModelsByPlatform(t *testing.T) {
 	var got gatewayModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	require.Equal(t, []string{"gemini-2.5-flash"}, modelIDsForTest(got.Data))
+}
+
+// Scenario: a Composite group with only Anthropic accounts must not inherit Antigravity Gemini defaults.
+func TestGatewayCodexModels_CompositeAnthropicDoesNotAdvertiseAntigravityDefaults(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(64)
+	h := newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{
+		byGroup: map[int64][]service.Account{
+			groupID: {{ID: 1, Platform: service.PlatformAnthropic}},
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/models?client_version=0.147.0", nil)
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		Group: &service.Group{ID: groupID, Platform: service.PlatformComposite},
+	})
+
+	h.CodexModels(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got codexModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	slugs := codexModelSlugsForTest(got.Models)
+	require.Contains(t, slugs, "claude-opus-4-6")
+	require.NotContains(t, slugs, "gemini-2.5-flash")
+}
+
+// Scenario: Antigravity retains its own Claude and Gemini defaults inside Composite groups.
+func TestGatewayModels_CompositeAntigravityAdvertisesAntigravityDefaults(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(65)
+	h := newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{
+		byGroup: map[int64][]service.Account{
+			groupID: {{ID: 1, Platform: service.PlatformAntigravity}},
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		Group: &service.Group{ID: groupID, Platform: service.PlatformComposite},
+	})
+
+	h.Models(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	ids := modelIDsForTest(got.Data)
+	require.Contains(t, ids, "claude-opus-4-6")
+	require.Contains(t, ids, "gemini-2.5-flash")
 }
 
 func TestGatewayModels_CustomModelsListDisabledKeepsOriginalModels(t *testing.T) {

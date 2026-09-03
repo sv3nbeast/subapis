@@ -361,7 +361,7 @@ func isPlatformPricingMatch(groupPlatform, pricingPlatform string) bool {
 // 各平台严格独立，只返回自身。
 func matchingPlatforms(groupPlatform string) []string {
 	if groupPlatform == PlatformComposite {
-		return []string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok}
+		return []string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek}
 	}
 	return []string{groupPlatform}
 }
@@ -574,7 +574,7 @@ func (s *ChannelService) ListSupportedModelsForGroup(ctx context.Context, groupI
 // are the configured source of model names and prices.
 func (s *ChannelService) ListDisplayModelsForGroup(ctx context.Context, groupID int64, platform string) []SupportedModel {
 	models := s.listDisplayModelsForGroup(ctx, groupID, platform)
-	s.fillGlobalPricingFallback(models)
+	fillGlobalPricingFallback(s.pricingService, models)
 	return models
 }
 
@@ -808,6 +808,17 @@ func checkPricesNotNegative(p ChannelModelPricing) error {
 			return infraerrors.BadRequest("NEGATIVE_PRICE", fmt.Sprintf("%s must be >= 0", c.field))
 		}
 	}
+	for _, c := range []struct {
+		field string
+		val   *float64
+	}{
+		{"fast_multiplier", p.FastMultiplier},
+		{"flex_multiplier", p.FlexMultiplier},
+	} {
+		if c.val != nil && *c.val <= 0 {
+			return infraerrors.BadRequest("INVALID_MULTIPLIER", fmt.Sprintf("%s must be > 0", c.field))
+		}
+	}
 	return nil
 }
 
@@ -816,7 +827,9 @@ func checkIntervalsHavePrices(p ChannelModelPricing) error {
 		if iv.InputPrice == nil && iv.OutputPrice == nil &&
 			iv.CacheWritePrice == nil && iv.CacheWrite5mPrice == nil &&
 			iv.CacheWrite1hPrice == nil && iv.CacheReadPrice == nil &&
-			iv.PerRequestPrice == nil {
+			iv.PerRequestPrice == nil && iv.InputMultiplier == nil &&
+			iv.OutputMultiplier == nil && iv.CacheWriteMultiplier == nil &&
+			iv.CacheReadMultiplier == nil {
 			return infraerrors.BadRequest(
 				"INTERVAL_MISSING_PRICE",
 				fmt.Sprintf("interval [%d, %s] has no price fields set for model %v",

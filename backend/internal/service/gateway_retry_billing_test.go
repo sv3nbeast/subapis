@@ -29,6 +29,12 @@ func (s *gatewayRetryCacheStub) RefreshSessionTTL(context.Context, int64, string
 func (s *gatewayRetryCacheStub) DeleteSessionAccountID(context.Context, int64, string) error {
 	return nil
 }
+func (s *gatewayRetryCacheStub) SetReasoningContent(context.Context, string, string, time.Duration) error {
+	return nil
+}
+func (s *gatewayRetryCacheStub) GetReasoningContent(context.Context, string) (string, error) {
+	return "", ErrReasoningContentNotFound
+}
 func (s *gatewayRetryCacheStub) MarkPreSemanticFailure(_ context.Context, fingerprint, logicalRequestID string, _ time.Duration) error {
 	s.markerFingerprint = fingerprint
 	s.markerLogicalID = logicalRequestID

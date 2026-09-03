@@ -18,6 +18,7 @@ const aliyunCaptchaTimeoutMillis = 10_000
 type aliyunCaptchaVerifier struct {
 	protocol      string // "HTTPS"；测试注入 "HTTP" 指向 httptest.Server
 	timeoutMillis int
+	noProxy       string // 测试端点可显式绕过进程级代理；生产默认遵循环境配置
 }
 
 func NewAliyunCaptchaVerifier() service.AliyunCaptchaVerifier {
@@ -37,6 +38,7 @@ func (v *aliyunCaptchaVerifier) VerifyCaptcha(ctx context.Context, cred service.
 		Protocol:        dara.String(v.protocol),
 		ConnectTimeout:  dara.Int(v.timeoutMillis),
 		ReadTimeout:     dara.Int(v.timeoutMillis),
+		NoProxy:         dara.String(v.noProxy),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create aliyun captcha client: %w", err)

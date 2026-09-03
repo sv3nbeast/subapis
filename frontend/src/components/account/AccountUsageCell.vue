@@ -507,125 +507,182 @@
           {{ t('admin.accounts.needsReauth') }}
         </span>
       </div>
-      <div v-else-if="isForbidden && !grokBilling" class="space-y-1">
+      <div v-else-if="isForbidden && !grokLegacyBilling" class="space-y-1">
         <span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300">
           {{ usageInfo?.grok_entitlement_status || t('admin.accounts.forbidden') }}
         </span>
       </div>
       <div v-else-if="usageInfo" class="space-y-1">
-        <div v-if="needsReauth">
-          <span class="inline-block rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-medium text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
-            {{ t('admin.accounts.needsReauth') }}
-          </span>
-        </div>
-        <div v-else-if="grokBillingExhausted">
-          <span class="inline-block rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
-            {{ t('admin.accounts.rateLimited') }}
-          </span>
-        </div>
-        <div v-else-if="isForbidden">
-          <span class="inline-block rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">
-            {{ grokEntitlementLabel || t('admin.accounts.forbidden') }}
-          </span>
-        </div>
-        <div v-if="grokSubscriptionLabel" class="mb-0.5">
-          <span class="inline-block rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-800 dark:bg-zinc-800 dark:text-zinc-200">
-            {{ grokSubscriptionLabel }}
-          </span>
-        </div>
-        <div v-if="grokLocalUsage" class="mb-0.5 flex items-center">
-          <div class="flex items-center gap-1.5 text-[9px] text-gray-500 dark:text-gray-400">
-            <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800">
-              {{ formatWindowRequests(grokLocalUsage) }} req
-            </span>
-            <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800">
-              {{ formatWindowTokens(grokLocalUsage) }}
-            </span>
-            <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800" :title="t('usage.accountBilled')">
-              A ${{ formatWindowCost(grokLocalUsage) }}
-            </span>
-            <span
-              v-if="grokLocalUsage.user_cost != null"
-              class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800"
-              :title="t('usage.userBilled')"
-            >
-              U ${{ formatWindowUserCost(grokLocalUsage) }}
+        <template v-if="grokLegacyBilling">
+          <div v-if="grokLegacyBillingExhausted">
+            <span class="inline-block rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+              {{ t('admin.accounts.rateLimited') }}
             </span>
           </div>
-        </div>
-        <div
-          v-if="grokPrepaidMoneyLine"
-          class="flex flex-wrap items-center gap-1 text-[10px] text-gray-500 dark:text-gray-400"
-        >
-          <span
-            class="rounded bg-emerald-50 px-1 py-0.5 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
-            :title="t('admin.accounts.usageWindow.grokPrepaid')"
+          <div v-else-if="isForbidden">
+            <span class="inline-block rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">
+              {{ usageInfo?.grok_entitlement_status || t('admin.accounts.forbidden') }}
+            </span>
+          </div>
+          <div v-if="grokLegacySubscriptionLabel" class="mb-0.5">
+            <span class="inline-block rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-800 dark:bg-zinc-800 dark:text-zinc-200">
+              {{ grokLegacySubscriptionLabel }}
+            </span>
+          </div>
+          <div v-if="grokLegacyLocalUsage" class="mb-0.5 flex items-center">
+            <div class="flex items-center gap-1.5 text-[9px] text-gray-500 dark:text-gray-400">
+              <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800">
+                {{ formatWindowRequests(grokLegacyLocalUsage) }} req
+              </span>
+              <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800">
+                {{ formatWindowTokens(grokLegacyLocalUsage) }}
+              </span>
+              <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800" :title="t('usage.accountBilled')">
+                A ${{ formatWindowCost(grokLegacyLocalUsage) }}
+              </span>
+              <span
+                v-if="grokLegacyLocalUsage.user_cost != null"
+                class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800"
+                :title="t('usage.userBilled')"
+              >
+                U ${{ formatWindowUserCost(grokLegacyLocalUsage) }}
+              </span>
+            </div>
+          </div>
+          <UsageProgressBar
+            :label="t('admin.accounts.usageWindow.grokWeeklyCredits')"
+            :utilization="grokLegacyBilling.credit_usage_percent || 0"
+            :resets-at="grokLegacyBilling.current_period_end || null"
+            color="amber"
+          />
+          <div class="text-[10px] text-gray-600 dark:text-gray-300">
+            {{ t('admin.accounts.usageWindow.grokWeeklySummary', {
+              used: formatGrokPercent(grokLegacyBilling.credit_usage_percent),
+              remaining: formatGrokPercent(grokLegacyBilling.credit_remaining_percent)
+            }) }}
+          </div>
+          <div v-if="grokLegacyBillingExtrasVisible" class="text-[10px] text-gray-500 dark:text-gray-400">
+            <template v-if="(grokLegacyBilling.on_demand_cap || 0) > 0">
+              {{ t('admin.accounts.usageWindow.grokOnDemandSummary', {
+                used: formatGrokAmount(grokLegacyBilling.on_demand_used),
+                remaining: formatGrokAmount(grokLegacyBilling.on_demand_remaining),
+                cap: formatGrokAmount(grokLegacyBilling.on_demand_cap)
+              }) }}
+            </template>
+            <span v-if="(grokLegacyBilling.prepaid_balance || 0) > 0">
+              <template v-if="(grokLegacyBilling.on_demand_cap || 0) > 0">· </template>
+              {{ t('admin.accounts.usageWindow.grokPrepaidBalance', {
+                balance: formatGrokAmount(grokLegacyBilling.prepaid_balance)
+              }) }}
+            </span>
+          </div>
+          <UsageProgressBar
+            v-if="grokLegacyRequestQuotaBar"
+            :label="t('admin.accounts.usageWindow.grokRequestsRate')"
+            :utilization="grokLegacyRequestQuotaBar.utilization"
+            :resets-at="grokLegacyRequestQuotaBar.resetsAt"
+            color="indigo"
+          />
+          <UsageProgressBar
+            v-if="grokLegacyTokenQuotaBar"
+            :label="t('admin.accounts.usageWindow.grokTokensRate')"
+            :utilization="grokLegacyTokenQuotaBar.utilization"
+            :resets-at="grokLegacyTokenQuotaBar.resetsAt"
+            color="emerald"
+          />
+        </template>
+        <!-- Free: only rolling 24h soft-gate bar. Paid: 7d + 30d + prepaid money. -->
+        <template v-else-if="grokIsFree">
+          <UsageProgressBar
+            v-if="grokFreeTokenBar"
+            label="24h"
+            :title="t('admin.accounts.usageWindow.grokFreeQuota24hHint', { limit: formatCompactNumber(grokFreeTokenBar.limit) })"
+            :utilization="grokFreeTokenBar.utilization"
+            :window-stats="grokFreeQuotaUsage"
+            :show-now-when-idle="true"
+            color="emerald"
+          />
+          <div v-else-if="grokQuotaUnknown" class="text-[10px] text-gray-500 dark:text-gray-400">
+            {{ grokQuotaUnknownLabel }}
+          </div>
+        </template>
+        <template v-else>
+          <UsageProgressBar
+            v-if="grokWeeklyBillingBar"
+            label="7d"
+            :utilization="grokWeeklyBillingBar.utilization"
+            :resets-at="grokWeeklyBillingBar.resetsAt"
+            :window-stats="grokWeeklyBillingBar.windowStats"
+            :show-now-when-idle="true"
+            color="indigo"
+          />
+          <UsageProgressBar
+            v-if="grokMonthlyBillingBar"
+            label="30d"
+            :utilization="grokMonthlyBillingBar.utilization"
+            :resets-at="grokMonthlyBillingBar.resetsAt"
+            :window-stats="grokMonthlyBillingBar.windowStats"
+            :show-now-when-idle="true"
+            color="indigo"
+          />
+          <div
+            v-if="grokPrepaidMoneyLine"
+            class="flex flex-wrap items-center gap-1 text-[10px] text-gray-500 dark:text-gray-400"
           >
-            {{ t('admin.accounts.usageWindow.grokPrepaid') }} ${{ grokPrepaidMoneyLine.prepaid }}
-          </span>
-          <span :title="t('admin.accounts.usageWindow.grokMonthlyLimit')">
-            {{ t('admin.accounts.usageWindow.grokUsed') }}
-            {{ grokPrepaidMoneyLine.used }}/{{ grokPrepaidMoneyLine.limit }}
-          </span>
-        </div>
-        <div v-if="grokQuotaUnknown" class="text-[10px] text-gray-500 dark:text-gray-400">
-          {{ grokQuotaUnknownLabel }}
-        </div>
+            <span
+              v-if="grokPrepaidMoneyLine.showPrepaid"
+              class="rounded bg-emerald-50 px-1 py-0.5 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+              :title="t('admin.accounts.usageWindow.grokPrepaid')"
+            >
+              {{ t('admin.accounts.usageWindow.grokPrepaid') }} ${{ grokPrepaidMoneyLine.prepaid }}
+            </span>
+            <span
+              v-if="grokPrepaidMoneyLine.showUsedLimit"
+              :title="t('admin.accounts.usageWindow.grokMonthlyLimit')"
+            >
+              {{ t('admin.accounts.usageWindow.grokUsed') }}
+              {{ grokPrepaidMoneyLine.used }}/{{ grokPrepaidMoneyLine.limit }}
+            </span>
+          </div>
+          <div v-if="grokQuotaUnknown" class="text-[10px] text-gray-500 dark:text-gray-400">
+            {{ grokQuotaUnknownLabel }}
+          </div>
+        </template>
         <div v-if="usageInfo.error" class="truncate text-xs text-amber-600 dark:text-amber-400 max-w-[200px]" :title="usageInfo.error">
           {{ usageErrorLabel }}
         </div>
-        <UsageProgressBar
-          v-if="grokCreditUsageBar"
-          :label="t('admin.accounts.usageWindow.grokWeeklyCredits')"
-          :utilization="grokCreditUsageBar.utilization"
-          :resets-at="grokCreditUsageBar.resetsAt"
-          color="amber"
-        />
-        <div v-if="grokBilling" class="text-[10px] text-gray-600 dark:text-gray-300">
-          {{ t('admin.accounts.usageWindow.grokWeeklySummary', {
-            used: formatGrokPercent(grokBilling.credit_usage_percent),
-            remaining: formatGrokPercent(grokBilling.credit_remaining_percent)
-          }) }}
-        </div>
-        <div v-if="grokBilling && grokBillingExtrasVisible" class="text-[10px] text-gray-500 dark:text-gray-400">
-          <template v-if="grokBilling.on_demand_cap > 0">
-            {{ t('admin.accounts.usageWindow.grokOnDemandSummary', {
-              used: formatGrokAmount(grokBilling.on_demand_used),
-              remaining: formatGrokAmount(grokBilling.on_demand_remaining),
-              cap: formatGrokAmount(grokBilling.on_demand_cap)
-            }) }}
-          </template>
-          <span v-if="grokBilling.prepaid_balance > 0">
-            <template v-if="grokBilling.on_demand_cap > 0">· </template>
-            {{ t('admin.accounts.usageWindow.grokPrepaidBalance', {
-              balance: formatGrokAmount(grokBilling.prepaid_balance)
-            }) }}
-          </span>
-        </div>
-        <UsageProgressBar
-          v-if="grokRequestQuotaBar"
-          :label="t('admin.accounts.usageWindow.grokRequestsRate')"
-          :utilization="grokRequestQuotaBar.utilization"
-          :resets-at="grokRequestQuotaBar.resetsAt"
-          color="indigo"
-        />
-        <UsageProgressBar
-          v-if="grokTokenQuotaBar"
-          :label="t('admin.accounts.usageWindow.grokTokensRate')"
-          :utilization="grokTokenQuotaBar.utilization"
-          :resets-at="grokTokenQuotaBar.resetsAt"
-          color="emerald"
-        />
         <div v-if="grokRetryAfterLabel" class="text-[10px] text-amber-600 dark:text-amber-400">
           {{ t('admin.accounts.usageWindow.grokRetryAfter', { time: grokRetryAfterLabel }) }}
         </div>
-        <div v-if="grokQuotaUnknown" class="text-[10px] text-gray-500 dark:text-gray-400">
-          {{ grokQuotaUnknownLabel }}
-        </div>
-        <div v-else-if="usageInfo.error" class="truncate text-xs text-amber-600 dark:text-amber-400 max-w-[200px]" :title="usageInfo.error">
-          {{ usageErrorLabel }}
-        </div>
-        <GrokQuotaProbeCell :account="account" @updated="handleGrokQuotaUpdated" />
+        <GrokQuotaProbeCell :account="account" compact @probed="handleGrokProbed" />
+      </div>
+      <div v-else class="space-y-1">
+        <div class="text-xs text-gray-400">-</div>
+        <GrokQuotaProbeCell :account="account" compact @probed="handleGrokProbed" />
+      </div>
+    </template>
+
+    <!-- CN providers (Kimi / Zhipu / DeepSeek): coding-plan quota or payg balance -->
+    <template v-else-if="account.platform === 'kimi' || account.platform === 'zhipu' || account.platform === 'deepseek'">
+      <!-- 挂在 CN 平台下的 Ollama Cloud 账号（资格由后端下发 eligible）：用量由
+           Ollama 用量窗口负责。这类账号不是国产厂商订阅，CN 的额度/余额探测端点由
+           base_url 衍生，对 ollama.com 会被后端出站 URL 白名单拒绝，渲染出来只会
+           给用户一行探测报错，因此不再渲染 CN 子单元格与占位符。 -->
+      <OllamaCloudUsageCell
+        v-if="account.ollama_cloud_usage?.eligible"
+        :account="account"
+        @updated="handleOllamaCloudUsageUpdated"
+      />
+      <div v-else class="space-y-1">
+        <!-- 子单元格各自按 模式×平台 判定可见；两者都不可见时（智谱 payg 无公开
+             余额端点、coding 探测也不适用）才回落到占位符。 -->
+        <div
+          v-if="!cnQuotaCellVisible && !cnBalanceCellVisible"
+          class="text-xs text-gray-400"
+          :title="t('admin.accounts.cnProviders.noBalanceEndpoint')"
+        >-</div>
+        <CNProviderQuotaCell :account="account" />
+        <CNProviderBalanceCell :account="account" />
       </div>
     </template>
 
@@ -833,12 +890,14 @@ import UsageProgressBar from './UsageProgressBar.vue'
 import AccountQuotaInfo from './AccountQuotaInfo.vue'
 import OpenAIQuotaResetCell from './OpenAIQuotaResetCell.vue'
 import GrokQuotaProbeCell from './GrokQuotaProbeCell.vue'
+import CNProviderQuotaCell from './CNProviderQuotaCell.vue'
+import CNProviderBalanceCell from './CNProviderBalanceCell.vue'
+import OllamaCloudUsageCell from './OllamaCloudUsageCell.vue'
+import { cnQuotaCellVisible as cnQuotaCellVisibleFn, cnBalanceCellVisible as cnBalanceCellVisibleFn } from './credentialsBuilder'
 
 // Module-level cache shared across all AccountUsageCell instances
 const _usageCache = new Map<number, { data: AccountUsageInfo; ts: number }>()
 const USAGE_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
-// How long a quota-reset response may suppress the row-patch usage refetch.
-const SUPPRESS_USAGE_REFRESH_WINDOW_MS = 5 * 1000
 
 const props = withDefaults(
   defineProps<{
@@ -881,7 +940,6 @@ const usageInfo = ref<AccountUsageInfo | null>(null)
 watch(usageInfo, (usage) => {
   if (usage) emit('usage-loaded', usage)
 })
-const suppressOpenAIUsageRefreshUntil = ref(0)
 const rootRef = ref<HTMLElement | null>(null)
 const isDesktopViewport = ref(
   typeof window === 'undefined' ? true : window.matchMedia(desktopViewportQuery).matches
@@ -940,6 +998,15 @@ const shouldFetchUsage = computed(() => {
   }
   return false
 })
+
+// CN 供应商子单元格可见性（与 CNProviderQuotaCell / CNProviderBalanceCell 共用
+// credentialsBuilder 的单一实现）：都不可见时显示 `-` 占位符。
+const cnAccountMode = computed(() => {
+  const mode = props.account.credentials?.account_mode
+  return typeof mode === 'string' ? mode : ''
+})
+const cnQuotaCellVisible = computed(() => cnQuotaCellVisibleFn(props.account.platform, cnAccountMode.value))
+const cnBalanceCellVisible = computed(() => cnBalanceCellVisibleFn(props.account.platform, cnAccountMode.value))
 
 const isBatchManaged = computed(() => typeof props.requestBatchedUsage === 'function')
 
@@ -1325,39 +1392,93 @@ const geminiUsageBars = computed(() => {
 interface GrokQuotaBarInfo {
   utilization: number
   resetsAt: string | null
+  windowStats?: WindowStats | null
 }
 
-const makeGrokQuotaBar = (quota?: { limit?: number | null; remaining?: number | null; reset_at?: string | null } | null): GrokQuotaBarInfo | null => {
+const grokBilling = computed(() => usageInfo.value?.grok_billing || null)
+const grokLegacyBilling = computed(() => {
+  const billing = grokBilling.value
+  return billing && typeof billing.credit_usage_percent === 'number' ? billing : null
+})
+const grokLegacyBillingExhausted = computed(() => {
+  const billing = grokLegacyBilling.value
+  if (!billing) return false
+  const used = billing.credit_usage_percent || 0
+  const remaining = billing.credit_remaining_percent
+  return used >= 100 || (used > 0 && remaining != null && remaining <= 0)
+})
+const grokLegacyBillingExtrasVisible = computed(() => {
+  const billing = grokLegacyBilling.value
+  return !!billing && ((billing.on_demand_cap || 0) > 0 || (billing.prepaid_balance || 0) > 0)
+})
+const grokLegacyLocalUsage = computed(() => usageInfo.value?.grok_local_usage || props.todayStats || null)
+const grokLegacySubscriptionLabel = computed(() => {
+  const tier = (grokLegacyBilling.value?.subscription_tier || usageInfo.value?.subscription_tier || '').trim()
+  return tier || null
+})
+const makeGrokLegacyQuotaBar = (
+  quota?: { limit?: number | null; remaining?: number | null; reset_at?: string | null } | null
+): GrokQuotaBarInfo | null => {
   if (!quota || quota.limit == null || quota.remaining == null || quota.limit <= 0) return null
   const used = Math.max(0, quota.limit - quota.remaining)
-  // Healthy xAI responses normally report a completely unused short rate
-  // window. Showing 0% Req/Tok bars on every account adds noise without
-  // helping operators; retain the bars only when the window has real usage.
   if (used <= 0) return null
   return {
     utilization: (used / quota.limit) * 100,
     resetsAt: quota.reset_at || null
   }
 }
-
-const grokRequestQuotaBar = computed(() => makeGrokQuotaBar(usageInfo.value?.grok_request_quota))
-const grokTokenQuotaBar = computed(() => makeGrokQuotaBar(usageInfo.value?.grok_token_quota))
-const grokBilling = computed(() => usageInfo.value?.grok_billing || null)
-const grokBillingExhausted = computed(() => {
-  if (!grokBilling.value) return false
-  return grokBilling.value.credit_usage_percent >= 100 ||
-    (grokBilling.value.credit_usage_percent > 0 && grokBilling.value.credit_remaining_percent <= 0)
-})
-const grokCreditUsageBar = computed(() => {
-  if (!grokBilling.value) return null
+const grokLegacyRequestQuotaBar = computed(() => makeGrokLegacyQuotaBar(usageInfo.value?.grok_request_quota))
+const grokLegacyTokenQuotaBar = computed(() => makeGrokLegacyQuotaBar(usageInfo.value?.grok_token_quota))
+const formatWindowRequests = (stats: WindowStats) => formatCompactNumber(stats.requests, { allowBillions: false })
+const formatWindowTokens = (stats: WindowStats) => formatCompactNumber(stats.tokens)
+const formatWindowCost = (stats: WindowStats) => stats.cost.toFixed(2)
+const formatWindowUserCost = (stats: WindowStats) => (stats.user_cost ?? 0).toFixed(2)
+const formatGrokAmount = (value?: number | null) => {
+  const amount = value ?? 0
+  return Number.isInteger(amount) ? String(amount) : amount.toFixed(2)
+}
+const formatGrokPercent = (value?: number | null) => `${Math.round((value ?? 0) * 10) / 10}%`
+const grokLocalUsage7d = computed(() => (
+  usageInfo.value?.grok_local_usage_7d || usageInfo.value?.seven_day?.window_stats || null
+))
+const grokLocalUsageMonthly = computed(() => (
+  usageInfo.value?.grok_local_usage_monthly || usageInfo.value?.thirty_day?.window_stats || null
+))
+const grokWeeklyBillingBar = computed((): GrokQuotaBarInfo | null => {
+  const billing = grokBilling.value
+  if (billing?.period_type?.toLowerCase() !== 'weekly' || billing.usage_percent == null) {
+    return null
+  }
   return {
-    utilization: grokBilling.value.credit_usage_percent,
-    resetsAt: grokBilling.value.current_period_end || null
+    utilization: Math.min(100, Math.max(0, billing.usage_percent)),
+    resetsAt: billing.period_end || null,
+    windowStats: grokLocalUsage7d.value
   }
 })
-const grokBillingExtrasVisible = computed(() => {
-  if (!grokBilling.value) return false
-  return grokBilling.value.on_demand_cap > 0 || grokBilling.value.prepaid_balance > 0
+// Monthly used/limit % from billing probe (used_percent or derived from cents).
+const grokMonthlyBillingBar = computed((): GrokQuotaBarInfo | null => {
+  const billing = grokBilling.value
+  if (!billing) return null
+  let utilization: number | null = null
+  if (billing.used_percent != null && Number.isFinite(billing.used_percent)) {
+    utilization = billing.used_percent
+  } else if (
+    billing.monthly_limit_cents != null &&
+    billing.monthly_limit_cents > 0 &&
+    billing.used_cents != null
+  ) {
+    utilization = (billing.used_cents / billing.monthly_limit_cents) * 100
+  }
+  if (utilization == null) return null
+  // Avoid duplicating the weekly bar when period_type is weekly-only without monthly.
+  if (billing.period_type?.toLowerCase() === 'weekly' && billing.monthly_limit_cents == null) {
+    return null
+  }
+  return {
+    utilization: Math.min(100, Math.max(0, utilization)),
+    resetsAt: billing.billing_period_end || billing.period_end || null,
+    windowStats: grokLocalUsageMonthly.value
+  }
 })
 const formatGrokMoney = (value?: number | null) => {
   if (value == null || Number.isNaN(value)) return '0'
@@ -1366,34 +1487,81 @@ const formatGrokMoney = (value?: number | null) => {
   if (value >= 10) return value.toFixed(1)
   return value.toFixed(2)
 }
+// Prepaid chip only when there is a positive prepaid balance.
+// Used/limit only when monthly limit is a positive number (0 means unlimited / unset).
 const grokPrepaidMoneyLine = computed(() => {
   const billing = grokBilling.value
-  if (!billing || billing.prepaid_balance == null || !Number.isFinite(billing.prepaid_balance)) {
-    return null
-  }
+  if (!billing) return null
+  const prepaid = billing.prepaid_balance
+  const showPrepaid = prepaid != null && Number.isFinite(prepaid) && prepaid > 0
+  const limitRaw =
+    billing.monthly_limit != null
+      ? billing.monthly_limit
+      : billing.monthly_limit_cents != null
+        ? billing.monthly_limit_cents / 100
+        : null
+  const showUsedLimit = limitRaw != null && Number.isFinite(limitRaw) && limitRaw > 0
+  if (!showPrepaid && !showUsedLimit) return null
+  const used =
+    billing.monthly_used != null
+      ? billing.monthly_used
+      : billing.used_cents != null
+        ? billing.used_cents / 100
+        : 0
   return {
-    prepaid: formatGrokMoney(billing.prepaid_balance),
-    used: '0',
-    limit: '0'
+    showPrepaid,
+    showUsedLimit,
+    prepaid: showPrepaid ? formatGrokMoney(prepaid) : null,
+    used: showUsedLimit ? formatGrokMoney(used) : null,
+    limit: showUsedLimit ? formatGrokMoney(limitRaw) : null
   }
+})
+const grokPlanLabelIsFree = (value: string) => value.includes('free') || value.includes('basic')
+const grokPlanLabelIsPaid = (value: string) => {
+  return value !== '' && !grokPlanLabelIsFree(value) && !value.includes('unknown')
+}
+const grokIsFree = computed(() => {
+  if (props.account.platform !== 'grok' || props.account.type !== 'oauth') return false
+  const billing = grokBilling.value
+  const plan = (billing?.plan || '').trim().toLowerCase()
+  const tier = (usageInfo.value?.subscription_tier || '').trim().toLowerCase()
+  const entitlement = (usageInfo.value?.grok_entitlement_status || '').toLowerCase()
+  if (grokPlanLabelIsFree(tier)) return true
+  if (grokPlanLabelIsPaid(tier)) return false
+  if (
+    billing?.usage_percent != null ||
+    billing?.used_percent != null ||
+    (billing?.monthly_limit_cents != null && billing.monthly_limit_cents > 0)
+  ) return false
+  if (grokPlanLabelIsPaid(plan)) return false
+  if (
+    grokPlanLabelIsFree(plan) ||
+    grokPlanLabelIsFree(entitlement)
+  ) return true
+  return billing != null
+})
+const grokFreeQuotaUsage = computed(() => usageInfo.value?.grok_local_usage_24h || null)
+const grokFreeTokenBar = computed(() => {
+  if (!grokIsFree.value || !grokFreeQuotaUsage.value) return null
+  const limit = usageInfo.value?.grok_free_token_limit
+  if (typeof limit !== 'number' || limit <= 0) return null
+  const used = Math.max(0, grokFreeQuotaUsage.value.tokens || 0)
+  return { utilization: Math.min(100, (used / limit) * 100), limit }
 })
 const grokQuotaUnknown = computed(() => {
   if (props.account.platform !== 'grok') return false
-  return !grokBilling.value
+  if (grokIsFree.value) {
+    return !grokFreeTokenBar.value
+  }
+  if (grokWeeklyBillingBar.value || grokMonthlyBillingBar.value || grokPrepaidMoneyLine.value) {
+    return false
+  }
+  return usageInfo.value?.grok_quota_snapshot_state !== 'observed'
 })
 const grokQuotaUnknownLabel = computed(() => {
-  return usageInfo.value?.grok_billing_state === 'error'
-    ? t('admin.accounts.usageWindow.grokBillingFailed')
-    : t('admin.accounts.usageWindow.grokBillingUnknown')
-})
-const grokLocalUsage = computed(() => usageInfo.value?.grok_local_usage || props.todayStats || null)
-const grokSubscriptionLabel = computed(() => {
-  const tier = (grokBilling.value?.subscription_tier || usageInfo.value?.subscription_tier || '').trim()
-  return tier || null
-})
-const grokEntitlementLabel = computed(() => {
-  const status = (usageInfo.value?.grok_entitlement_status || '').trim()
-  return status || null
+  return usageInfo.value?.grok_quota_snapshot_state === 'no_headers'
+    ? t('admin.accounts.usageWindow.grokNoHeaders')
+    : t('admin.accounts.usageWindow.grokUnknown')
 })
 const grokRetryAfterLabel = computed(() => {
   const seconds = usageInfo.value?.grok_retry_after_seconds
@@ -1402,13 +1570,6 @@ const grokRetryAfterLabel = computed(() => {
   const minutes = Math.ceil(seconds / 60)
   return `${minutes}m`
 })
-
-const formatWindowRequests = (stats: WindowStats) => formatCompactNumber(stats.requests, { allowBillions: false })
-const formatWindowTokens = (stats: WindowStats) => formatCompactNumber(stats.tokens)
-const formatWindowCost = (stats: WindowStats) => stats.cost.toFixed(2)
-const formatWindowUserCost = (stats: WindowStats) => (stats.user_cost ?? 0).toFixed(2)
-const formatGrokAmount = (value: number) => Number.isInteger(value) ? String(value) : value.toFixed(2)
-const formatGrokPercent = (value: number) => `${Math.round(value * 10) / 10}%`
 
 const kiroPlanLabel = computed(() => {
   if (props.account.platform !== 'kiro') return null
@@ -1438,13 +1599,8 @@ const kiroOverageDisplay = computed(() => {
   const hasCharge = Number(overage.overage_charges ?? 0) > 0
   if (!hasUsage && !hasCharge) return null
   const parts: string[] = [t('admin.accounts.usageWindow.kiroOverage')]
-  if (hasUsage) {
-    parts.push(formatKiroCreditAmount(overage.current_overages))
-  }
-  if (hasCharge) {
-    const symbol = overage.currency_symbol || ''
-    parts.push(`${symbol}${Number(overage.overage_charges).toFixed(2)}`)
-  }
+  if (hasUsage) parts.push(formatKiroCreditAmount(overage.current_overages))
+  if (hasCharge) parts.push(`${overage.currency_symbol || ''}${Number(overage.overage_charges).toFixed(2)}`)
   return parts.join(' · ')
 })
 
@@ -1458,17 +1614,16 @@ const emitKiroUsageMeta = (usage: AccountUsageInfo | null | undefined) => {
 }
 
 const formatKiroCreditAmount = (value: number | null | undefined): string => {
-  const n = Number(value ?? 0)
-  if (!Number.isFinite(n)) return '0'
-  return n.toLocaleString(undefined, {
-    minimumFractionDigits: n > 0 && n < 1 ? 2 : 0,
+  const amount = Number(value ?? 0)
+  if (!Number.isFinite(amount)) return '0'
+  return amount.toLocaleString(undefined, {
+    minimumFractionDigits: amount > 0 && amount < 1 ? 2 : 0,
     maximumFractionDigits: 2
   })
 }
 
-const formatKiroCreditProgress = (progress: KiroCreditProgress): string => {
-  return `${formatKiroCreditAmount(progress.current_usage)} / ${formatKiroCreditAmount(progress.usage_limit)}`
-}
+const formatKiroCreditProgress = (progress: KiroCreditProgress): string =>
+  `${formatKiroCreditAmount(progress.current_usage)} / ${formatKiroCreditAmount(progress.usage_limit)}`
 
 // 账户类型显示标签
 const antigravityTierLabel = computed(() => {
@@ -1676,7 +1831,7 @@ const loadActiveUsage = async () => {
   }
 }
 
-const handleGrokQuotaUpdated = async () => {
+const handleGrokProbed = async () => {
   _usageCache.delete(props.account.id)
   await loadUsage({ source: 'active', bypassCache: true })
 }
@@ -1747,12 +1902,11 @@ const quotaTotalBar = computed((): QuotaBarInfo | null => {
 })
 
 const handleQuotaResetAccountUpdated = (account: Account) => {
-  // The reset response already carries authoritative quota and account data.
-  // Avoid turning the parent patch into a second automatic /usage request.
-  // The suppression is time-boxed so an unhandled emit (parent that ignores
-  // account-updated) cannot latch it and swallow a later, unrelated refresh.
-  suppressOpenAIUsageRefreshUntil.value = Date.now() + SUPPRESS_USAGE_REFRESH_WINDOW_MS
   emit('account-updated', account)
+}
+
+const handleOllamaCloudUsageUpdated = (state: NonNullable<Account['ollama_cloud_usage']>) => {
+  emit('account-updated', { ...props.account, ollama_cloud_usage: state })
 }
 
 // ===== Key account today stats formatters =====
@@ -1837,10 +1991,6 @@ watch(
 watch(openAIUsageRefreshKey, (nextKey, prevKey) => {
   if (!prevKey || nextKey === prevKey) return
   if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return
-  if (Date.now() < suppressOpenAIUsageRefreshUntil.value) {
-    suppressOpenAIUsageRefreshUntil.value = 0
-    return
-  }
 
   if (isBatchManaged.value) {
     requestParentBatchUsage({ force: true })

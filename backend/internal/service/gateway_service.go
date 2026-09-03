@@ -91,8 +91,9 @@ const (
 )
 
 const (
-	cacheTTLTarget5m = "5m"
-	cacheTTLTarget1h = "1h"
+	cacheTTLTarget5m                   = "5m"
+	cacheTTLTarget1h                   = "1h"
+	compositeModelOwnershipCachePrefix = "composite-owner|"
 )
 
 type accountProxyLogInfo struct {
@@ -263,8 +264,8 @@ func openAIStreamEventIsTerminalWithType(data, eventType string) bool {
 }
 
 func openAIStreamEventTypeIsTerminal(eventType string) bool {
-	switch eventType {
-	case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
+	switch strings.TrimSpace(eventType) {
+	case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled", "error":
 		return true
 	default:
 		return false
@@ -578,6 +579,10 @@ var allowedHeaders = map[string]bool{
 // cache implementation (e.g. redis.Nil), mirroring ErrRefreshTokenNotFound.
 var ErrStickySessionNotFound = errors.New("sticky session not found")
 
+// ErrReasoningContentNotFound is returned by GatewayCache.GetReasoningContent
+// when no cached reasoning content exists for the reasoning item ID.
+var ErrReasoningContentNotFound = errors.New("reasoning content not found")
+
 // GatewayCache 定义网关服务的缓存操作接口。
 // 提供粘性会话（Sticky Session）的存储、查询、刷新和删除功能。
 //
@@ -601,6 +606,8 @@ type GatewayCache interface {
 	// DeleteSessionAccountID 删除粘性会话绑定，用于账号不可用时主动清理
 	// Delete sticky session binding, used to proactively clean up when account becomes unavailable
 	DeleteSessionAccountID(ctx context.Context, groupID int64, sessionHash string) error
+	SetReasoningContent(ctx context.Context, itemID string, content string, ttl time.Duration) error
+	GetReasoningContent(ctx context.Context, itemID string) (string, error)
 }
 
 type grokVideoBillingCache interface {
@@ -661,6 +668,10 @@ func (s *GatewayService) streamKeepaliveIntervalForAccount(account *Account) tim
 
 func modelsListCacheKey(groupID *int64, platform string) string {
 	return fmt.Sprintf("%d|%s", derefGroupID(groupID), strings.TrimSpace(platform))
+}
+
+func compositeModelOwnershipCacheKey(groupID int64, model string) string {
+	return fmt.Sprintf("%s%d|%s", compositeModelOwnershipCachePrefix, groupID, strings.TrimSpace(model))
 }
 
 func prefetchedStickyGroupIDFromContext(ctx context.Context) (int64, bool) {
@@ -767,11 +778,19 @@ type ForwardResult struct {
 	// response before any client-facing rewrite or protocol conversion.
 	UpstreamResponseModel         string
 	UpstreamResponseModelConflict bool
-	Stream                        bool
-	Duration                      time.Duration
-	FirstTokenMs                  *int // 首字时间（流式请求）
-	ClientDisconnect              bool // 客户端是否在流式传输过程中断开
-	ReasoningEffort               *string
+	// UpstreamResponseServiceTier is the tier the upstream reports having used
+	// (Anthropic usage.speed: "fast" / "standard"); empty when not declared.
+	UpstreamResponseServiceTier string
+	Stream                      bool
+	Duration                    time.Duration
+	FirstTokenMs                *int // 首字时间（流式请求）
+	ClientDisconnect            bool // 客户端是否在流式传输过程中断开
+	ReasoningEffort             *string
+	// RequestedReasoningEffort is the client-requested effort before mapping.
+	RequestedReasoningEffort *string
+	// ServiceTier is the client-requested tier and may be lowered for billing
+	// when the upstream authoritatively reports a cheaper tier.
+	ServiceTier *string
 	// SyntheticPrewarm marks a transport-only Responses generate=false turn
 	// completed locally by the Kiro bridge. It never reached an upstream model
 	// and therefore must not affect scheduling, usage records, or billing.
@@ -832,17 +851,21 @@ type GatewayFailureReason string
 const (
 	GatewayFailureReasonKiroMetadataOnlyEOF         GatewayFailureReason = "kiro_metadata_only_eof"
 	GatewayFailureReasonKiroContentProcessingFailed GatewayFailureReason = "kiro_content_processing_failed"
+	OpenAIHTTPContinuationUnsupportedReason         GatewayFailureReason = "openai_http_continuation_unsupported"
 )
 
 // UpstreamFailoverError indicates an upstream error that should trigger account failover.
 type UpstreamFailoverError struct {
 	StatusCode               int
-	ResponseBody             []byte      // 上游响应体，用于错误透传规则匹配
-	ResponseHeaders          http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
-	ForceCacheBilling        bool        // Antigravity 粘性会话切换时设为 true
-	RetryableOnSameAccount   bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
-	RequestScopedTransient   bool        // 故障因素与账号无关（如上游按客户端身份/模型容量降载）：可同账号重试，但不得据此对账号做临时封禁
-	SafeToFailoverAfterWrite bool        // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
+	ResponseBody             []byte        // 上游响应体，用于错误透传规则匹配
+	ResponseHeaders          http.Header   // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
+	ForceCacheBilling        bool          // Antigravity 粘性会话切换时设为 true
+	RetryableOnSameAccount   bool          // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
+	SameAccountRetryDelay    time.Duration // 同账号重试的最小间隔；零值使用 handler 默认值
+	SameAccountRetryDeadline time.Time     // 同账号重试截止时间；零值表示仅受 retryLimit 限制
+	SameAccountRetryMax      int           // 可选的错误级同账号重试上限，低于 handler 默认预算时优先采用
+	RequestScopedTransient   bool          // 故障因素与账号无关（如上游按客户端身份/模型容量降载）：可同账号重试，但不得据此对账号做临时封禁
+	SafeToFailoverAfterWrite bool          // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
 	Stage                    GatewayFailureStage
 	Scope                    GatewayFailureScope
 	Reason                   GatewayFailureReason
@@ -1133,16 +1156,20 @@ func NewGatewayService(
 	optional ...any,
 ) *GatewayService {
 	var resolver *ModelPricingResolver
+	var compositeResolver *CompositeRouteResolver
 	var balanceNotifyService *BalanceNotifyService
 	var userPlatformQuotaRepo UserPlatformQuotaRepository
-	if len(optional) > 0 {
-		resolver, _ = optional[0].(*ModelPricingResolver)
-	}
-	if len(optional) > 1 {
-		balanceNotifyService, _ = optional[1].(*BalanceNotifyService)
-	}
-	if len(optional) > 2 {
-		userPlatformQuotaRepo, _ = optional[2].(UserPlatformQuotaRepository)
+	for _, dependency := range optional {
+		switch value := dependency.(type) {
+		case *ModelPricingResolver:
+			resolver = value
+		case *CompositeRouteResolver:
+			compositeResolver = value
+		case *BalanceNotifyService:
+			balanceNotifyService = value
+		case UserPlatformQuotaRepository:
+			userPlatformQuotaRepo = value
+		}
 	}
 	userGroupRateTTL := resolveUserGroupRateCacheTTL(cfg)
 	modelsListTTL := resolveModelsListCacheTTL(cfg)
@@ -1182,6 +1209,7 @@ func NewGatewayService(
 		tlsFPProfileService:           tlsFPProfileService,
 		channelService:                channelService,
 		resolver:                      resolver,
+		compositeResolver:             compositeResolver,
 		balanceNotifyService:          balanceNotifyService,
 		claudeCodeCompanionProbe:      NewClaudeCodeCompanionProbeService(httpUpstream),
 		userPlatformQuotaRepo:         userPlatformQuotaRepo,
@@ -1190,6 +1218,9 @@ func NewGatewayService(
 	}
 	if provider, ok := kiroCooldownStore.(nianzsKiroCooldownStoreProvider); ok {
 		svc.nianzsKiroCooldownStore = provider.NianzsKiroCooldownStore()
+	}
+	if compositeResolver != nil {
+		compositeResolver.SetModelOwnershipResolver(svc.resolveCompositeModelOwnership)
 	}
 	svc.userGroupRateResolver = newUserGroupRateResolver(
 		userGroupRateRepo,
@@ -7098,11 +7129,22 @@ func (s *GatewayService) triggerClaudeCodeCompanionProbe(ctx context.Context, ac
 }
 
 // Forward 转发请求到Claude API
-func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest) (*ForwardResult, error) {
+func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest) (result *ForwardResult, err error) {
 	startTime := time.Now()
 	if parsed == nil {
 		return nil, fmt.Errorf("parse request: empty request")
 	}
+	defer func() {
+		if result == nil {
+			return
+		}
+		if strings.TrimSpace(result.UpstreamResponseServiceTier) == "" {
+			result.UpstreamResponseServiceTier = observedUpstreamResponseServiceTier(c)
+		}
+		if tier := anthropicSpeedServiceTier(account, parsed.Speed, anthropicSpeedModel(parsed, result)); tier != nil {
+			result.ServiceTier = tier
+		}
+	}()
 	if account != nil && account.HasAnthropicStableCanaryManagedFields() {
 		return nil, fmt.Errorf("%w: managed account reached generic messages forwarder", ErrAnthropicStableCanaryOutboundBlocked)
 	}
@@ -7919,6 +7961,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	var firstTokenMs *int
 	var clientDisconnect bool
 	if reqStream {
+		writerSizeBeforeStream := c.Writer.Size()
 		var streamErr error
 		var streamResult *streamingResult
 		if forceStreamAggregate {
@@ -7936,9 +7979,17 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			var sseErr *sseStreamErrorEventError
 			if errors.As(streamErr, &sseErr) {
 				// 上游 HTTP 200 + SSE 流体内出现 event:error 帧。
-				// 保留 StatusCode=403 以兼容既有 failover/客户端响应语义，
-				// 但补全 ResponseBody 与 ops 上下文，让运维日志能反映上游真实错误。
 				body := []byte(sseErr.RawData)
+				semanticStatus := http.StatusForbidden
+				if c.Writer.Size() == writerSizeBeforeStream && gjson.GetBytes(body, "error.type").String() == "overloaded_error" {
+					semanticStatus = 529
+					syntheticResp := &http.Response{
+						StatusCode: semanticStatus,
+						Header:     resp.Header.Clone(),
+						Body:       io.NopCloser(bytes.NewReader(body)),
+					}
+					s.handleFailoverSideEffects(ctx, syntheticResp, account, reqModel)
+				}
 
 				upstreamMsg := sanitizeUpstreamErrorMessage(
 					strings.TrimSpace(extractUpstreamErrorMessage(body)),
@@ -7957,7 +8008,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					Platform:           account.Platform,
 					AccountID:          account.ID,
 					AccountName:        account.Name,
-					UpstreamStatusCode: 403,
+					UpstreamStatusCode: semanticStatus,
 					UpstreamRequestID:  resp.Header.Get("x-request-id"),
 					Kind:               "stream_error",
 					Message:            upstreamMsg,
@@ -7971,7 +8022,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				)
 
 				return nil, &UpstreamFailoverError{
-					StatusCode:   403,
+					StatusCode:   semanticStatus,
 					ResponseBody: body,
 				}
 			}
@@ -7990,7 +8041,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 	}
 
-	result := &ForwardResult{
+	result = &ForwardResult{
 		RequestID:        resp.Header.Get("x-request-id"),
 		Usage:            *usage,
 		Model:            originalModel, // 使用原始模型用于计费和日志
@@ -8094,29 +8145,10 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
 			}
-			if !errors.Is(err, context.Canceled) {
-				scheduleOllamaCloudUsageActivity(s.deferredService, account)
-			}
-			safeErr := sanitizeUpstreamErrorMessage(err.Error())
-			setOpsUpstreamError(c, 0, safeErr, "")
-			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-				Platform:           account.Platform,
-				AccountID:          account.ID,
-				AccountName:        account.Name,
-				UpstreamStatusCode: 0,
-				UpstreamURL:        safeUpstreamURL(upstreamReq.URL.String()),
-				Passthrough:        true,
-				Kind:               "request_error",
-				Message:            safeErr,
+			return nil, s.handleUpstreamTransportError(ctx, c, account, err, OpsUpstreamErrorEvent{
+				UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()),
+				Passthrough: true,
 			})
-			c.JSON(http.StatusBadGateway, gin.H{
-				"type": "error",
-				"error": gin.H{
-					"type":    "upstream_error",
-					"message": "Upstream request failed",
-				},
-			})
-			return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 		}
 
 		// 透传分支禁止 400 请求体降级重试（该重试会改写请求体）
@@ -8308,6 +8340,7 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	body []byte,
 	token string,
 ) (*http.Request, []byte, error) {
+	body = stripDeferredToolCacheControl(body)
 	targetURL := claudeAPIURL
 	baseURL := account.GetBaseURL()
 	if baseURL != "" {
@@ -8765,7 +8798,7 @@ func stripSub2apiInternalUsageFields(line string) string {
 	return line[:len(line)-len(data)] + cleaned
 }
 
-func (s *GatewayService) parseSSEUsagePassthrough(data string, usage *ClaudeUsage) {
+func parseSSEUsagePassthrough(data string, usage *ClaudeUsage) {
 	if usage == nil || data == "" || data == "[DONE]" {
 		return
 	}
@@ -8806,10 +8839,10 @@ func (s *GatewayService) parseSSEUsagePassthrough(data string, usage *ClaudeUsag
 
 			cc5m := deltaUsage.Get("cache_creation.ephemeral_5m_input_tokens")
 			cc1h := deltaUsage.Get("cache_creation.ephemeral_1h_input_tokens")
-			if cc5m.Exists() && (authoritative || cc5m.Int() > 0) {
+			if cc5m.Exists() {
 				usage.CacheCreation5mTokens = int(cc5m.Int())
 			}
-			if cc1h.Exists() && (authoritative || cc1h.Int() > 0) {
+			if cc1h.Exists() {
 				usage.CacheCreation1hTokens = int(cc1h.Int())
 			}
 			if v := deltaUsage.Get("_sub2api_kiro_credits"); v.Exists() && v.Float() > 0 {
@@ -8846,6 +8879,70 @@ func (s *GatewayService) parseSSEUsagePassthrough(data string, usage *ClaudeUsag
 			usage.CacheCreationInputTokens = int(total)
 		}
 	}
+
+	usageNode := parsed.Get("usage")
+	if parsed.Get("type").String() == "message_start" {
+		usageNode = parsed.Get("message.usage")
+	}
+	normalizeAnthropicCompatiblePromptUsage(usageNode, usage)
+}
+
+func (s *GatewayService) parseSSEUsagePassthrough(data string, usage *ClaudeUsage) {
+	parseSSEUsagePassthrough(data, usage)
+}
+
+// normalizeAnthropicCompatiblePromptUsage converts provider-native
+// prompt/cache fields into Claude's mutually-exclusive usage buckets.
+func normalizeAnthropicCompatiblePromptUsage(usageNode gjson.Result, usage *ClaudeUsage) bool {
+	if usage == nil || !usageNode.Exists() {
+		return false
+	}
+	promptTokens := usageNode.Get("prompt_tokens")
+	promptCacheHitTokens := usageNode.Get("prompt_cache_hit_tokens")
+	promptCacheMissTokens := usageNode.Get("prompt_cache_miss_tokens")
+	if (!promptTokens.Exists() || promptTokens.Int() <= 0) &&
+		!promptCacheHitTokens.Exists() && !promptCacheMissTokens.Exists() {
+		return false
+	}
+
+	cacheReadTokens := usage.CacheReadInputTokens
+	if v := usageNode.Get("cache_read_input_tokens"); v.Exists() {
+		cacheReadTokens = int(v.Int())
+	}
+	if cacheReadTokens == 0 {
+		if v := usageNode.Get("cached_tokens"); v.Exists() {
+			cacheReadTokens = int(v.Int())
+		}
+	}
+	if cacheReadTokens == 0 {
+		if v := usageNode.Get("prompt_tokens_details.cached_tokens"); v.Exists() {
+			cacheReadTokens = int(v.Int())
+		}
+	}
+	if cacheReadTokens == 0 && promptCacheHitTokens.Exists() {
+		cacheReadTokens = max(int(promptCacheHitTokens.Int()), 0)
+	}
+
+	cacheCreationTokens := usage.CacheCreationInputTokens
+	if v := usageNode.Get("cache_creation_input_tokens"); v.Exists() {
+		cacheCreationTokens = int(v.Int())
+	}
+	if cacheCreationTokens == 0 {
+		cc5m := usageNode.Get("cache_creation.ephemeral_5m_input_tokens").Int()
+		cc1h := usageNode.Get("cache_creation.ephemeral_1h_input_tokens").Int()
+		if cc5m > 0 || cc1h > 0 {
+			cacheCreationTokens = int(cc5m + cc1h)
+		}
+	}
+
+	if promptCacheMissTokens.Exists() {
+		usage.InputTokens = max(int(promptCacheMissTokens.Int()), 0)
+	} else {
+		usage.InputTokens = max(int(promptTokens.Int())-cacheReadTokens-cacheCreationTokens, 0)
+	}
+	usage.CacheReadInputTokens = cacheReadTokens
+	usage.CacheCreationInputTokens = cacheCreationTokens
+	return true
 }
 
 func parseClaudeUsageFromResponseBody(body []byte) *ClaudeUsage {
@@ -8879,6 +8976,7 @@ func parseClaudeUsageFromResponseBody(body []byte) *ClaudeUsage {
 			usage.CacheReadInputTokens = int(cached)
 		}
 	}
+	normalizeAnthropicCompatiblePromptUsage(usageNode, usage)
 	return usage
 }
 
@@ -8925,6 +9023,54 @@ func (s *GatewayService) invalidNonStreamingJSONFailoverError(
 		ResponseHeaders:        resp.Header,
 		RetryableOnSameAccount: retryableOnSameAccount,
 	}
+}
+
+func invalidNonStreamingJSONFailoverError(
+	ctx context.Context,
+	rateLimitService *RateLimitService,
+	resp *http.Response,
+	account *Account,
+	body []byte,
+	parseErr error,
+	requestedModel ...string,
+) error {
+	const statusCode = http.StatusBadGateway
+	accountID := int64(0)
+	accountName := ""
+	retryableOnSameAccount := false
+	if account != nil {
+		accountID = account.ID
+		accountName = account.Name
+		retryableOnSameAccount = account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode)
+	}
+	logger.LegacyPrintf(
+		"service.gateway",
+		"Account %d(%s): upstream returned non-JSON 2xx response, attempting failover: status=%d request_id=%s error=%v",
+		accountID, accountName, resp.StatusCode, resp.Header.Get("x-request-id"), parseErr,
+	)
+	if rateLimitService != nil && account != nil {
+		if len(requestedModel) > 0 {
+			rateLimitService.HandleUpstreamError(ctx, account, statusCode, resp.Header, body, requestedModel[0])
+		} else {
+			rateLimitService.HandleUpstreamError(ctx, account, statusCode, resp.Header, body)
+		}
+	}
+	return &UpstreamFailoverError{
+		StatusCode: statusCode, ResponseBody: body, ResponseHeaders: resp.Header,
+		RetryableOnSameAccount: retryableOnSameAccount,
+	}
+}
+
+func classifyAnthropicResponseInputAsCacheRead(body []byte, usage *ClaudeUsage) ([]byte, error) {
+	classified, err := sjson.SetBytes(body, "usage.input_tokens", 0)
+	if err != nil {
+		return nil, fmt.Errorf("classify forced cache billing input tokens: %w", err)
+	}
+	classified, err = sjson.SetBytes(classified, "usage.cache_read_input_tokens", usage.CacheReadInputTokens+usage.InputTokens)
+	if err != nil {
+		return nil, fmt.Errorf("classify forced cache billing cache read tokens: %w", err)
+	}
+	return classified, nil
 }
 
 func (s *GatewayService) handleNonStreamingResponseAnthropicAPIKeyPassthrough(
@@ -12397,6 +12543,7 @@ func writeUsageLogBestEffort(ctx context.Context, repo UsageLogRepository, usage
 
 // recordUsageOpts 内部选项，参数化普通计费与长上下文计费的差异点。
 type recordUsageOpts struct {
+	PricingAt time.Time
 	// 长上下文计费（仅 Gemini 路径需要）
 	LongContextThreshold  int
 	LongContextMultiplier float64
@@ -12584,6 +12731,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	if opts == nil {
 		opts = &recordUsageOpts{}
 	}
+	opts.PricingAt = pricingAt
 	opts.IsKiroAccount = account != nil && account.Platform == PlatformKiro
 	if opts.IsKiroAccount {
 		opts.KiroCreditUnitPriceUSD = account.KiroCreditUnitPriceUSD()
@@ -12735,8 +12883,17 @@ func (s *GatewayService) calculateRecordUsageCost(
 	billingModel string,
 	multiplier float64,
 	imageMultiplier float64,
-	opts *recordUsageOpts,
+	pricingContext any,
 ) *CostBreakdown {
+	var opts *recordUsageOpts
+	switch value := pricingContext.(type) {
+	case *recordUsageOpts:
+		opts = value
+	case time.Time:
+		opts = &recordUsageOpts{PricingAt: value}
+	default:
+		opts = &recordUsageOpts{}
+	}
 	// 图片生成：渠道定价为 token 计费时走 token 路径，否则走图片计费
 	if result.ImageCount > 0 {
 		if resolved := s.resolveChannelPricing(ctx, billingModel, apiKey); resolved != nil && resolved.Mode == BillingModeToken {
@@ -12876,6 +13033,7 @@ func (s *GatewayService) calculateTokenCost(
 			Tokens:         tokens,
 			RequestCount:   1,
 			RateMultiplier: multiplier,
+			PricingAt:      opts.PricingAt,
 			Resolver:       s.resolver,
 			Resolved:       resolved,
 		})
@@ -13531,6 +13689,7 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 	body []byte,
 	token string,
 ) (*http.Request, error) {
+	body = stripDeferredToolCacheControl(body)
 	targetURL := claudeAPICountTokensURL
 	baseURL := account.GetBaseURL()
 	if baseURL != "" {
@@ -13851,6 +14010,17 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 	hasAnyMapping := false
 
 	for _, acc := range accounts {
+		// Passthrough routing accepts models independently of model_mapping. A stale
+		// mapping on any eligible passthrough account therefore cannot define the
+		// public whitelist; return nil so the handler uses its default model set.
+		if platform == PlatformOpenAI && acc.IsOpenAIPassthroughEnabled() {
+			if s.modelsListCache != nil {
+				s.modelsListCache.Set(cacheKey, []string(nil), s.modelsListCacheTTL)
+				modelsListCacheStoreTotal.Add(1)
+			}
+			return nil
+		}
+
 		mapping := acc.GetModelMapping()
 		if len(mapping) > 0 {
 			hasAnyMapping = true
@@ -13883,10 +14053,90 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 	return cloneStringSlice(models)
 }
 
+// GetSchedulablePlatforms returns the concrete platforms that currently have
+// schedulable accounts in the target group.
+func (s *GatewayService) GetSchedulablePlatforms(ctx context.Context, groupID *int64) map[string]struct{} {
+	platforms := make(map[string]struct{})
+	if s == nil || s.accountRepo == nil {
+		return platforms
+	}
+
+	var accounts []Account
+	var err error
+	if groupID != nil {
+		accounts, err = s.accountRepo.ListSchedulableByGroupID(ctx, *groupID)
+	} else {
+		accounts, err = s.accountRepo.ListSchedulable(ctx)
+	}
+	if err != nil {
+		return platforms
+	}
+
+	for _, acc := range accounts {
+		platform := strings.TrimSpace(acc.Platform)
+		if platform != "" {
+			platforms[platform] = struct{}{}
+		}
+	}
+	return platforms
+}
+
+func (s *GatewayService) resolveCompositeModelOwnership(ctx context.Context, groupID int64, model string) (CompositeModelOwnership, error) {
+	model = strings.TrimSpace(model)
+	if s == nil || s.accountRepo == nil || groupID <= 0 || model == "" {
+		return CompositeModelOwnership{}, nil
+	}
+
+	cacheKey := compositeModelOwnershipCacheKey(groupID, model)
+	if s.modelsListCache != nil {
+		if cached, found := s.modelsListCache.Get(cacheKey); found {
+			if ownership, ok := cached.(CompositeModelOwnership); ok {
+				return ownership, nil
+			}
+		}
+	}
+
+	accounts, err := s.accountRepo.ListSchedulableByGroupID(ctx, groupID)
+	if err != nil {
+		return CompositeModelOwnership{}, err
+	}
+	platforms := make(map[string]struct{})
+	for _, account := range accounts {
+		platform := strings.TrimSpace(account.Platform)
+		if !isConcreteRequestPlatform(platform) || !explicitModelMappingClaims(account, model) {
+			continue
+		}
+		platforms[platform] = struct{}{}
+	}
+
+	ownership := CompositeModelOwnership{}
+	if len(platforms) == 1 {
+		for platform := range platforms {
+			ownership.TargetPlatform = platform
+		}
+		ownership.Matched = true
+	} else if len(platforms) > 1 {
+		ownership.Ambiguous = true
+	}
+	if s.modelsListCache != nil {
+		s.modelsListCache.Set(cacheKey, ownership, s.modelsListCacheTTL)
+	}
+	return ownership, nil
+}
+
+func explicitModelMappingClaims(account Account, model string) bool {
+	if account.Credentials == nil || model == "" {
+		return false
+	}
+	mapped, ok := stringMappingFromRaw(account.Credentials["model_mapping"])[model]
+	return ok && strings.TrimSpace(mapped) != ""
+}
+
 func (s *GatewayService) InvalidateAvailableModelsCache(groupID *int64, platform string) {
 	if s == nil || s.modelsListCache == nil {
 		return
 	}
+	s.invalidateCompositeModelOwnershipCache(groupID)
 
 	normalizedPlatform := strings.TrimSpace(platform)
 	// 完整匹配时精准失效；否则按维度批量失效。
@@ -13912,6 +14162,29 @@ func (s *GatewayService) InvalidateAvailableModelsCache(groupID *int64, platform
 			continue
 		}
 		s.modelsListCache.Delete(key)
+	}
+}
+
+func (s *GatewayService) invalidateCompositeModelOwnershipCache(groupID *int64) {
+	if s == nil || s.modelsListCache == nil {
+		return
+	}
+	for key := range s.modelsListCache.Items() {
+		if !strings.HasPrefix(key, compositeModelOwnershipCachePrefix) {
+			continue
+		}
+		if groupID == nil {
+			s.modelsListCache.Delete(key)
+			continue
+		}
+		parts := strings.SplitN(strings.TrimPrefix(key, compositeModelOwnershipCachePrefix), "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		cachedGroupID, err := strconv.ParseInt(parts[0], 10, 64)
+		if err == nil && cachedGroupID == *groupID {
+			s.modelsListCache.Delete(key)
+		}
 	}
 }
 
@@ -13946,19 +14219,19 @@ func (s *GatewayService) initDebugGatewayBodyFile(path string) {
 	}
 
 	// 如果 path 指向一个已存在的目录，自动追加默认文件名
-	if info, err := os.Stat(path); err == nil && info.IsDir() {
+	if info, err := os.Stat(path); err == nil && info.IsDir() { //nolint:gosec // G703: path 仅来自启动环境变量 SUB2API_DEBUG_GATEWAY_BODY（运维配置），非请求输入
 		path = filepath.Join(path, debugGatewayBodyDefaultFilename)
 	}
 
 	// 确保父目录存在
 	if dir := filepath.Dir(path); dir != "." {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0755); err != nil { //nolint:gosec // G703: 同上
 			slog.Error("failed to create gateway debug log directory", "dir", dir, "error", err)
 			return
 		}
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644) //nolint:gosec // G703: 同上
 	if err != nil {
 		slog.Error("failed to open gateway debug log file", "path", path, "error", err)
 		return

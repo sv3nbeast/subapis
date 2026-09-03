@@ -8,11 +8,11 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/platform/liveattestation"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -81,8 +81,8 @@ func (f optionalLimitField) ToServiceInput() *float64 {
 	if f.value != nil {
 		return f.value
 	}
-	zero := 0.0
-	return &zero
+	unlimited := -1.0
+	return &unlimited
 }
 
 // NewGroupHandler creates a new admin group handler
@@ -96,41 +96,49 @@ func NewGroupHandler(adminService service.AdminService, dashboardService *servic
 
 // CreateGroupRequest represents create group request
 type CreateGroupRequest struct {
-	Name             string             `json:"name" binding:"required"`
-	Description      string             `json:"description"`
-	Platform         string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity kiro droid grok"`
-	RateMultiplier   float64            `json:"rate_multiplier"`
-	IsExclusive      bool               `json:"is_exclusive"`
-	SubscriptionType string             `json:"subscription_type" binding:"omitempty,oneof=standard subscription"`
-	DailyLimitUSD    optionalLimitField `json:"daily_limit_usd"`
-	WeeklyLimitUSD   optionalLimitField `json:"weekly_limit_usd"`
-	MonthlyLimitUSD  optionalLimitField `json:"monthly_limit_usd"`
-	ModelQuotaRatios map[string]float64 `json:"model_quota_ratios"`
+	Name                      string                        `json:"name" binding:"required"`
+	Description               string                        `json:"description"`
+	Platform                  string                        `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity kiro droid grok kimi zhipu deepseek composite"`
+	RateMultiplier            float64                       `json:"rate_multiplier"`
+	IsExclusive               bool                          `json:"is_exclusive"`
+	SubscriptionType          string                        `json:"subscription_type" binding:"omitempty,oneof=standard subscription"`
+	DailyLimitUSD             optionalLimitField            `json:"daily_limit_usd"`
+	WeeklyLimitUSD            optionalLimitField            `json:"weekly_limit_usd"`
+	MonthlyLimitUSD           optionalLimitField            `json:"monthly_limit_usd"`
+	ModelQuotaRatios          map[string]float64            `json:"model_quota_ratios"`
+	LongContextPricingEnabled bool                          `json:"long_context_pricing_enabled"`
+	ModelPricing              []service.ChannelModelPricing `json:"model_pricing"`
 	// 图片生成计费配置（antigravity 和 gemini 平台使用，负数表示清除配置）
-	AllowImageGeneration            bool     `json:"allow_image_generation"`
-	AllowBatchImageGeneration       bool     `json:"allow_batch_image_generation"`
-	ImageRateIndependent            bool     `json:"image_rate_independent"`
-	ImageRateMultiplier             *float64 `json:"image_rate_multiplier"`
-	BatchImageDiscountMultiplier    *float64 `json:"batch_image_discount_multiplier"`
-	BatchImageHoldMultiplier        *float64 `json:"batch_image_hold_multiplier"`
-	VideoRateIndependent            bool     `json:"video_rate_independent"`
-	VideoRateMultiplier             *float64 `json:"video_rate_multiplier"`
-	PeakRateEnabled                 bool     `json:"peak_rate_enabled"`
-	PeakStart                       string   `json:"peak_start"`
-	PeakEnd                         string   `json:"peak_end"`
-	PeakRateMultiplier              *float64 `json:"peak_rate_multiplier"`
-	ProfitControlEnabled            bool     `json:"profit_control_enabled"`
-	ProfitMinMargin                 *float64 `json:"profit_min_margin"`
-	ProfitSafetyBuffer              *float64 `json:"profit_safety_buffer"`
-	ImagePrice1K                    *float64 `json:"image_price_1k"`
-	ImagePrice2K                    *float64 `json:"image_price_2k"`
-	ImagePrice4K                    *float64 `json:"image_price_4k"`
-	VideoPrice480P                  *float64 `json:"video_price_480p"`
-	VideoPrice720P                  *float64 `json:"video_price_720p"`
-	VideoPrice1080P                 *float64 `json:"video_price_1080p"`
-	ClaudeCodeOnly                  bool     `json:"claude_code_only"`
-	FallbackGroupID                 *int64   `json:"fallback_group_id"`
-	FallbackGroupIDOnInvalidRequest *int64   `json:"fallback_group_id_on_invalid_request"`
+	AllowImageGeneration            bool                          `json:"allow_image_generation"`
+	AllowBatchImageGeneration       bool                          `json:"allow_batch_image_generation"`
+	ImageRateIndependent            bool                          `json:"image_rate_independent"`
+	ImageRateMultiplier             *float64                      `json:"image_rate_multiplier"`
+	BatchImageDiscountMultiplier    *float64                      `json:"batch_image_discount_multiplier"`
+	BatchImageHoldMultiplier        *float64                      `json:"batch_image_hold_multiplier"`
+	VideoRateIndependent            bool                          `json:"video_rate_independent"`
+	VideoRateMultiplier             *float64                      `json:"video_rate_multiplier"`
+	PeakRateEnabled                 bool                          `json:"peak_rate_enabled"`
+	PeakStart                       string                        `json:"peak_start"`
+	PeakEnd                         string                        `json:"peak_end"`
+	PeakRateMultiplier              *float64                      `json:"peak_rate_multiplier"`
+	ProfitControlEnabled            bool                          `json:"profit_control_enabled"`
+	ProfitMinMargin                 *float64                      `json:"profit_min_margin"`
+	ProfitSafetyBuffer              *float64                      `json:"profit_safety_buffer"`
+	ImagePrice1K                    *float64                      `json:"image_price_1k"`
+	ImagePrice2K                    *float64                      `json:"image_price_2k"`
+	ImagePrice4K                    *float64                      `json:"image_price_4k"`
+	VideoPrice480P                  *float64                      `json:"video_price_480p"`
+	VideoPrice720P                  *float64                      `json:"video_price_720p"`
+	VideoPrice1080P                 *float64                      `json:"video_price_1080p"`
+	VideoModelPrices                map[string]map[string]float64 `json:"video_model_prices,omitempty"`
+	WebSearchPricePerCall           *float64                      `json:"web_search_price_per_call"`
+	SearchPricePer1k                *float64                      `json:"search_price_per_1k"`
+	AudioRealtimePricePerMin        *float64                      `json:"audio_realtime_price_per_min"`
+	AudioTtsPricePerMillionChars    *float64                      `json:"audio_tts_price_per_million_chars"`
+	AudioSttPricePerHour            *float64                      `json:"audio_stt_price_per_hour"`
+	ClaudeCodeOnly                  bool                          `json:"claude_code_only"`
+	FallbackGroupID                 *int64                        `json:"fallback_group_id"`
+	FallbackGroupIDOnInvalidRequest *int64                        `json:"fallback_group_id_on_invalid_request"`
 	// 模型路由配置（仅 anthropic 平台使用）
 	ModelRouting        map[string][]int64 `json:"model_routing"`
 	ModelRoutingEnabled bool               `json:"model_routing_enabled"`
@@ -141,6 +149,8 @@ type CreateGroupRequest struct {
 	AllowMessagesDispatch        bool                                      `json:"allow_messages_dispatch"`
 	AllowNonStreamMessages       bool                                      `json:"allow_non_stream_messages"`
 	AllowLive                    bool                                      `json:"allow_live"`
+	ForceOpenAIFast              bool                                      `json:"force_openai_fast"`
+	FreeOpenAIFast               bool                                      `json:"free_openai_fast"`
 	RequireOAuthOnly             bool                                      `json:"require_oauth_only"`
 	RequirePrivacySet            bool                                      `json:"require_privacy_set"`
 	DefaultMappedModel           string                                    `json:"default_mapped_model"`
@@ -149,9 +159,10 @@ type CreateGroupRequest struct {
 	GrokChatUpstreamMode         string                                    `json:"grok_chat_upstream_mode" binding:"omitempty,oneof=raw responses gray"`
 	GrokChatResponsesGrayPercent int                                       `json:"grok_chat_responses_gray_percent" binding:"min=0,max=100"`
 	// 分组 RPM 上限（0 = 不限制）
-	RPMLimit                int                              `json:"rpm_limit"`
-	MaxReasoningEffort      string                           `json:"max_reasoning_effort"`
-	ReasoningEffortMappings []service.ReasoningEffortMapping `json:"reasoning_effort_mappings"`
+	RPMLimit                    int                              `json:"rpm_limit"`
+	MaxReasoningEffort          string                           `json:"max_reasoning_effort"`
+	MaxReasoningEffortOverLimit string                           `json:"max_reasoning_effort_over_limit"`
+	ReasoningEffortMappings     []service.ReasoningEffortMapping `json:"reasoning_effort_mappings"`
 	// Kiro 模拟缓存配置（仅 kiro 平台生效）
 	KiroCacheEmulationEnabled                        bool     `json:"kiro_cache_emulation_enabled"`
 	KiroAutoStickyEnabled                            *bool    `json:"kiro_auto_sticky_enabled"`
@@ -170,42 +181,50 @@ type CreateGroupRequest struct {
 
 // UpdateGroupRequest represents update group request
 type UpdateGroupRequest struct {
-	Name             string             `json:"name"`
-	Description      *string            `json:"description"`
-	Platform         string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity kiro droid grok"`
-	RateMultiplier   *float64           `json:"rate_multiplier"`
-	IsExclusive      *bool              `json:"is_exclusive"`
-	Status           string             `json:"status" binding:"omitempty,oneof=active inactive"`
-	SubscriptionType string             `json:"subscription_type" binding:"omitempty,oneof=standard subscription"`
-	DailyLimitUSD    optionalLimitField `json:"daily_limit_usd"`
-	WeeklyLimitUSD   optionalLimitField `json:"weekly_limit_usd"`
-	MonthlyLimitUSD  optionalLimitField `json:"monthly_limit_usd"`
-	ModelQuotaRatios map[string]float64 `json:"model_quota_ratios"`
+	Name                      string                         `json:"name"`
+	Description               *string                        `json:"description"`
+	Platform                  string                         `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity kiro droid grok kimi zhipu deepseek composite"`
+	RateMultiplier            *float64                       `json:"rate_multiplier"`
+	IsExclusive               *bool                          `json:"is_exclusive"`
+	Status                    string                         `json:"status" binding:"omitempty,oneof=active inactive"`
+	SubscriptionType          string                         `json:"subscription_type" binding:"omitempty,oneof=standard subscription"`
+	DailyLimitUSD             optionalLimitField             `json:"daily_limit_usd"`
+	WeeklyLimitUSD            optionalLimitField             `json:"weekly_limit_usd"`
+	MonthlyLimitUSD           optionalLimitField             `json:"monthly_limit_usd"`
+	ModelQuotaRatios          map[string]float64             `json:"model_quota_ratios"`
+	LongContextPricingEnabled *bool                          `json:"long_context_pricing_enabled"`
+	ModelPricing              *[]service.ChannelModelPricing `json:"model_pricing"`
 	// 图片生成计费配置（antigravity 和 gemini 平台使用，负数表示清除配置）
-	AllowImageGeneration            *bool    `json:"allow_image_generation"`
-	AllowBatchImageGeneration       *bool    `json:"allow_batch_image_generation"`
-	ImageRateIndependent            *bool    `json:"image_rate_independent"`
-	ImageRateMultiplier             *float64 `json:"image_rate_multiplier"`
-	BatchImageDiscountMultiplier    *float64 `json:"batch_image_discount_multiplier"`
-	BatchImageHoldMultiplier        *float64 `json:"batch_image_hold_multiplier"`
-	VideoRateIndependent            *bool    `json:"video_rate_independent"`
-	VideoRateMultiplier             *float64 `json:"video_rate_multiplier"`
-	PeakRateEnabled                 *bool    `json:"peak_rate_enabled"`
-	PeakStart                       *string  `json:"peak_start"`
-	PeakEnd                         *string  `json:"peak_end"`
-	PeakRateMultiplier              *float64 `json:"peak_rate_multiplier"`
-	ProfitControlEnabled            *bool    `json:"profit_control_enabled"`
-	ProfitMinMargin                 *float64 `json:"profit_min_margin"`
-	ProfitSafetyBuffer              *float64 `json:"profit_safety_buffer"`
-	ImagePrice1K                    *float64 `json:"image_price_1k"`
-	ImagePrice2K                    *float64 `json:"image_price_2k"`
-	ImagePrice4K                    *float64 `json:"image_price_4k"`
-	VideoPrice480P                  *float64 `json:"video_price_480p"`
-	VideoPrice720P                  *float64 `json:"video_price_720p"`
-	VideoPrice1080P                 *float64 `json:"video_price_1080p"`
-	ClaudeCodeOnly                  *bool    `json:"claude_code_only"`
-	FallbackGroupID                 *int64   `json:"fallback_group_id"`
-	FallbackGroupIDOnInvalidRequest *int64   `json:"fallback_group_id_on_invalid_request"`
+	AllowImageGeneration            *bool                         `json:"allow_image_generation"`
+	AllowBatchImageGeneration       *bool                         `json:"allow_batch_image_generation"`
+	ImageRateIndependent            *bool                         `json:"image_rate_independent"`
+	ImageRateMultiplier             *float64                      `json:"image_rate_multiplier"`
+	BatchImageDiscountMultiplier    *float64                      `json:"batch_image_discount_multiplier"`
+	BatchImageHoldMultiplier        *float64                      `json:"batch_image_hold_multiplier"`
+	VideoRateIndependent            *bool                         `json:"video_rate_independent"`
+	VideoRateMultiplier             *float64                      `json:"video_rate_multiplier"`
+	PeakRateEnabled                 *bool                         `json:"peak_rate_enabled"`
+	PeakStart                       *string                       `json:"peak_start"`
+	PeakEnd                         *string                       `json:"peak_end"`
+	PeakRateMultiplier              *float64                      `json:"peak_rate_multiplier"`
+	ProfitControlEnabled            *bool                         `json:"profit_control_enabled"`
+	ProfitMinMargin                 *float64                      `json:"profit_min_margin"`
+	ProfitSafetyBuffer              *float64                      `json:"profit_safety_buffer"`
+	ImagePrice1K                    *float64                      `json:"image_price_1k"`
+	ImagePrice2K                    *float64                      `json:"image_price_2k"`
+	ImagePrice4K                    *float64                      `json:"image_price_4k"`
+	VideoPrice480P                  *float64                      `json:"video_price_480p"`
+	VideoPrice720P                  *float64                      `json:"video_price_720p"`
+	VideoPrice1080P                 *float64                      `json:"video_price_1080p"`
+	VideoModelPrices                map[string]map[string]float64 `json:"video_model_prices,omitempty"`
+	WebSearchPricePerCall           *float64                      `json:"web_search_price_per_call"`
+	SearchPricePer1k                *float64                      `json:"search_price_per_1k"`
+	AudioRealtimePricePerMin        *float64                      `json:"audio_realtime_price_per_min"`
+	AudioTtsPricePerMillionChars    *float64                      `json:"audio_tts_price_per_million_chars"`
+	AudioSttPricePerHour            *float64                      `json:"audio_stt_price_per_hour"`
+	ClaudeCodeOnly                  *bool                         `json:"claude_code_only"`
+	FallbackGroupID                 *int64                        `json:"fallback_group_id"`
+	FallbackGroupIDOnInvalidRequest *int64                        `json:"fallback_group_id_on_invalid_request"`
 	// 模型路由配置（仅 anthropic 平台使用）
 	ModelRouting        map[string][]int64 `json:"model_routing"`
 	ModelRoutingEnabled *bool              `json:"model_routing_enabled"`
@@ -216,6 +235,8 @@ type UpdateGroupRequest struct {
 	AllowMessagesDispatch        *bool                                      `json:"allow_messages_dispatch"`
 	AllowNonStreamMessages       *bool                                      `json:"allow_non_stream_messages"`
 	AllowLive                    *bool                                      `json:"allow_live"`
+	ForceOpenAIFast              *bool                                      `json:"force_openai_fast"`
+	FreeOpenAIFast               *bool                                      `json:"free_openai_fast"`
 	RequireOAuthOnly             *bool                                      `json:"require_oauth_only"`
 	RequirePrivacySet            *bool                                      `json:"require_privacy_set"`
 	DefaultMappedModel           *string                                    `json:"default_mapped_model"`
@@ -224,9 +245,10 @@ type UpdateGroupRequest struct {
 	GrokChatUpstreamMode         *string                                    `json:"grok_chat_upstream_mode" binding:"omitempty,oneof=raw responses gray"`
 	GrokChatResponsesGrayPercent *int                                       `json:"grok_chat_responses_gray_percent" binding:"omitempty,min=0,max=100"`
 	// 分组 RPM 上限（0 = 不限制）；nil 表示未提供不改动
-	RPMLimit                *int                              `json:"rpm_limit"`
-	MaxReasoningEffort      *string                           `json:"max_reasoning_effort"`
-	ReasoningEffortMappings *[]service.ReasoningEffortMapping `json:"reasoning_effort_mappings"`
+	RPMLimit                    *int                              `json:"rpm_limit"`
+	MaxReasoningEffort          *string                           `json:"max_reasoning_effort"`
+	MaxReasoningEffortOverLimit *string                           `json:"max_reasoning_effort_over_limit"`
+	ReasoningEffortMappings     *[]service.ReasoningEffortMapping `json:"reasoning_effort_mappings"`
 	// Kiro 模拟缓存配置（仅 kiro 平台生效）；nil 表示未提供不改动
 	KiroCacheEmulationEnabled                        *bool    `json:"kiro_cache_emulation_enabled"`
 	KiroAutoStickyEnabled                            *bool    `json:"kiro_auto_sticky_enabled"`
@@ -246,7 +268,7 @@ type UpdateGroupRequest struct {
 type CompositeRouteRequest struct {
 	PublicModel    string `json:"public_model" binding:"required"`
 	MatchType      string `json:"match_type" binding:"omitempty,oneof=exact prefix"`
-	TargetPlatform string `json:"target_platform" binding:"required,oneof=anthropic openai gemini antigravity grok"`
+	TargetPlatform string `json:"target_platform" binding:"required,oneof=anthropic openai gemini antigravity grok kimi zhipu deepseek"`
 	UpstreamModel  string `json:"upstream_model"`
 	Endpoint       string `json:"endpoint" binding:"omitempty,oneof=any messages count_tokens responses chat_completions embeddings images gemini"`
 	Priority       int    `json:"priority"`
@@ -537,6 +559,8 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		AllowMessagesDispatch:           req.AllowMessagesDispatch,
 		AllowNonStreamMessages:          req.AllowNonStreamMessages,
 		AllowLive:                       req.AllowLive,
+		ForceOpenAIFast:                 req.ForceOpenAIFast,
+		FreeOpenAIFast:                  req.FreeOpenAIFast,
 		RequireOAuthOnly:                req.RequireOAuthOnly,
 		RequirePrivacySet:               req.RequirePrivacySet,
 		DefaultMappedModel:              req.DefaultMappedModel,
@@ -546,6 +570,7 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		GrokChatResponsesGrayPercent:    req.GrokChatResponsesGrayPercent,
 		RPMLimit:                        req.RPMLimit,
 		MaxReasoningEffort:              req.MaxReasoningEffort,
+		MaxReasoningEffortOverLimit:     req.MaxReasoningEffortOverLimit,
 		ReasoningEffortMappings:         req.ReasoningEffortMappings,
 		KiroCacheEmulationEnabled:       req.KiroCacheEmulationEnabled,
 		KiroAutoStickyEnabled:           req.KiroAutoStickyEnabled,
@@ -670,6 +695,8 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		AllowMessagesDispatch:           req.AllowMessagesDispatch,
 		AllowNonStreamMessages:          req.AllowNonStreamMessages,
 		AllowLive:                       req.AllowLive,
+		ForceOpenAIFast:                 req.ForceOpenAIFast,
+		FreeOpenAIFast:                  req.FreeOpenAIFast,
 		RequireOAuthOnly:                req.RequireOAuthOnly,
 		RequirePrivacySet:               req.RequirePrivacySet,
 		DefaultMappedModel:              req.DefaultMappedModel,
@@ -679,6 +706,7 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		GrokChatResponsesGrayPercent:    req.GrokChatResponsesGrayPercent,
 		RPMLimit:                        req.RPMLimit,
 		MaxReasoningEffort:              req.MaxReasoningEffort,
+		MaxReasoningEffortOverLimit:     req.MaxReasoningEffortOverLimit,
 		ReasoningEffortMappings:         req.ReasoningEffortMappings,
 		KiroCacheEmulationEnabled:       req.KiroCacheEmulationEnabled,
 		KiroAutoStickyEnabled:           req.KiroAutoStickyEnabled,
@@ -738,12 +766,10 @@ func (h *GroupHandler) GetStats(c *gin.Context) {
 	_ = groupID // TODO: implement actual stats
 }
 
-// GetUsageSummary returns today's and cumulative cost for all groups.
-// GET /api/v1/admin/groups/usage-summary?timezone=Asia/Shanghai
+// GetUsageSummary returns today's, yesterday's, and cumulative cost for all groups.
+// GET /api/v1/admin/groups/usage-summary
 func (h *GroupHandler) GetUsageSummary(c *gin.Context) {
-	userTZ := c.Query("timezone")
-	now := timezone.NowInUserLocation(userTZ)
-	todayStart := timezone.StartOfDayInUserLocation(now, userTZ)
+	todayStart := service.GroupUsageTodayStart(time.Now())
 
 	results, err := h.dashboardService.GetGroupUsageSummary(c.Request.Context(), todayStart)
 	if err != nil {

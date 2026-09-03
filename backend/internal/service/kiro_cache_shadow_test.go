@@ -35,6 +35,14 @@ func (s *kiroCacheShadowStoreStub) DeleteSessionAccountID(context.Context, int64
 	return nil
 }
 
+func (s *kiroCacheShadowStoreStub) SetReasoningContent(context.Context, string, string, time.Duration) error {
+	return nil
+}
+
+func (s *kiroCacheShadowStoreStub) GetReasoningContent(context.Context, string) (string, error) {
+	return "", ErrReasoningContentNotFound
+}
+
 func (s *kiroCacheShadowStoreStub) RecordKiroCacheShadowSample(_ context.Context, sample *KiroCacheShadowSample) error {
 	s.samples <- sample
 	return nil

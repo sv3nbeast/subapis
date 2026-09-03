@@ -24,9 +24,11 @@ func TestEstimateImageTokensUsesDimensionsNotEncodedLength(t *testing.T) {
 	require.NoError(t, png.Encode(&flatPNG, flat))
 
 	noisy := image.NewRGBA(image.Rect(0, 0, 512, 512))
+	state := uint32(0x9e3779b9)
 	for y := 0; y < 512; y++ {
 		for x := 0; x < 512; x++ {
-			noisy.SetRGBA(x, y, color.RGBA{R: uint8(x), G: uint8(y), B: uint8(x ^ y), A: 255})
+			state = state*1664525 + 1013904223
+			noisy.SetRGBA(x, y, color.RGBA{R: uint8(state), G: uint8(state >> 8), B: uint8(state >> 16), A: 255})
 		}
 	}
 	var noisyPNG bytes.Buffer

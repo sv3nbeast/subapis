@@ -18,7 +18,7 @@
 
       <!-- API Key fields (only for apikey type) -->
       <div v-if="account.type === 'apikey'" class="space-y-4">
-        <div>
+        <div v-if="!isCNApiKeyAccount || editApiProtocol !== 'adaptive'">
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
             v-model="editBaseUrl"
@@ -46,6 +46,100 @@
             class="mt-2"
             @select="editBaseUrl = $event"
           />
+          <CnBaseUrlPresets
+            v-if="isCNApiKeyAccount"
+            class="mt-2"
+            :platform="cnPresetPlatform"
+            :mode="editAccountMode"
+            :protocol="editApiProtocol"
+            :current-url="editBaseUrl"
+            @select="onCnPresetSelect"
+          />
+        </div>
+        <div v-else>
+          <label class="input-label">{{ t('admin.accounts.cnProviders.apiProtocol.endpoints') }}</label>
+          <div class="mt-2 space-y-3">
+            <div v-for="item in editAdaptiveProtocolOptions" :key="item.value">
+              <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                {{ t(`admin.accounts.cnProviders.apiProtocol.${item.labelKey}`) }}
+              </label>
+              <input v-model="editAdaptiveBaseUrls[item.value]" type="text" class="input" />
+            </div>
+          </div>
+          <p v-if="!cnSupportsNativeResponses(account.platform)" class="input-hint">
+            {{ t('admin.accounts.cnProviders.apiProtocol.responsesFallbackDesc') }}
+          </p>
+        </div>
+        <!-- Account Mode Selection (CN providers) -->
+        <div v-if="isCNApiKeyAccount">
+          <label class="input-label">{{ t('admin.accounts.cnProviders.accountMode.title') }}</label>
+          <div class="mt-2 flex flex-wrap gap-2">
+            <button
+              v-for="opt in cnAccountModeOptions"
+              :key="opt.value"
+              type="button"
+              :class="[
+                'rounded-lg border-2 px-3 py-1.5 text-xs transition-all',
+                editAccountMode === opt.value
+                  ? 'border-primary-500 bg-primary-50 font-medium text-primary-700 dark:bg-primary-900/30 dark:text-primary-300'
+                  : 'border-gray-200 text-gray-700 hover:border-gray-400 dark:border-dark-600 dark:text-gray-300 dark:hover:border-gray-600'
+              ]"
+              @click="editAccountMode = opt.value"
+            >
+              {{ t(`admin.accounts.cnProviders.accountMode.${opt.labelKey}`) }}
+            </button>
+          </div>
+          <p class="input-hint">{{ t(`admin.accounts.cnProviders.accountMode.${editAccountMode}Desc`) }}</p>
+        </div>
+        <!-- API Protocol Selection (CN providers) -->
+        <div v-if="isCNApiKeyAccount">
+          <label class="input-label">{{ t('admin.accounts.cnProviders.apiProtocol.title') }}</label>
+          <div class="mt-2 flex flex-wrap gap-2">
+            <button
+              v-for="opt in cnProtocolOptions"
+              :key="opt.value"
+              type="button"
+              :class="[
+                'rounded-lg border-2 px-3 py-1.5 text-xs transition-all',
+                editApiProtocol === opt.value
+                  ? 'border-primary-500 bg-primary-50 font-medium text-primary-700 dark:bg-primary-900/30 dark:text-primary-300'
+                  : 'border-gray-200 text-gray-700 hover:border-gray-400 dark:border-dark-600 dark:text-gray-300 dark:hover:border-gray-600'
+              ]"
+              @click="editApiProtocol = opt.value"
+            >
+              {{ t(`admin.accounts.cnProviders.apiProtocol.${opt.labelKey}`) }}
+            </button>
+          </div>
+          <p class="input-hint">{{ t(`admin.accounts.cnProviders.apiProtocol.${cnProtocolDescKey}Desc`) }}</p>
+        </div>
+        <!-- Zhipu 团队版 Coding Plan：组织/项目 ID（可选，填写后用量查询走团队版端点） -->
+        <div v-if="account.platform === 'zhipu' && editAccountMode === 'coding'">
+          <div class="flex items-center">
+            <label class="input-label">{{ t('admin.accounts.cnProviders.zhipuTeam.title') }}</label>
+            <HelpTooltip trigger="click" width-class="w-80">
+              <p class="mb-1 font-medium">{{ t('admin.accounts.cnProviders.zhipuTeam.help.title') }}</p>
+              <ol class="list-decimal space-y-1 pl-4">
+                <li>{{ t('admin.accounts.cnProviders.zhipuTeam.help.step1') }}</li>
+                <li>{{ t('admin.accounts.cnProviders.zhipuTeam.help.step2') }}</li>
+                <li>{{ t('admin.accounts.cnProviders.zhipuTeam.help.step3') }}</li>
+                <li>{{ t('admin.accounts.cnProviders.zhipuTeam.help.step4') }}</li>
+              </ol>
+              <p class="mt-2 break-all rounded bg-black/20 p-1.5 font-mono text-[11px] leading-relaxed">
+                {{ t('admin.accounts.cnProviders.zhipuTeam.help.example') }}
+              </p>
+            </HelpTooltip>
+          </div>
+          <div class="mt-2 grid gap-4 sm:grid-cols-2">
+            <div>
+              <label class="input-label">{{ t('admin.accounts.cnProviders.zhipuTeam.organization') }}</label>
+              <input v-model="editZhipuOrganization" type="text" class="input" :placeholder="t('admin.accounts.cnProviders.zhipuTeam.organizationPlaceholder')" />
+            </div>
+            <div>
+              <label class="input-label">{{ t('admin.accounts.cnProviders.zhipuTeam.project') }}</label>
+              <input v-model="editZhipuProject" type="text" class="input" :placeholder="t('admin.accounts.cnProviders.zhipuTeam.projectPlaceholder')" />
+            </div>
+          </div>
+          <p class="input-hint mt-2">{{ t('admin.accounts.cnProviders.zhipuTeam.hint') }}</p>
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.apiKey') }}</label>
@@ -1712,7 +1806,10 @@
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <label class="input-label">{{ t('admin.accounts.expiresAt') }}</label>
         <input v-model="expiresAtInput" type="datetime-local" class="input" />
-        <p class="input-hint">{{ t('admin.accounts.expiresAtHint') }}</p>
+        <p class="input-hint">
+          {{ t('admin.accounts.expiresAtHint') }}
+          {{ t('admin.accounts.expiresAtTimezoneHint', { timezone: browserTimeZone }) }}
+        </p>
       </div>
 
       <div
@@ -2362,6 +2459,41 @@
         </div>
       </div>
 
+      <div
+        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow"
+        class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="auto-reset-credit-settings"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <label class="input-label mb-0">{{ t('admin.accounts.autoResetCredit.title') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.autoResetCredit.hint') }}</p>
+          </div>
+          <button
+            type="button"
+            data-testid="auto-reset-credit-enabled"
+            @click="autoResetCreditEnabled = !autoResetCreditEnabled"
+            :class="[
+              'relative inline-flex h-6 w-11 rounded-full border-2 border-transparent transition-colors',
+              autoResetCreditEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+          >
+            <span :class="['inline-block h-5 w-5 rounded-full bg-white shadow transition-transform', autoResetCreditEnabled ? 'translate-x-5' : 'translate-x-0']" />
+          </button>
+        </div>
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label class="input-label">{{ t('admin.accounts.autoResetCredit.threshold5h') }}</label>
+            <input v-model.number="autoResetCredit5hThreshold" type="number" min="0.1" max="100" step="0.1" class="input" :disabled="!autoResetCreditEnabled" data-testid="auto-reset-credit-5h-threshold" />
+          </div>
+          <div>
+            <label class="input-label">{{ t('admin.accounts.autoResetCredit.threshold7d') }}</label>
+            <input v-model.number="autoResetCredit7dThreshold" type="number" min="0.1" max="100" step="0.1" class="input" :disabled="!autoResetCreditEnabled" data-testid="auto-reset-credit-7d-threshold" />
+          </div>
+        </div>
+        <p class="input-hint">{{ t('admin.accounts.autoResetCredit.thresholdHint') }}</p>
+      </div>
+
       <!-- Quota Control Section (Anthropic OAuth/SetupToken only) -->
       <div
         v-if="account?.platform === 'anthropic' && (account?.type === 'oauth' || account?.type === 'setup-token')"
@@ -2938,7 +3070,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, watch } from 'vue'
+import { ref, reactive, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
@@ -2956,6 +3088,7 @@ import type {
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
+import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
@@ -2965,6 +3098,7 @@ import AnthropicStableIdentityPanel from '@/components/account/AnthropicStableId
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
+import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import {
   applyAntigravityProjectID,
@@ -2974,11 +3108,17 @@ import {
   isHeaderOverrideCapable,
   splitHeaderOverridesObject,
   validateHeaderOverrideRows,
+  cnSupportsNativeResponses,
+  defaultCNAdaptiveBaseUrls,
+  defaultCNBaseUrl,
   HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY,
   HEADER_OVERRIDES_CREDENTIAL_KEY,
+  type CnAccountMode,
+  type CnApiProtocol,
+  type CnNativeApiProtocol,
   type HeaderOverrideRow
 } from '@/components/account/credentialsBuilder'
-import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
+import { formatDateTime, formatDateTimeLocalInput, getBrowserTimeZone, parseDateTimeLocalInput } from '@/utils/format'
 import { needsMixedChannelCheck as platformNeedsMixedChannelCheck } from '@/utils/mixedChannel'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { useQuotaNotifyState } from '@/composables/useQuotaNotifyState'
@@ -3017,6 +3157,7 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const browserTimeZone = getBrowserTimeZone()
 
 // Spark 影子账号(parent_account_id 非空):代理恒继承母账号,不可独立编辑(外审 B/P1),
 // 故隐藏代理选择器。
@@ -3070,6 +3211,111 @@ interface TempUnschedRuleForm {
 const submitting = ref(false)
 const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
+
+// 国产供应商账号允许修正账号模式、协议和各协议端点。回填期间暂停 watcher，
+// 防止用户保存的自定义地址被默认值覆盖。
+const isCNApiKeyAccount = computed(
+  () =>
+    props.account?.type === 'apikey' &&
+    (props.account.platform === 'kimi' ||
+      props.account.platform === 'zhipu' ||
+      props.account.platform === 'deepseek')
+)
+const cnPresetPlatform = computed<'kimi' | 'zhipu' | 'deepseek'>(() => {
+  const platform = props.account?.platform
+  return platform === 'kimi' || platform === 'zhipu' || platform === 'deepseek' ? platform : 'kimi'
+})
+const editApiProtocol = ref<CnApiProtocol>('adaptive')
+const editAccountMode = ref<CnAccountMode>('payg')
+const editZhipuOrganization = ref('')
+const editZhipuProject = ref('')
+const editAdaptiveBaseUrls = ref<Record<CnNativeApiProtocol, string>>({
+  chat_completions: '',
+  anthropic: '',
+  responses: ''
+})
+const syncingForm = ref(false)
+const cnAccountModeOptions = computed<Array<{ value: CnAccountMode; labelKey: 'payg' | 'coding' }>>(
+  () => props.account?.platform === 'deepseek'
+    ? [{ value: 'payg', labelKey: 'payg' }]
+    : [
+        { value: 'payg', labelKey: 'payg' },
+        { value: 'coding', labelKey: 'coding' }
+      ]
+)
+const cnProtocolOptions = computed<Array<{ value: CnApiProtocol; labelKey: string }>>(() => {
+  const options: Array<{ value: CnApiProtocol; labelKey: string }> = [
+    { value: 'adaptive', labelKey: 'adaptive' },
+    { value: 'chat_completions', labelKey: 'chatCompletions' },
+    { value: 'anthropic', labelKey: 'anthropic' }
+  ]
+  if (cnSupportsNativeResponses(props.account?.platform ?? '')) {
+    options.push({ value: 'responses', labelKey: 'responses' })
+  }
+  return options
+})
+const editAdaptiveProtocolOptions = computed<Array<{ value: CnNativeApiProtocol; labelKey: string }>>(() => {
+  const options: Array<{ value: CnNativeApiProtocol; labelKey: string }> = [
+    { value: 'chat_completions', labelKey: 'chatCompletions' },
+    { value: 'anthropic', labelKey: 'anthropic' }
+  ]
+  if (cnSupportsNativeResponses(props.account?.platform ?? '')) {
+    options.push({ value: 'responses', labelKey: 'responses' })
+  }
+  return options
+})
+
+watch(editApiProtocol, (protocol, previousProtocol) => {
+  if (!isCNApiKeyAccount.value || syncingForm.value) return
+  if (protocol === 'adaptive') {
+    const defaults = defaultCNAdaptiveBaseUrls(cnPresetPlatform.value, editAccountMode.value)
+    for (const item of editAdaptiveProtocolOptions.value) {
+      if (!editAdaptiveBaseUrls.value[item.value]) editAdaptiveBaseUrls.value[item.value] = defaults[item.value]
+    }
+    if (previousProtocol !== 'adaptive' && editBaseUrl.value.trim()) {
+      editAdaptiveBaseUrls.value[previousProtocol] = editBaseUrl.value.trim()
+    }
+    editBaseUrl.value = editAdaptiveBaseUrls.value.chat_completions
+    return
+  }
+  if (previousProtocol === 'adaptive') {
+    editBaseUrl.value = editAdaptiveBaseUrls.value[protocol] ||
+      defaultCNBaseUrl(props.account!.platform, editAccountMode.value, protocol)
+    return
+  }
+  editBaseUrl.value = defaultCNBaseUrl(props.account!.platform, editAccountMode.value, protocol)
+})
+
+watch(editAccountMode, (mode, previousMode) => {
+  if (!isCNApiKeyAccount.value || syncingForm.value) return
+  const effectiveMode = props.account!.platform === 'deepseek' && mode === 'coding' ? 'payg' : mode
+  if (effectiveMode !== mode) {
+    editAccountMode.value = effectiveMode
+    return
+  }
+  if (editApiProtocol.value === 'adaptive') {
+    const previousDefaults = defaultCNAdaptiveBaseUrls(cnPresetPlatform.value, previousMode)
+    const nextDefaults = defaultCNAdaptiveBaseUrls(cnPresetPlatform.value, mode)
+    for (const item of editAdaptiveProtocolOptions.value) {
+      if (!editAdaptiveBaseUrls.value[item.value] || editAdaptiveBaseUrls.value[item.value] === previousDefaults[item.value]) {
+        editAdaptiveBaseUrls.value[item.value] = nextDefaults[item.value]
+      }
+    }
+    editBaseUrl.value = editAdaptiveBaseUrls.value.chat_completions
+    return
+  }
+  editBaseUrl.value = defaultCNBaseUrl(props.account!.platform, mode, editApiProtocol.value)
+})
+
+const cnProtocolDescKey = computed(
+  () => `admin.accounts.cnProviders.apiProtocol.${editApiProtocol.value}Desc`
+)
+
+function onCnPresetSelect(preset: { mode: CnAccountMode; protocol: CnApiProtocol; url: string }) {
+  editAccountMode.value = preset.mode
+  editApiProtocol.value = preset.protocol
+  editBaseUrl.value = preset.url
+}
 const kiroCreditUnitPriceUsd = ref(0)
 const isKiroRelayAccount = computed(
   () => props.account?.platform === 'kiro' && props.account?.type === 'apikey' && editBaseUrl.value.trim() !== ''
@@ -3115,6 +3361,9 @@ const autoPause5hThreshold = ref<number | null>(null)
 const autoPause7dThreshold = ref<number | null>(null)
 const autoPause5hDisabled = ref(false)
 const autoPause7dDisabled = ref(false)
+const autoResetCreditEnabled = ref(false)
+const autoResetCredit5hThreshold = ref(100)
+const autoResetCredit7dThreshold = ref(100)
 const mixedScheduling = ref(false) // Enable cross-platform mixed scheduling for supported Claude-compatible accounts
 const openAIKiroBridgeEnabled = ref(false)
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
@@ -3601,6 +3850,11 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   if (!newAccount) {
     return
   }
+  // 进入回填窗口：抑制 CN 模式/协议 watcher 联动重置 base_url（见 syncingForm 注释）。
+  syncingForm.value = true
+  void nextTick(() => {
+    syncingForm.value = false
+  })
   antigravityMixedChannelConfirmed.value = false
   showMixedChannelWarning.value = false
   mixedChannelWarningDetails.value = null
@@ -3654,6 +3908,11 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   autoPause7dThreshold.value = typeof extra?.auto_pause_7d_threshold === 'number' ? extra.auto_pause_7d_threshold * 100 : null
   autoPause5hDisabled.value = extra?.auto_pause_5h_disabled === true
   autoPause7dDisabled.value = extra?.auto_pause_7d_disabled === true
+  autoResetCreditEnabled.value = extra?.auto_reset_credit_enabled === true
+  autoResetCredit5hThreshold.value =
+    typeof extra?.auto_reset_credit_5h_threshold === 'number' ? extra.auto_reset_credit_5h_threshold * 100 : 100
+  autoResetCredit7dThreshold.value =
+    typeof extra?.auto_reset_credit_7d_threshold === 'number' ? extra.auto_reset_credit_7d_threshold * 100 : 100
   upstreamBillingAutoProbeEnabled.value = extra?.upstream_billing_probe_enabled === true
   upstreamBillingRateSyncEnabled.value =
     upstreamBillingAutoProbeEnabled.value && extra?.upstream_billing_rate_sync_enabled === true
@@ -3877,6 +4136,58 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   // Initialize API Key fields for apikey type
   if (newAccount.type === 'apikey' && newAccount.credentials) {
     const credentials = newAccount.credentials as Record<string, unknown>
+    // 国产供应商：读取 account_mode 与 api_protocol 作为可编辑初始值
+    // （编辑弹窗允许修正两者，用于修复早期存错默认值的账号）。
+    if (newAccount.platform === 'kimi' || newAccount.platform === 'zhipu' || newAccount.platform === 'deepseek') {
+      editAccountMode.value = credentials.account_mode === 'coding' ? 'coding' : 'payg'
+      const storedProtocol = credentials.api_protocol
+      editApiProtocol.value =
+        storedProtocol === 'adaptive' ||
+        storedProtocol === 'chat_completions' ||
+        storedProtocol === 'anthropic' ||
+        storedProtocol === 'responses'
+          ? storedProtocol
+          : 'chat_completions'
+      if (!cnSupportsNativeResponses(newAccount.platform) && editApiProtocol.value === 'responses') {
+        editApiProtocol.value = 'chat_completions'
+      }
+      const adaptiveDefaults = defaultCNAdaptiveBaseUrls(newAccount.platform, editAccountMode.value)
+      const storedBaseUrls = (credentials.api_base_urls as Record<string, unknown> | undefined) || {}
+      const legacyBaseUrl = typeof credentials.base_url === 'string' ? credentials.base_url.trim() : ''
+      const storedChatBaseUrl = typeof storedBaseUrls.chat_completions === 'string'
+        ? storedBaseUrls.chat_completions.trim()
+        : ''
+      const storedAnthropicBaseUrl = typeof storedBaseUrls.anthropic === 'string'
+        ? storedBaseUrls.anthropic.trim()
+        : ''
+      const storedResponsesBaseUrl = typeof storedBaseUrls.responses === 'string'
+        ? storedBaseUrls.responses.trim()
+        : ''
+      const nextAdaptiveBaseUrls: Record<CnNativeApiProtocol, string> = {
+        chat_completions: storedChatBaseUrl || adaptiveDefaults.chat_completions,
+        anthropic: storedAnthropicBaseUrl || adaptiveDefaults.anthropic,
+        responses: storedResponsesBaseUrl || adaptiveDefaults.responses
+      }
+      const legacyProtocol: CnNativeApiProtocol = editApiProtocol.value === 'anthropic'
+        ? 'anthropic'
+        : editApiProtocol.value === 'responses'
+          ? 'responses'
+          : 'chat_completions'
+      const storedLegacyBaseUrl = legacyProtocol === 'anthropic'
+        ? storedAnthropicBaseUrl
+        : legacyProtocol === 'responses'
+          ? storedResponsesBaseUrl
+          : storedChatBaseUrl
+      if (legacyBaseUrl && !storedLegacyBaseUrl) {
+        nextAdaptiveBaseUrls[legacyProtocol] = legacyBaseUrl
+      }
+      editAdaptiveBaseUrls.value = nextAdaptiveBaseUrls
+      // 智谱团队版 Coding Plan：回填组织/项目 ID
+      if (newAccount.platform === 'zhipu') {
+        editZhipuOrganization.value = typeof credentials.zhipu_organization === 'string' ? credentials.zhipu_organization : ''
+        editZhipuProject.value = typeof credentials.zhipu_project === 'string' ? credentials.zhipu_project : ''
+      }
+    }
     const platformDefaultUrl =
       newAccount.platform === 'openai'
         ? 'https://api.openai.com'
@@ -4654,6 +4965,13 @@ const handleSubmit = async () => {
     appStore.showError(t('admin.accounts.pleaseSelectStatus'))
     return
   }
+	if (autoResetCreditEnabled.value) {
+		const thresholds = [autoResetCredit5hThreshold.value, autoResetCredit7dThreshold.value]
+		if (thresholds.some((value) => !Number.isFinite(value) || value < 0.1 || value > 100)) {
+			appStore.showError(t('admin.accounts.autoResetCredit.thresholdInvalid'))
+			return
+		}
+	}
 
   const updatePayload: Record<string, unknown> = { ...form }
   try {
@@ -4697,6 +5015,36 @@ const handleSubmit = async () => {
         newCredentials.base_url = newBaseUrl
       } else {
         delete newCredentials.base_url
+      }
+
+      // 国产供应商：模式与协议写入凭据（决定额度/余额探测与转发端点/格式）。
+      if (isCNApiKeyAccount.value) {
+        newCredentials.account_mode = editAccountMode.value
+        newCredentials.api_protocol = editApiProtocol.value
+        if (editApiProtocol.value === 'adaptive') {
+          const defaults = defaultCNAdaptiveBaseUrls(cnPresetPlatform.value, editAccountMode.value)
+          const protocolBaseUrls: Record<string, string> = {}
+          for (const item of editAdaptiveProtocolOptions.value) {
+            protocolBaseUrls[item.value] = (editAdaptiveBaseUrls.value[item.value] || defaults[item.value]).trim()
+          }
+          newCredentials.api_base_urls = protocolBaseUrls
+          newCredentials.base_url = protocolBaseUrls.chat_completions
+        } else {
+          delete newCredentials.api_base_urls
+        }
+        // 智谱团队版 Coding Plan：组织/项目 ID 写入凭据（非空才写，清空即移除回落个人版路径）
+        if (props.account.platform === 'zhipu') {
+          const org = editZhipuOrganization.value.trim()
+          const project = editZhipuProject.value.trim()
+          if (org) {
+            newCredentials.zhipu_organization = org
+            if (project) newCredentials.zhipu_project = project
+            else delete newCredentials.zhipu_project
+          } else {
+            delete newCredentials.zhipu_organization
+            delete newCredentials.zhipu_project
+          }
+        }
       }
 
       // Handle API key
@@ -5348,14 +5696,21 @@ const handleSubmit = async () => {
         }
       }
 
-      // 指纹收敛模式：默认 session，不写入；非默认值显式写入（包括 off）
+      // 指纹收敛模式：默认 off（不写入）；device/session/full 是显式 opt-in，
+      // 必须落键，否则管理员的选择会被后端当作"未设置"而回落到 off（#5610）。
       if (props.account.type === 'oauth') {
-        if (codexFingerprintMode.value !== 'session') {
+        if (codexFingerprintMode.value !== 'off') {
           newExtra.codex_fingerprint_mode = codexFingerprintMode.value
         } else {
           delete newExtra.codex_fingerprint_mode
         }
+        if (!isSparkShadow.value) {
+          newExtra.auto_reset_credit_enabled = autoResetCreditEnabled.value
+          newExtra.auto_reset_credit_5h_threshold = autoResetCredit5hThreshold.value / 100
+          newExtra.auto_reset_credit_7d_threshold = autoResetCredit7dThreshold.value / 100
+        }
       }
+      delete newExtra.codex_auto_reset_credit_state
 
       updatePayload.extra = newExtra
     }

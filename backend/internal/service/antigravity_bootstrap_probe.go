@@ -153,7 +153,7 @@ func (a *antigravityClientAdapter) LoadCodeAssist(ctx context.Context, accessTok
 }
 
 func (a *antigravityClientAdapter) FetchAvailableModels(ctx context.Context, accessToken, projectID string) (*antigravity.FetchAvailableModelsResponse, map[string]any, error) {
-	return a.inner.FetchAvailableModels(ctx, accessToken, projectID)
+	return a.inner.FetchAvailableModels(ctx, accessToken, projectID, resolveModelsListReadLimit(nil))
 }
 
 func (a *antigravityClientAdapter) FetchUserInfo(ctx context.Context, accessToken, projectID string) (*antigravity.FetchUserInfoResponse, error) {

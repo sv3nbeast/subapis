@@ -820,6 +820,14 @@ func (c *fakeKiroGatewayCache) DeleteSessionAccountID(context.Context, int64, st
 	return nil
 }
 
+func (c *fakeKiroGatewayCache) SetReasoningContent(context.Context, string, string, time.Duration) error {
+	return nil
+}
+
+func (c *fakeKiroGatewayCache) GetReasoningContent(context.Context, string) (string, error) {
+	return "", ErrReasoningContentNotFound
+}
+
 func (c *fakeKiroGatewayCache) GetKiroCacheFingerprints(_ context.Context, stableKey string, fingerprints []string) (map[string]bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -65,7 +65,7 @@ func TestForwardAsChatCompletionsForGrokResponsesRoute(t *testing.T) {
 	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
 	require.NoError(t, err)
 	require.Equal(t, xai.DefaultCLIBaseURL+"/responses", upstream.lastReq.URL.String())
-	require.Equal(t, "grok-4.5", gjson.GetBytes(upstream.lastBody, "model").String())
+	require.Equal(t, "grok-4.6", gjson.GetBytes(upstream.lastBody, "model").String())
 	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
 	require.True(t, gjson.GetBytes(upstream.lastBody, "input").IsArray())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "messages").Exists())

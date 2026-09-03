@@ -76,7 +76,13 @@ const (
 )
 
 func sameAccountRetryDelayFor(failoverErr *service.UpstreamFailoverError, retryCount int) time.Duration {
-	if failoverErr == nil || !failoverErr.RequestScopedTransient || retryCount <= 1 {
+	if failoverErr == nil {
+		return sameAccountRetryDelay
+	}
+	if failoverErr.SameAccountRetryDelay > 0 {
+		return failoverErr.SameAccountRetryDelay
+	}
+	if !failoverErr.RequestScopedTransient || retryCount <= 1 {
 		return sameAccountRetryDelay
 	}
 	delay := sameAccountRetryDelay
@@ -87,6 +93,40 @@ func sameAccountRetryDelayFor(failoverErr *service.UpstreamFailoverError, retryC
 		delay *= 2
 	}
 	return delay
+}
+
+func sameAccountRetryAllowed(failoverErr *service.UpstreamFailoverError, retryCount, retryLimit int) bool {
+	if failoverErr == nil || !failoverErr.RetryableOnSameAccount || !sameAccountRetryDeadlineAllows(failoverErr) {
+		return false
+	}
+	if failoverErr.SameAccountRetryMax > 0 {
+		if retryLimit <= 0 {
+			return false
+		}
+		if failoverErr.SameAccountRetryMax < retryLimit {
+			retryLimit = failoverErr.SameAccountRetryMax
+		}
+		return retryCount < retryLimit
+	}
+	if !failoverErr.SameAccountRetryDeadline.IsZero() {
+		return true
+	}
+	return retryLimit > 0 && retryCount < retryLimit
+}
+
+func sameAccountRetryDeadlineAllows(failoverErr *service.UpstreamFailoverError) bool {
+	return failoverErr == nil || failoverErr.SameAccountRetryDeadline.IsZero() || time.Now().Before(failoverErr.SameAccountRetryDeadline)
+}
+
+func effectiveSameAccountRetryLimit(failoverErr *service.UpstreamFailoverError, account *service.Account) int {
+	if account == nil {
+		return 0
+	}
+	limit := account.GetPoolModeRetryCount()
+	if limit > 0 && failoverErr != nil && failoverErr.SameAccountRetryMax > 0 && failoverErr.SameAccountRetryMax < limit {
+		return failoverErr.SameAccountRetryMax
+	}
+	return limit
 }
 
 const profitVetoExhaustedMessage = "No available accounts: all candidates rejected by group profit control"

@@ -64,6 +64,7 @@ var duplicateAccountDiscardedExtraKeys = map[string]struct{}{
 	"codex_5h_window_minutes": {}, "codex_5h_reset_at": {},
 	"codex_7d_used_percent": {}, "codex_7d_reset_after_seconds": {},
 	"codex_7d_window_minutes": {}, "codex_7d_reset_at": {},
+	"codex_fingerprint_seed": {},
 }
 
 func duplicateAccountExtra(value map[string]any) (map[string]any, error) {
@@ -152,6 +153,7 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 	delete(accountExtra, OllamaCloudUsageSessionExtraKey)
 	delete(accountExtra, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(accountExtra, OllamaCloudUsageSnapshotExtraKey)
+	accountExtra = prepareCodexFingerprintExtraForCreate(input.Platform, input.Type, accountExtra)
 	account := &Account{
 		Name: input.Name, Notes: normalizeAccountNotes(input.Notes), Platform: input.Platform,
 		Type: input.Type, Credentials: input.Credentials, Extra: accountExtra, ProxyID: input.ProxyID,

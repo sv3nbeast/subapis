@@ -32,6 +32,13 @@ const (
 	BetaAdvancedToolUse       = "advanced-tool-use-2025-11-20"
 	BetaStructuredOutputs     = "structured-outputs-2025-12-15"
 	BetaMidConversationSystem = "mid-conversation-system-2026-04-07"
+
+	// Server-side fallback fields are accepted only when the caller explicitly
+	// advertises the matching beta. They are intentionally not added to the
+	// default Claude Code mimicry beta set because they can change model/billing.
+	BetaServerSideFallback   = "server-side-fallback-2026-07-01"
+	BetaFallbackCredit       = "fallback-credit-2026-07-01"
+	BetaFallbackCreditLegacy = "fallback-credit-2026-06-01"
 )
 
 // DroppedBetas 是转发时需要从 anthropic-beta header 中移除的 beta token 列表。

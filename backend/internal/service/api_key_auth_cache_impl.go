@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 20 // v20: hydrate subscription model quota ratios in auth queries
+const apiKeyAuthSnapshotVersion = 22 // v22: hydrate subscription ratios, pricing, and OpenAI fast policy
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -357,6 +357,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			Email:                      apiKey.User.Email,
 			Username:                   apiKey.User.Username,
 			BalanceNotifyEnabled:       apiKey.User.BalanceNotifyEnabled,
+			RestrictPublicGroups:       apiKey.User.RestrictPublicGroups,
 			BalanceNotifyThresholdType: apiKey.User.BalanceNotifyThresholdType,
 			BalanceNotifyThreshold:     apiKey.User.BalanceNotifyThreshold,
 			BalanceNotifyExtraEmails:   apiKey.User.BalanceNotifyExtraEmails,
@@ -400,7 +401,14 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			VideoPrice480P:                  groupForSnapshot.VideoPrice480P,
 			VideoPrice720P:                  groupForSnapshot.VideoPrice720P,
 			VideoPrice1080P:                 groupForSnapshot.VideoPrice1080P,
+			VideoModelPrices:                NormalizeVideoModelPrices(groupForSnapshot.VideoModelPrices),
 			WebSearchPricePerCall:           groupForSnapshot.WebSearchPricePerCall,
+			SearchPricePer1k:                groupForSnapshot.SearchPricePer1k,
+			AudioRealtimePricePerMin:        groupForSnapshot.AudioRealtimePricePerMin,
+			AudioTTSPricePerMillionChars:    groupForSnapshot.AudioTTSPricePerMillionChars,
+			AudioSTTPricePerHour:            groupForSnapshot.AudioSTTPricePerHour,
+			LongContextPricingEnabled:       groupForSnapshot.LongContextPricingEnabled,
+			ModelPricing:                    groupForSnapshot.ModelPricing,
 			ClaudeCodeOnly:                  groupForSnapshot.ClaudeCodeOnly,
 			FallbackGroupID:                 groupForSnapshot.FallbackGroupID,
 			FallbackGroupIDOnInvalidRequest: groupForSnapshot.FallbackGroupIDOnInvalidRequest,
@@ -409,6 +417,9 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			MCPXMLInject:                    groupForSnapshot.MCPXMLInject,
 			SupportedModelScopes:            groupForSnapshot.SupportedModelScopes,
 			AllowMessagesDispatch:           groupForSnapshot.AllowMessagesDispatch,
+			AllowLive:                       groupForSnapshot.AllowLive,
+			ForceOpenAIFast:                 groupForSnapshot.ForceOpenAIFast,
+			FreeOpenAIFast:                  groupForSnapshot.FreeOpenAIFast,
 			AllowNonStreamMessages:          groupForSnapshot.AllowNonStreamMessages,
 			DefaultMappedModel:              groupForSnapshot.DefaultMappedModel,
 			MessagesDispatchModelConfig:     groupForSnapshot.MessagesDispatchModelConfig,
@@ -428,6 +439,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			GrokChatResponsesGrayPercent:                     groupForSnapshot.EffectiveGrokChatResponsesGrayPercent(),
 			RPMLimit:                                         groupForSnapshot.RPMLimit,
 			MaxReasoningEffort:                               groupForSnapshot.MaxReasoningEffort,
+			MaxReasoningEffortOverLimit:                      groupForSnapshot.MaxReasoningEffortOverLimit,
 			ReasoningEffortMappings:                          groupForSnapshot.ReasoningEffortMappings,
 			PeakRateEnabled:                                  groupForSnapshot.PeakRateEnabled,
 			PeakStart:                                        groupForSnapshot.PeakStart,
@@ -470,6 +482,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			Email:                      snapshot.User.Email,
 			Username:                   snapshot.User.Username,
 			BalanceNotifyEnabled:       snapshot.User.BalanceNotifyEnabled,
+			RestrictPublicGroups:       snapshot.User.RestrictPublicGroups,
 			BalanceNotifyThresholdType: snapshot.User.BalanceNotifyThresholdType,
 			BalanceNotifyThreshold:     snapshot.User.BalanceNotifyThreshold,
 			BalanceNotifyExtraEmails:   snapshot.User.BalanceNotifyExtraEmails,
@@ -510,6 +523,8 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			AudioRealtimePricePerMin:        snapshot.Group.AudioRealtimePricePerMin,
 			AudioTTSPricePerMillionChars:    snapshot.Group.AudioTTSPricePerMillionChars,
 			AudioSTTPricePerHour:            snapshot.Group.AudioSTTPricePerHour,
+			LongContextPricingEnabled:       snapshot.Group.LongContextPricingEnabled,
+			ModelPricing:                    snapshot.Group.ModelPricing,
 			ClaudeCodeOnly:                  snapshot.Group.ClaudeCodeOnly,
 			FallbackGroupID:                 snapshot.Group.FallbackGroupID,
 			FallbackGroupIDOnInvalidRequest: snapshot.Group.FallbackGroupIDOnInvalidRequest,
@@ -518,6 +533,9 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			MCPXMLInject:                    snapshot.Group.MCPXMLInject,
 			SupportedModelScopes:            snapshot.Group.SupportedModelScopes,
 			AllowMessagesDispatch:           snapshot.Group.AllowMessagesDispatch,
+			AllowLive:                       snapshot.Group.AllowLive,
+			ForceOpenAIFast:                 snapshot.Group.ForceOpenAIFast,
+			FreeOpenAIFast:                  snapshot.Group.FreeOpenAIFast,
 			AllowNonStreamMessages:          snapshot.Group.AllowNonStreamMessages,
 			DefaultMappedModel:              snapshot.Group.DefaultMappedModel,
 			MessagesDispatchModelConfig:     snapshot.Group.MessagesDispatchModelConfig,
@@ -537,6 +555,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			GrokChatResponsesGrayPercent:                     snapshot.Group.GrokChatResponsesGrayPercent,
 			RPMLimit:                                         snapshot.Group.RPMLimit,
 			MaxReasoningEffort:                               snapshot.Group.MaxReasoningEffort,
+			MaxReasoningEffortOverLimit:                      snapshot.Group.MaxReasoningEffortOverLimit,
 			ReasoningEffortMappings:                          snapshot.Group.ReasoningEffortMappings,
 			PeakRateEnabled:                                  snapshot.Group.PeakRateEnabled,
 			PeakStart:                                        snapshot.Group.PeakStart,

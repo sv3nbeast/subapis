@@ -14,6 +14,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type upstreamModelMetadataRepoStub struct {
+	AccountRepository
+	accountID int64
+	updates   map[string]any
+	err       error
+}
+
+func headerValuesEqualFold(header http.Header, name string) []string {
+	for key, values := range header {
+		if strings.EqualFold(key, name) {
+			return values
+		}
+	}
+	return nil
+}
+
+func (r *upstreamModelMetadataRepoStub) UpdateExtra(_ context.Context, id int64, updates map[string]any) error {
+	r.accountID = id
+	r.updates = updates
+	return r.err
+}
+
 func upstreamModelSyncTestConfig() *config.Config {
 	return &config.Config{
 		Security: config.SecurityConfig{

@@ -107,6 +107,9 @@ export interface AdminUser extends User {
   last_used_at?: string | null
   // 用户专属分组倍率配置 (group_id -> rate_multiplier)
   group_rates?: Record<number, number>
+  // 为 true 时该用户仅可使用 allowed_groups 中列出的公开分组。
+  // 管理侧权限开关，普通用户接口不返回。
+  restrict_public_groups?: boolean
   // 当前并发数（仅管理员列表接口返回）
   current_concurrency?: number
 }
@@ -351,6 +354,8 @@ export interface PublicSettings {
   channel_monitor_default_interval_seconds: number
   /** When true, user monitor hides RPM/TPM so scale cannot be reverse-estimated. */
   channel_monitor_hide_throughput?: boolean
+  /** When true, user monitor shows account quota/balance snapshots (default off). */
+  channel_monitor_show_quota?: boolean
   available_channels_enabled: boolean
 	public_model_market_enabled: boolean
 	public_model_market_reference_usd_cny_rate: number
@@ -358,6 +363,7 @@ export interface PublicSettings {
 	model_plaza_enabled: boolean
 	model_plaza_require_auth: boolean
 	model_plaza_description?: string
+	plugin_management_enabled: boolean
 	web_chat_enabled: boolean
   web_chat_projects_enabled?: boolean
   web_chat_templates_enabled?: boolean
@@ -639,9 +645,13 @@ export interface OpenAIMessagesDispatchModelConfig {
   exact_model_mappings?: Record<string, string>
 }
 
+export type ReasoningEffortMatchType = 'exact' | 'prefix' | 'suffix'
+
 export interface ReasoningEffortMapping {
   from: string
   to: string
+  match_type?: ReasoningEffortMatchType
+  model?: string
 }
 
 export interface Group {
@@ -717,6 +727,8 @@ export interface Group {
 }
 
 export interface AdminGroup extends Group {
+  force_openai_fast: boolean
+  free_openai_fast: boolean
   model_pricing: import('@/api/admin/channels').ChannelModelPricing[]
   video_model_prices?: VideoModelPrices
   // 分组利润控制（openai/anthropic/gemini/grok/antigravity 分组可启用；margin/buffer 为小数存储）。
@@ -1005,7 +1017,7 @@ export interface UpdateGroupRequest {
 
 // ==================== Account & Proxy Types ====================
 
-export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'kiro' | 'droid' | 'grok'
+export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'kiro' | 'droid' | 'grok' | 'kimi' | 'zhipu' | 'deepseek'
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
@@ -1180,6 +1192,18 @@ export interface UpstreamBillingProbeResult {
   error?: string
 }
 
+export interface UpstreamBillingRateSnapshotItem {
+  account_id: number
+  snapshot?: UpstreamBillingProbeSnapshot | null
+}
+
+export interface UpstreamBillingRatesResponse {
+  items: UpstreamBillingRateSnapshotItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
 export type OllamaCloudUsageStatus = 'ok' | 'unauthorized' | 'failed'
 
 export interface OllamaCloudUsageWindow {
@@ -1249,7 +1273,23 @@ export interface Account {
       model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
       antigravity_credits_overages?: Record<string, { activated_at: string; active_until: string }>
       upstream_billing_probe_enabled?: boolean
+      upstream_billing_rate_sync_enabled?: boolean
       upstream_billing_probe?: UpstreamBillingProbeSnapshot
+      codex_reset_credit_snapshot?: {
+        available_count?: number
+        credits?: { expires_at?: string }[]
+      }
+      auto_reset_credit_enabled?: boolean
+      auto_reset_credit_5h_threshold?: number
+      auto_reset_credit_7d_threshold?: number
+      codex_auto_reset_credit_state?: {
+        status?: 'checking' | 'available' | 'resetting' | 'success' | 'no_credit' | 'failed'
+        trigger_window?: string
+        available_count?: number
+        checked_at?: string
+        last_result_at?: string
+        error_code?: string
+      }
     } & Record<string, unknown>
   proxy_id: number | null
   proxy_fallback_origin_id?: number | null
@@ -1423,22 +1463,41 @@ export interface GrokQuotaWindow {
 }
 
 export interface GrokBillingSnapshot {
-  credit_usage_percent: number
-  credit_remaining_percent: number
-  current_period_type: string
-  current_period_start: string
-  current_period_end: string
-  on_demand_cap: number
-  on_demand_used: number
-  on_demand_remaining: number
-  prepaid_balance: number
-  unified_billing_user: boolean
+  credit_usage_percent?: number
+  credit_remaining_percent?: number
+  current_period_type?: string
+  current_period_start?: string
+  current_period_end?: string
+  on_demand_cap?: number | null
+  on_demand_used?: number | null
+  on_demand_remaining?: number
+  prepaid_balance?: number | null
+  unified_billing_user?: boolean
+  period_type?: string
+  usage_percent?: number | null
+  period_start?: string
+  period_end?: string
+  product_usage?: Array<{ product: string; usage_percent?: number | null }>
+  monthly_limit_cents?: number | null
+  used_cents?: number | null
+  included_used_cents?: number | null
+  used_percent?: number | null
+  monthly_limit?: number | null
+  monthly_used?: number | null
+  is_unified_billing_user?: boolean
+  plan?: string
+  source?: string
+  fetched_at?: string
+  weekly_updated_at?: string
+  monthly_updated_at?: string
+  partial?: boolean
+  failed_windows?: string[]
   top_up_method?: string
   billing_period_start?: string
   billing_period_end?: string
   subscription_tier?: string
   status_code?: number
-  updated_at: string
+  updated_at?: string
 }
 
 export interface AccountUsageInfo {
@@ -1464,7 +1523,11 @@ export interface AccountUsageInfo {
   grok_last_quota_probe_at?: string
   grok_last_headers_seen_at?: string
   grok_last_status_code?: number
+  grok_free_token_limit?: number
   grok_local_usage?: WindowStats | null
+  grok_local_usage_24h?: WindowStats | null
+  grok_local_usage_7d?: WindowStats | null
+  grok_local_usage_monthly?: WindowStats | null
   grok_billing?: GrokBillingSnapshot | null
   grok_billing_state?: 'observed' | 'unknown' | 'error' | string
   subscription_tier?: string
@@ -1794,6 +1857,7 @@ export interface UsageLog {
   request_type?: UsageRequestType
   stream: boolean
   openai_ws_mode?: boolean
+  native_compaction_v2: boolean
   duration_ms: number | null
   first_token_ms: number | null
 
@@ -1834,6 +1898,7 @@ export interface UsageLogAccountSummary {
 
 export interface AdminUsageLog extends UsageLog {
   upstream_model?: string | null
+  upstream_reasoning_effort?: string | null
   upstream_response_model?: string | null
   upstream_model_mismatch?: boolean | null
   model_mapping_chain?: string | null
@@ -2101,6 +2166,7 @@ export interface UpdateUserRequest {
   concurrency?: number
   status?: 'active' | 'disabled'
   allowed_groups?: number[] | null
+  restrict_public_groups?: boolean
   // 用户专属分组倍率配置 (group_id -> rate_multiplier | null)
   // null 表示删除该分组的专属倍率
   group_rates?: Record<number, number | null>
@@ -2224,6 +2290,7 @@ export interface UsageQueryParams {
   model?: string
   request_type?: UsageRequestType
   stream?: boolean
+  native_compaction_v2?: boolean | null
   billing_type?: number | null
   billing_mode?: string | null
   start_date?: string

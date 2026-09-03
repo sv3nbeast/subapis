@@ -285,13 +285,6 @@ func providerAdapterFor(provider, apiMode string) (providerAdapter, string, bool
 	return adapter, MonitorAPIModeChatCompletions, ok
 }
 
-// isSupportedProvider 校验 provider 字符串是否在 adapter 表中。
-// 供 validate.go 的 validateProvider 复用，避免两份 switch 漂移。
-func isSupportedProvider(p string) bool {
-	_, ok := providerAdapters[p]
-	return ok
-}
-
 // callProvider 通过 providerAdapters 分发到具体实现。
 // opts 承载用户的自定义 headers / body 覆盖（可为 nil）。
 //
@@ -544,6 +537,10 @@ var bodyMergeKeyDenyList = map[string]map[string]bool{
 	MonitorProviderGrok:      {"model": true, "messages": true, "stream": true},
 	MonitorProviderAnthropic: {"model": true, "messages": true, "stream": true},
 	MonitorProviderGemini:    {"contents": true},
+	// 国产 3 家与 OpenAI Chat Completions 同构。
+	MonitorProviderKimi:     {"model": true, "messages": true, "stream": true},
+	MonitorProviderZhipu:    {"model": true, "messages": true, "stream": true},
+	MonitorProviderDeepseek: {"model": true, "messages": true, "stream": true},
 }
 
 func checkAPIMode(opts *CheckOptions) string {
@@ -560,8 +557,20 @@ func bodyMergeDenyKey(provider, apiMode string) string {
 	return provider
 }
 
+// isOpenAICompatibleChatProvider 该 provider 的探活请求是否为 OpenAI Chat
+// Completions 同构（replace 模式的 body 校验按 messages 必填处理）。
+func isOpenAICompatibleChatProvider(provider string) bool {
+	switch provider {
+	case MonitorProviderOpenAI, MonitorProviderGrok,
+		MonitorProviderKimi, MonitorProviderZhipu, MonitorProviderDeepseek:
+		return true
+	default:
+		return false
+	}
+}
+
 func validateReplaceRequestBody(provider, apiMode string, body map[string]any) error {
-	if provider != MonitorProviderOpenAI && provider != MonitorProviderGrok {
+	if !isOpenAICompatibleChatProvider(provider) {
 		return nil
 	}
 	switch defaultAPIMode(apiMode) {

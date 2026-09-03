@@ -72,6 +72,12 @@ func (c *retryBillingHandlerCache) RefreshSessionTTL(context.Context, int64, str
 func (c *retryBillingHandlerCache) DeleteSessionAccountID(context.Context, int64, string) error {
 	return nil
 }
+func (c *retryBillingHandlerCache) SetReasoningContent(context.Context, string, string, time.Duration) error {
+	return nil
+}
+func (c *retryBillingHandlerCache) GetReasoningContent(context.Context, string) (string, error) {
+	return "", service.ErrReasoningContentNotFound
+}
 
 func (c *retryBillingHandlerCache) MarkPreSemanticFailure(_ context.Context, fingerprint, logicalRequestID string, _ time.Duration) error {
 	c.mu.Lock()

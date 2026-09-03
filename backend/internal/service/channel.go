@@ -114,41 +114,62 @@ func (c *Channel) IsBedrockCCCompatEnabled(platform string) bool {
 type ChannelModelPricing struct {
 	ID                int64
 	ChannelID         int64
-	Platform          string            // 所属平台（anthropic/openai/gemini/...）
-	Models            []string          // 绑定的模型列表
-	Disabled          bool              // true 表示后台保留价格但运行时忽略
-	BillingMode       BillingMode       // 计费模式
-	InputPrice        *float64          // 每 token 输入价格（USD）— 向后兼容 flat 定价
-	OutputPrice       *float64          // 每 token 输出价格（USD）
-	CacheWritePrice   *float64          // 缓存写入价格（旧字段，作为通用/5m 兼容价）
-	CacheWrite5mPrice *float64          // 5分钟缓存写入价格
-	CacheWrite1hPrice *float64          // 1小时缓存写入价格
-	CacheReadPrice    *float64          // 缓存读取价格
-	ImageInputPrice   *float64          // 图片输入 token 价格；未配置时回退文本输入价
-	ImageOutputPrice  *float64          // 图片输出价格（向后兼容）
-	PerRequestPrice   *float64          // 默认按次计费价格（USD）
-	Intervals         []PricingInterval // 区间定价列表
+	Platform          string              // 所属平台（anthropic/openai/gemini/...）
+	Models            []string            // 绑定的模型列表
+	Disabled          bool                // true 表示后台保留价格但运行时忽略
+	BillingMode       BillingMode         // 计费模式
+	InputPrice        *float64            // 每 token 输入价格（USD）— 向后兼容 flat 定价
+	OutputPrice       *float64            // 每 token 输出价格（USD）
+	CacheWritePrice   *float64            // 缓存写入价格（旧字段，作为通用/5m 兼容价）
+	CacheWrite5mPrice *float64            // 5分钟缓存写入价格
+	CacheWrite1hPrice *float64            // 1小时缓存写入价格
+	CacheReadPrice    *float64            // 缓存读取价格
+	FastMultiplier    *float64            // OpenAI fast 服务层倍率
+	FlexMultiplier    *float64            // OpenAI flex 服务层倍率
+	ImageInputPrice   *float64            // 图片输入 token 价格；未配置时回退文本输入价
+	ImageOutputPrice  *float64            // 图片输出价格（向后兼容）
+	PerRequestPrice   *float64            // 默认按次计费价格（USD）
+	Intervals         []PricingInterval   // 区间定价列表
+	TimePricing       *ChannelTimePricing // 分时倍率配置
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 }
 
+// ChannelTimePricing 渠道模型定价的分时倍率配置。
+type ChannelTimePricing struct {
+	Timezone     string                     `json:"timezone"`
+	WeekdaysOnly bool                       `json:"weekdays_only,omitempty"`
+	Periods      []ChannelTimePricingPeriod `json:"periods"`
+}
+
+// ChannelTimePricingPeriod 是秒级的左闭右开分时倍率区间，并兼容历史 HH:mm 数据。
+type ChannelTimePricingPeriod struct {
+	StartTime  string  `json:"start_time"`
+	EndTime    string  `json:"end_time"`
+	Multiplier float64 `json:"multiplier"`
+}
+
 // PricingInterval 定价区间（token 区间 / 按次分层 / 图片分辨率分层）
 type PricingInterval struct {
-	ID                int64
-	PricingID         int64
-	MinTokens         int      // 区间下界（含）
-	MaxTokens         *int     // 区间上界（不含），nil = 无上限
-	TierLabel         string   // 层级标签（按次/图片模式：1K, 2K, 4K, HD 等）
-	InputPrice        *float64 // token 模式：每 token 输入价
-	OutputPrice       *float64 // token 模式：每 token 输出价
-	CacheWritePrice   *float64 // token 模式：缓存写入价（旧字段，作为通用/5m 兼容价）
-	CacheWrite5mPrice *float64 // token 模式：5分钟缓存写入价
-	CacheWrite1hPrice *float64 // token 模式：1小时缓存写入价
-	CacheReadPrice    *float64 // token 模式：缓存读取价
-	PerRequestPrice   *float64 // 按次/图片模式：每次请求价格
-	SortOrder         int
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	ID                   int64
+	PricingID            int64
+	MinTokens            int      // 区间下界（含）
+	MaxTokens            *int     // 区间上界（不含），nil = 无上限
+	TierLabel            string   // 层级标签（按次/图片模式：1K, 2K, 4K, HD 等）
+	InputPrice           *float64 // token 模式：每 token 输入价
+	OutputPrice          *float64 // token 模式：每 token 输出价
+	CacheWritePrice      *float64 // token 模式：缓存写入价（旧字段，作为通用/5m 兼容价）
+	CacheWrite5mPrice    *float64 // token 模式：5分钟缓存写入价
+	CacheWrite1hPrice    *float64 // token 模式：1小时缓存写入价
+	CacheReadPrice       *float64 // token 模式：缓存读取价
+	InputMultiplier      *float64 // 分层输入倍率
+	OutputMultiplier     *float64 // 分层输出倍率
+	CacheWriteMultiplier *float64 // 分层缓存写入倍率
+	CacheReadMultiplier  *float64 // 分层缓存读取倍率
+	PerRequestPrice      *float64 // 按次/图片模式：每次请求价格
+	SortOrder            int
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 // IsActive 判断渠道是否启用
@@ -227,6 +248,15 @@ func (p ChannelModelPricing) Clone() ChannelModelPricing {
 	if p.Intervals != nil {
 		cp.Intervals = make([]PricingInterval, len(p.Intervals))
 		copy(cp.Intervals, p.Intervals)
+	}
+	if p.TimePricing != nil {
+		cp.TimePricing = &ChannelTimePricing{
+			Timezone:     p.TimePricing.Timezone,
+			WeekdaysOnly: p.TimePricing.WeekdaysOnly,
+		}
+		if p.TimePricing.Periods != nil {
+			cp.TimePricing.Periods = append([]ChannelTimePricingPeriod(nil), p.TimePricing.Periods...)
+		}
 	}
 	return cp
 }
@@ -350,7 +380,7 @@ func validateSingleInterval(iv *PricingInterval, idx int) error {
 	return validateIntervalPrices(iv, idx)
 }
 
-// validateIntervalPrices 校验区间内所有价格字段 >= 0
+// validateIntervalPrices 校验区间价格 >= 0、倍率 > 0。
 func validateIntervalPrices(iv *PricingInterval, idx int) error {
 	prices := []struct {
 		name string
@@ -367,6 +397,20 @@ func validateIntervalPrices(iv *PricingInterval, idx int) error {
 	for _, p := range prices {
 		if p.val != nil && *p.val < 0 {
 			return fmt.Errorf("interval #%d: %s must be >= 0", idx+1, p.name)
+		}
+	}
+	multipliers := []struct {
+		name string
+		val  *float64
+	}{
+		{"input_multiplier", iv.InputMultiplier},
+		{"output_multiplier", iv.OutputMultiplier},
+		{"cache_write_multiplier", iv.CacheWriteMultiplier},
+		{"cache_read_multiplier", iv.CacheReadMultiplier},
+	}
+	for _, multiplier := range multipliers {
+		if multiplier.val != nil && *multiplier.val <= 0 {
+			return fmt.Errorf("interval #%d: %s must be > 0", idx+1, multiplier.name)
 		}
 	}
 	return nil

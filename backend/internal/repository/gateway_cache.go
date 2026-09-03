@@ -18,6 +18,7 @@ import (
 )
 
 const stickySessionPrefix = "sticky_session:"
+const openAIResponsesSessionWindowPrefix = "openai_responses_session_window:"
 const liveCallPrefix = "live:call:"
 const kiroCacheFingerprintPrefix = "kiro_cache_emulation:"
 const kiroCacheShadowStreamKey = "kiro_cache_shadow_samples:v1"
@@ -99,6 +100,10 @@ func (c *gatewayCache) ClearPreSemanticFailure(ctx context.Context, fingerprint 
 // 格式: sticky_session:{groupID}:{sessionHash}
 func buildSessionKey(groupID int64, sessionHash string) string {
 	return fmt.Sprintf("%s%d:%s", stickySessionPrefix, groupID, sessionHash)
+}
+
+func buildOpenAIResponsesSessionWindowKey(groupID int64, sessionHash string) string {
+	return fmt.Sprintf("%s%d:%s", openAIResponsesSessionWindowPrefix, groupID, sessionHash)
 }
 
 func (c *gatewayCache) GetSessionAccountID(ctx context.Context, groupID int64, sessionHash string) (int64, error) {
@@ -312,21 +317,126 @@ func absInt(value int) int {
 var _ service.CyberSessionBlockStore = (*gatewayCache)(nil)
 var _ service.LiveCallStore = (*gatewayCache)(nil)
 
-const cyberSessionBlockPrefix = "cyber_session_block:"
+const reasoningContentPrefix = "reasoning_content:"
 
-// SetCyberSessionBlocked 把被 cyber_policy 命中的会话写入屏蔽表（TTL 自动过期）。
-// 存储值 "1" 作为存在标记（IsCyberSessionBlocked 只检查 key 是否存在，不读值）。
-func (c *gatewayCache) SetCyberSessionBlocked(ctx context.Context, key string, ttl time.Duration) error {
-	return c.rdb.Set(ctx, cyberSessionBlockPrefix+key, "1", ttl).Err()
+// reasoningContentDefaultTTL 是 reasoning 缓存的默认过期时间。Codex 会话可能
+// 跨多天恢复，取 7 天；调用方传入非正 TTL 时兜底。
+const reasoningContentDefaultTTL = 7 * 24 * time.Hour
+
+// SetReasoningContent 按 reasoning item id 缓存 reasoning 全文。
+// itemID 或 content 为空时直接返回 nil（无可缓存内容，属正常情况而非错误）。
+func (c *gatewayCache) SetReasoningContent(ctx context.Context, itemID string, content string, ttl time.Duration) error {
+	if c == nil || c.rdb == nil {
+		return errors.New("gateway cache unavailable")
+	}
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" || content == "" {
+		return nil
+	}
+	if ttl <= 0 {
+		ttl = reasoningContentDefaultTTL
+	}
+	return c.rdb.Set(ctx, reasoningContentPrefix+itemID, content, ttl).Err()
 }
 
-// IsCyberSessionBlocked 查询会话是否在屏蔽表中。
-func (c *gatewayCache) IsCyberSessionBlocked(ctx context.Context, key string) (bool, error) {
-	n, err := c.rdb.Exists(ctx, cyberSessionBlockPrefix+key).Result()
+// GetReasoningContent 返回缓存的 reasoning 全文；未命中返回
+// service.ErrReasoningContentNotFound。
+func (c *gatewayCache) GetReasoningContent(ctx context.Context, itemID string) (string, error) {
+	if c == nil || c.rdb == nil {
+		return "", errors.New("gateway cache unavailable")
+	}
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" {
+		return "", service.ErrReasoningContentNotFound
+	}
+	val, err := c.rdb.Get(ctx, reasoningContentPrefix+itemID).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return "", service.ErrReasoningContentNotFound
+		}
+		return "", err
+	}
+	return val, nil
+}
+
+const (
+	cyberSessionBlockPrefix         = "cyber_session_block:"
+	cyberSessionScopePrefix         = "cyber_session_scope:"
+	cyberSessionRedisCommandMaxKeys = 128
+)
+
+// SetCyberSessionBlocked writes exact blocks in bounded transactions. The
+// coarse scope is activated only after all exact blocks have been stored.
+func (c *gatewayCache) SetCyberSessionBlocked(ctx context.Context, scopeKey string, keys []string, ttl time.Duration) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	exactKeys := make([]string, 0, cyberSessionRedisCommandMaxKeys)
+	flush := func() error {
+		if len(exactKeys) == 0 {
+			return nil
+		}
+		pipe := c.rdb.TxPipeline()
+		for _, key := range exactKeys {
+			pipe.Set(ctx, cyberSessionBlockPrefix+key, "1", ttl)
+		}
+		_, err := pipe.Exec(ctx)
+		exactKeys = exactKeys[:0]
+		return err
+	}
+	for _, key := range keys {
+		if key != "" {
+			exactKeys = append(exactKeys, key)
+			if len(exactKeys) == cyberSessionRedisCommandMaxKeys {
+				if err := flush(); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if err := flush(); err != nil {
+		return err
+	}
+	if scopeKey != "" {
+		return c.rdb.Set(ctx, cyberSessionScopePrefix+scopeKey, "1", ttl).Err()
+	}
+	return nil
+}
+
+func (c *gatewayCache) IsCyberSessionScopeActive(ctx context.Context, scopeKey string) (bool, error) {
+	n, err := c.rdb.Exists(ctx, cyberSessionScopePrefix+scopeKey).Result()
 	if err != nil {
 		return false, err
 	}
 	return n > 0, nil
+}
+
+// FindCyberSessionBlocked checks bounded batches in caller order and stops at
+// the first blocked key, preserving the original earliest-match behavior.
+func (c *gatewayCache) FindCyberSessionBlocked(ctx context.Context, keys []string) (string, error) {
+	if len(keys) == 0 {
+		return "", nil
+	}
+	for start := 0; start < len(keys); start += cyberSessionRedisCommandMaxKeys {
+		end := start + cyberSessionRedisCommandMaxKeys
+		if end > len(keys) {
+			end = len(keys)
+		}
+		redisKeys := make([]string, end-start)
+		for i, key := range keys[start:end] {
+			redisKeys[i] = cyberSessionBlockPrefix + key
+		}
+		values, err := c.rdb.MGet(ctx, redisKeys...).Result()
+		if err != nil {
+			return "", err
+		}
+		for i, value := range values {
+			if value != nil {
+				return keys[start+i], nil
+			}
+		}
+	}
+	return "", nil
 }
 
 var claimLiveControllerScript = redis.NewScript(`

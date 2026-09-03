@@ -102,6 +102,8 @@ type Group struct {
 	AllowMessagesDispatch        bool
 	AllowNonStreamMessages       bool // 是否允许 /v1/messages 非流式请求（内部转流式聚合）
 	AllowLive                    bool // 是否允许 OpenAI Live 接口
+	ForceOpenAIFast              bool // 强制 OpenAI 网关请求使用 service_tier=priority
+	FreeOpenAIFast               bool // OpenAI Fast 请求按 Standard 价格向用户计费
 	RequireOAuthOnly             bool // 仅允许非 apikey 类型账号关联（OpenAI/Antigravity/Anthropic/Gemini）
 	RequirePrivacySet            bool // 调度时仅允许 privacy 已成功设置的账号（OpenAI/Antigravity/Anthropic/Gemini）
 	DefaultMappedModel           string
@@ -114,8 +116,9 @@ type Group struct {
 	// 一旦设置即接管该分组用户的限流（覆盖用户级 rpm_limit），可被 user-group rpm_override 进一步覆盖。
 	RPMLimit int
 
-	MaxReasoningEffort      string
-	ReasoningEffortMappings []ReasoningEffortMapping
+	MaxReasoningEffort          string
+	MaxReasoningEffortOverLimit string
+	ReasoningEffortMappings     []ReasoningEffortMapping
 
 	// Kiro 模拟缓存配置（仅 Kiro 平台生效）。
 	KiroCacheEmulationEnabled                        bool

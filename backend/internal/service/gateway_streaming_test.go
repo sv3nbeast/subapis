@@ -88,10 +88,10 @@ func TestParseSSEUsage_DeltaExplicitZeroResetsCacheCreationBreakdown(t *testing.
 	svc := newMinimalGatewayService()
 	usage := &ClaudeUsage{}
 
-	// 先在 message_start 中写入非零 5m/1h 明细
-	svc.parseSSEUsage(`{"type":"message_start","message":{"usage":{"input_tokens":100,"cache_creation":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":70}}}}`, usage)
-	require.Equal(t, 30, usage.CacheCreation5mTokens)
-	require.Equal(t, 70, usage.CacheCreation1hTokens)
+	svc.parseSSEUsage(`{"type":"message_start","message":{"usage":{"cache_creation_input_tokens":463184,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":463184}}}}`, usage)
+	require.Equal(t, 463184, usage.CacheCreationInputTokens)
+	require.Equal(t, 0, usage.CacheCreation5mTokens)
+	require.Equal(t, 463184, usage.CacheCreation1hTokens)
 
 	// 最终 delta 明确给出 0 时必须覆盖 start，避免 Kiro 预算归一化后残留旧桶。
 	svc.parseSSEUsage(`{"type":"message_delta","usage":{"output_tokens":12,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"_sub2api_kiro_usage_final":true}}`, usage)
