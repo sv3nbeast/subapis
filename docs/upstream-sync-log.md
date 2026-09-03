@@ -2879,3 +2879,79 @@ b6997eea2 修复（anthropic）：clamp Opus 5 xhigh without thinking
 - 本轮只完成隔离 worktree 的同步与验证，**没有修改生产、没有推送 `sv3nbeast/main`、没有执行 promote**。
 - `frontend/pnpm-lock.yaml` 有一次本地 `pnpm install` 产生的未暂存解析差异，未纳入同步结论；发布前应单独清理或确认是否需要更新锁文件。
 - 后续如需提升到 `main` 或发布生产，必须重新执行三线状态核验、提交候选、生产发布与 canary 回归，不能直接使用本隔离 worktree 的未提交状态。
+
+## 2026-09-03 20:08:48 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `2abf8f89ae4f3d4999f4a574ecb64f545c652ffc`
+- 官方提交: `b1748c4ea99ce2120401a269142aa071e18a84da`
+- 合并基线: `0e82efe48951cb7da1f8554639afdeab05bf16b8`
+- 官方领先数量: `688`
+- 本地领先数量: `763`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+b1748c4ea 杂项：更新sponsors
+432ebc498 合并拉取请求 #6179（来源：wwcchh0123/codex/upstream-error-proxy-attribution）
+abc07bb07 测试（ops）：satisfy errcheck 与 gofmt 中的 proxy attribution 测试
+4c1f920d5 修复（ops）：close proxy attribution 缺口 与 bound queued upstream events
+e9e3c46cb 修复（ops）：snapshot proxy 时 upstream errors
+5097b3145 杂项：将VERSION同步到 0.2.0 [skip ci]
+aa2364883 合并拉取请求 #6480（来源：Wei-Shaw/fix/group-model-pricing-ui）
+1a33dc8cc 修复（前端）：优化分组模型定价弹窗布局
+3510aa22b 合并拉取请求 #6425（来源：DuskLin/feat/openai-reasoning-effort-model-scope）
+77729e272 merge: resolve conflicts 与 upstream/main
+05ea883e2 修复（ent）：correct group field indexes after merge
+6566039bc 合并拉取请求 #6470（来源：aofee/codex/fix-ws-passthrough-missing-terminal）
+e50bffb7e 合并拉取请求 #6469（来源：wucm667/fix/issue-6465-apikey-chat-cache-identity）
+f2804eb2c 合并拉取请求 #6444（来源：Ritel-T/pr/group-free-openai-fast）
+559960865 合并拉取请求 #6447（来源：DuskLin/feat/openai-reasoning-effort-over-limit）
+a4fb58e42 合并拉取请求 #6443（来源：Ritel-T/pr/group-openai-fast）
+a668aa8b3 合并拉取请求 #6460（来源：HuntercodeT/fix/model-not-found-not-overridden-by-rate-limit）
+8d0b5ede2 合并拉取请求 #6458（来源：HuntercodeT/fix/scheduler-projection-keeps-openai-passthrough）
+2786ae9de 合并拉取请求 #6474（来源：StarryKira/codex/fix-6472-fable-5-1）
+34b8bf1a6 新增：支持 Claude Fable 5.1
+
+### 本地领先
+
+2abf8f89a 修复（kiro）：keep hidden reasoning streams alive
+073162c67 修复（billing）：pin verified Fable 5.1 rates
+42178f70f 新增（anthropic）：增加Claude Fable 5.1 支持
+1f754a058 修复（pricing）：canonicalize Kiro Claude model aliases
+17911d91a 文档（前端）：rebuild user integration guide
+a40dbf823 修复（kiro）：surface deterministic metadata-only failures
+e773dc254 回退：移除completed Try again capture
+1ec7b82b6 debug(kiro): follow marked reproduction across session rotation
+64c92864a debug(kiro): capture active Try again reproduction
+a01a952bc debug(kiro): arm capture 与 explicit request marker
+00562dfa8 Revert "Revert "Revert "revert: remove temporary Kiro full capture"""
+1e964155d Revert "Revert "revert: remove temporary Kiro full capture""
+9b2066c49 Revert "revert: remove temporary Kiro full capture"
+a7acd9e3e 回退：移除temporary Kiro full capture
+4b59eb883 debug(kiro): follow active reproduction session
+d0869d329 debug(kiro): scope full capture 到 request 96aa8a81
+0608915b7 debug(kiro): scope admin capture 到 affected key
+aa4a3509c debug(kiro): separate translated 与 client stream capture
+4ca7bb3ad debug(kiro): capture admin upstream round trip
+4805d13d7 修复（网关）：clarify AWS capacity message
+
+### 本次官方更新分类清单（移植前）
+
+- 范围：`0e82efe48..b1748c4ea`，688 个提交（非 merge 440、merge 248），版本 `0.1.177 -> 0.2.0`。
+- 运维/SLA：错误详情、空窗 SLA、错误归因、上游端点和代理快照；需与本地抓包/归因逻辑手工融合。
+- 协议/网关：Anthropic/Chat/Responses/WS 的文件、thinking、工具、终态、缓存身份与 failover；列为高风险批次并强制网关回归审查。
+- OpenAI/Codex：compaction v2、模型目录、Fast/free Fast、Team/容量/额度重置、WS 会话与 TTFT；必须按后端、认证快照、前端和计费全栈吸收。
+- Grok/CN/Gemini/Antigravity/Composite：吸收官方兼容、媒体、Realtime、额度与调度意图，同时保留本地模型级冷却、sticky/re-auth、Kiro/Nianzs 和 token 轮换保护。
+- 渠道监控：配额模式、8 平台、负缓存/singleflight、服务端搜索与用户范围；按完整功能契约吸收。
+- 计费/定价：分时倍率、工作日、长上下文阶梯、目录覆盖和实际 tier；与本地费率自动同步做数据契约级融合。
+- 账号/分组/认证/支付：批量设置、部分更新、推理上限、邀请原子性、邮箱并发、公共分组、EasyPay 与订阅重置；保护筛选全选、利润控制、附赠订阅分组和本地支付。
+- 前端/i18n：角色、暗色、空态、时区、布局及原始 key 修复；必须通过完整中英文词条和本地功能门禁。
+- 代理/插件/部署/依赖：探测目标、IPv6、OAuth 传输插件、配置透传、数据库重试、Go 1.27、gosec 与 DOMPurify 安全升级；工具链验证后吸收。
+- 完整逐提交 diff 与全部 440 个非 merge SHA 的唯一主题映射保存在 `/tmp/sub2api-threeway-sync.md`。
+- 当前结论均为移植前结论；每批完成后回填“已吸收/本地等价覆盖/明确不采用”，promote 前不得留有未决定项。
