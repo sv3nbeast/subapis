@@ -38,6 +38,42 @@ type nianzsKiroEndpointConfig struct {
 
 const nianzsKiroInvalidModelTempUnschedDuration = time.Minute
 
+const nianzsKiroHiddenThinkingProgressInterval = 10 * time.Second
+
+type nianzsKiroHiddenThinkingProgressContextKey struct{}
+
+type nianzsKiroHiddenThinkingProgressConfig struct {
+	interval time.Duration
+}
+
+func withNianzsKiroHiddenThinkingProgress(ctx context.Context, interval time.Duration) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if interval <= 0 {
+		interval = nianzsKiroHiddenThinkingProgressInterval
+	}
+	return context.WithValue(ctx, nianzsKiroHiddenThinkingProgressContextKey{}, nianzsKiroHiddenThinkingProgressConfig{interval: interval})
+}
+
+func ensureNianzsKiroHiddenThinkingProgress(ctx context.Context) context.Context {
+	if _, ok := nianzsKiroHiddenThinkingProgressFromContext(ctx); ok {
+		return ctx
+	}
+	return withNianzsKiroHiddenThinkingProgress(ctx, nianzsKiroHiddenThinkingProgressInterval)
+}
+
+func nianzsKiroHiddenThinkingProgressFromContext(ctx context.Context) (time.Duration, bool) {
+	if ctx == nil {
+		return 0, false
+	}
+	config, ok := ctx.Value(nianzsKiroHiddenThinkingProgressContextKey{}).(nianzsKiroHiddenThinkingProgressConfig)
+	if !ok {
+		return 0, false
+	}
+	return config.interval, true
+}
+
 const (
 	nianzsKiroRetryBaseDelay                   = 200 * time.Millisecond
 	nianzsKiroRetryMaxDelay                    = 2 * time.Second
@@ -140,6 +176,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 	if account == nil || parsed == nil {
 		return nil, fmt.Errorf("kiro forward: missing account or request")
 	}
+	ctx = ensureNianzsKiroHiddenThinkingProgress(ctx)
 
 	originalModel := parsed.Model
 	mappedModel := originalModel
@@ -180,6 +217,9 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 	if parsed.Stream {
 		resp, _, err := s.openKiroAnthropicStreamResponseNianzs(ctx, account, parsed, body, mappedModel, originalModel, c.Request.Header, parsed.Group, nil)
 		if err != nil {
+			if ctx != nil && ctx.Err() != nil {
+				return nil, err
+			}
 			if s.handleKiroContextLimitError(c, account, err) {
 				return nil, err
 			}
@@ -220,7 +260,8 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 		}
 		upstreamModel := nianzsResolveKiroUpstreamModel(mappedModel)
 		ctx = withGatewayFirstSemanticTimeoutOverride(ctx, s.nianzsKiroFirstSemanticTimeoutForRequest(ctx, parsed.GroupID))
-		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, mappedModel, false)
+		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, mappedModel, false, true)
+		err = s.finishNianzsKiroStreamResponse(ctx, resp, parsed.GroupID, err)
 		if err != nil {
 			if s.handleKiroContextLimitError(c, account, err) {
 				return nil, err
@@ -235,6 +276,17 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 					AccountName:        account.Name,
 					UpstreamStatusCode: 0,
 					Kind:               "stream_partial_error",
+					Message:            sanitizeUpstreamErrorMessage(err.Error()),
+				})
+				return nil, err
+			}
+			if trackedKiroStreamBody(resp) != nil {
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           account.Platform,
+					AccountID:          account.ID,
+					AccountName:        account.Name,
+					UpstreamStatusCode: 0,
+					Kind:               "stream_post_generation_error",
 					Message:            sanitizeUpstreamErrorMessage(err.Error()),
 				})
 				return nil, err
@@ -534,10 +586,38 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 		return nil, 0, fmt.Errorf("kiro requires oauth or apikey token, got %s", tokenType)
 	}
 
-	// 客户端断开不应取消仍在收集计费用量的上游读取；detachStreamUpstreamContext
-	// 让上游请求/流式读取脱离客户端请求 ctx 的取消传播，与其它 gateway 转发路径一致。
-	upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, true)
-	defer releaseUpstreamCtx()
+	// Retain an explicit upstream owner for native Messages streams. Unlike the
+	// legacy detached billing path, this context follows request cancellation so
+	// a client disconnect while AWS is still returning response headers also
+	// stops the physical request. Once a response exists, the tracked body owns
+	// the same cancel function through gate timeout and downstream close.
+	upstreamCtx, cancelUpstream := detachStreamUpstreamContext(ctx, true)
+	trackUpstreamLifecycle := false
+	if _, enabled := nianzsKiroHiddenThinkingProgressFromContext(ctx); enabled {
+		upstreamBase := context.Background()
+		if ctx != nil {
+			upstreamBase = ctx
+		}
+		upstreamCtx, cancelUpstream = context.WithCancel(upstreamBase)
+		trackUpstreamLifecycle = true
+	}
+	upstreamOwnershipTransferred := !trackUpstreamLifecycle
+	defer func() {
+		if !upstreamOwnershipTransferred {
+			cancelUpstream()
+		}
+	}()
+	trackResponse := func(response *http.Response, done <-chan struct{}) {
+		if !trackUpstreamLifecycle || response == nil || response.Body == nil {
+			return
+		}
+		response.Body = &kiroTrackedStreamBody{
+			ReadCloser: response.Body,
+			cancel:     cancelUpstream,
+			done:       done,
+		}
+		upstreamOwnershipTransferred = true
+	}
 
 	inputTokens := nianzsEstimateKiroInputTokens(ctx, anthropicBody)
 	if runner := s.nianzsKiroCodeExecutionRunnerForRequest(); runner != nil && nianzskiro.IsOnlyLegacyCodeExecutionTool(anthropicBody) {
@@ -556,6 +636,11 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 			return nil, inputTokens, err
 		}
 		if initialResponse.StatusCode < 200 || initialResponse.StatusCode >= 300 {
+			if trackUpstreamLifecycle {
+				done := make(chan struct{})
+				close(done)
+				trackResponse(initialResponse, done)
+			}
 			return initialResponse, inputTokens, nil
 		}
 		// The first upstream request is accepted before the pipe is exposed. The
@@ -566,7 +651,9 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 		wrappedHeaders.Set("Content-Type", "text/event-stream")
 		nianzsEnsureClaudeResponseVary(wrappedHeaders)
 		nianzsSetClaudeResponseRequestID(wrappedHeaders)
+		producerDone := make(chan struct{})
 		go func() {
+			defer close(producerDone)
 			streamErr := s.streamKiroCodeExecutionAsAnthropicNianzs(
 				upstreamCtx, account, parsed, anthropicBody, mappedModel, requestModel,
 				token, inputTokens, headers, pw, plan, runner, initialResponse, initialRequestCtx,
@@ -582,6 +669,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 			Header:     wrappedHeaders,
 			Body:       pr,
 		}
+		trackResponse(response, producerDone)
 		return s.gateNianzsKiroResponseBeforeSemantic(ctx, account, parsedGroupID(parsed), response, inputTokens)
 	}
 	if isOnlyWebSearchToolInBody(anthropicBody) {
@@ -594,7 +682,9 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 		wrappedHeaders.Set("Content-Type", "text/event-stream")
 		nianzsEnsureClaudeResponseVary(wrappedHeaders)
 		nianzsSetClaudeResponseRequestID(wrappedHeaders)
+		producerDone := make(chan struct{})
 		go func() {
+			defer close(producerDone)
 			streamErr := s.streamKiroWebSearchAsAnthropicNianzs(upstreamCtx, account, anthropicBody, mappedModel, requestModel, token, inputTokens, headers, pw, plan)
 			if streamErr != nil {
 				_ = pw.CloseWithError(streamErr)
@@ -607,6 +697,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 			Header:     wrappedHeaders,
 			Body:       pr,
 		}
+		trackResponse(response, producerDone)
 		return s.gateNianzsKiroResponseBeforeSemantic(ctx, account, parsedGroupID(parsed), response, inputTokens)
 	}
 
@@ -619,6 +710,11 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 		return nil, inputTokens, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if trackUpstreamLifecycle {
+			done := make(chan struct{})
+			close(done)
+			trackResponse(resp, done)
+		}
 		return resp, inputTokens, nil
 	}
 	plan := cachePlanOverride
@@ -637,7 +733,9 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 	nianzsSetClaudeResponseRequestID(wrappedHeaders)
 
 	structuredSchema, strictStructuredOutput := nianzsKiroStructuredOutputSchema(anthropicBody)
+	producerDone := make(chan struct{})
 	go func() {
+		defer close(producerDone)
 		defer func() { _ = resp.Body.Close() }()
 		streamWriter := io.Writer(pw)
 		var structuredWriter *nianzsStructuredOutputSSEWriter
@@ -700,7 +798,44 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 		Header:     wrappedHeaders,
 		Body:       pr,
 	}
+	trackResponse(response, producerDone)
 	return s.gateNianzsKiroResponseBeforeSemantic(ctx, account, parsedGroupID(parsed), response, inputTokens)
+}
+
+type nianzsKiroPostGenerationError struct {
+	cause error
+}
+
+func (e *nianzsKiroPostGenerationError) Error() string {
+	if e == nil || e.cause == nil {
+		return "kiro stream failed after generation started"
+	}
+	return "kiro stream failed after generation started: " + e.cause.Error()
+}
+
+// finishNianzsKiroStreamResponse reuses the physical cleanup and cache
+// finalization contract, then removes the failover error class after this
+// adapter's gate has observed either assistant content or hidden generation
+// progress. Returning an UpstreamFailoverError here would let older handlers
+// consider replaying model work that AWS has already started.
+func (s *GatewayService) finishNianzsKiroStreamResponse(ctx context.Context, resp *http.Response, groupID *int64, forwardErr error) error {
+	err := s.finishKiroStreamResponse(ctx, resp, groupID, forwardErr)
+	if err == nil || isKiroContextLimitError(err) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	var failoverErr *UpstreamFailoverError
+	if !errors.As(err, &failoverErr) {
+		return err
+	}
+	cause := failoverErr.Cause
+	if cause == nil {
+		cause = errors.New(failoverErr.Error())
+	}
+	cause = &nianzsKiroPostGenerationError{cause: cause}
+	if upstreamDone := UpstreamDoneFromError(err); upstreamDone != nil {
+		return &kiroUpstreamCleanupPendingError{cause: cause, done: upstreamDone}
+	}
+	return cause
 }
 
 // gateNianzsKiroResponseBeforeSemantic keeps the synthetic Anthropic preamble
@@ -730,6 +865,11 @@ func (s *GatewayService) gateNianzsKiroResponseBeforeSemantic(
 		s.kiroSemanticGateMaxLineSize(),
 		ready,
 	)
+	trackedSource := trackedKiroStreamBody(resp)
+	cleanupDone := gateDone
+	if trackedSource != nil {
+		cleanupDone = joinKiroGatedStreamCleanup(trackedSource.done, gateDone, nil)
+	}
 
 	var gateErr error
 	firstSemanticTimeout := time.Duration(0)
@@ -771,20 +911,31 @@ func (s *GatewayService) gateNianzsKiroResponseBeforeSemantic(
 		}
 	}
 	if gateErr == nil {
-		resp.Body = pr
+		if trackedSource != nil {
+			resp.Body = &kiroTrackedStreamBody{
+				ReadCloser: pr,
+				cancel:     trackedSource.cancel,
+				done:       cleanupDone,
+				completion: trackedSource.completion,
+			}
+		} else {
+			resp.Body = pr
+		}
 		return resp, inputTokens, nil
 	}
 
 	_ = pr.CloseWithError(gateErr)
 	_ = resp.Body.Close()
-	select {
-	case <-gateDone:
-	default:
-	}
 	if ctx != nil && ctx.Err() != nil {
+		if trackedSource != nil {
+			return nil, inputTokens, &kiroUpstreamCleanupPendingError{cause: gateErr, done: cleanupDone}
+		}
 		return nil, inputTokens, gateErr
 	}
 	if isKiroContextLimitError(gateErr) {
+		if trackedSource != nil {
+			return nil, inputTokens, &kiroUpstreamCleanupPendingError{cause: gateErr, done: cleanupDone}
+		}
 		return nil, inputTokens, gateErr
 	}
 
@@ -813,6 +964,9 @@ func (s *GatewayService) gateNianzsKiroResponseBeforeSemantic(
 	failoverErr.RetryableOnSameAccount = false
 	failoverErr.SuppressTempUnschedule = true
 	failoverErr.FailoverProhibited = false
+	if trackedSource != nil {
+		failoverErr.UpstreamDone = cleanupDone
+	}
 	if failoverErr.RetryAfter <= 0 {
 		failoverErr.RetryAfter = defaultKiroTransportRetryAfter
 	}
@@ -1170,8 +1324,6 @@ func nianzsKiroEndpointModeForRequest(account *Account, parsed *ParsedRequest) s
 // buildKiroPayloadForAccountWithArnNianzs 使用显式 profileArn 构建 Kiro 请求 payload。
 // auto 模式下 Q/KRS 端点需要不同 profileArn，调用方按端点维度传入。
 func (s *GatewayService) buildKiroPayloadForAccountWithArnNianzs(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header, profileArn string, flattenCompletedToolHistory, compactOldCompletedToolHistory bool, options nianzsKiroUpstreamRequestOptions) (*nianzskiro.KiroBuildResult, error) {
-	_ = s
-	_ = ctx
 	_ = token
 	anthropicBody = nianzsPrepareKiroPayloadBodyForRequestModel(anthropicBody, requestModel)
 	requireNativeToolProgress := parsed != nil && parsed.KiroNativeToolProgressRequired
@@ -1197,6 +1349,10 @@ func (s *GatewayService) buildKiroPayloadForAccountWithArnNianzs(ctx context.Con
 	})
 	if err != nil {
 		return nil, err
+	}
+	if progressInterval, enabled := nianzsKiroHiddenThinkingProgressFromContext(ctx); enabled {
+		buildResult.Context.EmitHiddenThinkingProgress = true
+		buildResult.Context.HiddenThinkingProgressInterval = progressInterval
 	}
 	if stableID := nianzsStableKiroConversationID(account, parsed, anthropicBody, modelID, profileArn); stableID != "" {
 		if next, setErr := sjson.SetBytes(buildResult.Payload, "conversationState.conversationId", stableID); setErr == nil {

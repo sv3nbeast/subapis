@@ -222,6 +222,14 @@ type KiroRequestContext struct {
 	// after the first content_block_start, so multi-turn server tools cannot
 	// create duplicate pings in one downstream message.
 	EmitProtocolPing bool
+	// EmitHiddenThinkingProgress publishes a content-free internal control event
+	// while adaptive reasoning is waiting for its provider signature. The
+	// service-layer semantic gate consumes the event as proof that generation
+	// started; the raw reasoning text never leaves this translator.
+	EmitHiddenThinkingProgress bool
+	// HiddenThinkingProgressInterval bounds internal progress traffic. A zero or
+	// negative value uses the production default.
+	HiddenThinkingProgressInterval time.Duration
 	// ReportContextManagement tells the terminal message_delta to describe the
 	// context edits applied by this adapter. Kiro does not apply Anthropic
 	// context edits, so the response is the truthful empty applied_edits list.
@@ -899,6 +907,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	semanticTailState := newNianzsKiroSemanticTailState(requestCtx)
 	incompleteStreamState := &nianzsKiroIncompleteStreamState{}
 	protocolPingSent := false
+	lastHiddenThinkingProgressAt := time.Time{}
 	claudeCodeFirstTextDeltaSent := false
 	pendingClaudeProtocolText := ""
 	var startThinkingBlock func() error
@@ -1493,6 +1502,35 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		pendingAssistantText += text
 		return flushPendingAssistantText()
 	}
+	emitHiddenThinkingProgress := func() error {
+		if !requestCtx.EmitHiddenThinkingProgress || !requestCtx.SuppressAdaptiveThinkingText {
+			return nil
+		}
+		interval := requestCtx.HiddenThinkingProgressInterval
+		if interval <= 0 {
+			interval = 10 * time.Second
+		}
+		now := time.Now()
+		if !lastHiddenThinkingProgressAt.IsZero() && now.Sub(lastHiddenThinkingProgressAt) < interval {
+			return nil
+		}
+		// This event deliberately bypasses the native-tool response buffer. It
+		// contains no model content and exists only to move the service state from
+		// "no upstream evidence" to "generation started" before a long signed
+		// thinking block reaches its final signature.
+		if _, err := io.WriteString(w, "event: sub2api_internal_kiro_hidden_thinking_progress\ndata: {}\n\n"); err != nil {
+			return err
+		}
+		lastHiddenThinkingProgressAt = now
+		if err := ensureMessageStart(); err != nil {
+			return err
+		}
+		// Once provider reasoning exists, replaying the request can duplicate
+		// generation even if no text/tool delta is visible yet. Release the valid
+		// message preamble and permanently leave the private retry boundary.
+		nativeToolProgressGuard = false
+		return releaseStreamOutput()
+	}
 	startThinkingBlock = func() error {
 		if err := closeOpenStreamingTool(); err != nil {
 			return err
@@ -1533,6 +1571,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			_, _ = outputTextBuf.WriteString(text)
 			_, _ = currentThinking.WriteString(text)
 			_, _ = allThinking.WriteString(text)
+			if err := emitHiddenThinkingProgress(); err != nil {
+				return err
+			}
 		}
 		if requestCtx.SuppressAdaptiveThinkingText {
 			return nil

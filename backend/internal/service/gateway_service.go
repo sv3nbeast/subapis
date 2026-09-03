@@ -10768,6 +10768,10 @@ type clientVisibleStreamError interface {
 
 func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel string, mimicClaudeCode bool, cancelOnClientDisconnectOpt ...bool) (*streamingResult, error) {
 	cancelOnClientDisconnect := len(cancelOnClientDisconnectOpt) > 0 && cancelOnClientDisconnectOpt[0]
+	var clientDone <-chan struct{}
+	if cancelOnClientDisconnect && ctx != nil {
+		clientDone = ctx.Done()
+	}
 	// 更新5h窗口状态
 	s.rateLimitService.UpdateSessionWindow(ctx, account, resp.Header)
 
@@ -10880,6 +10884,29 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	var firstSemanticCh <-chan time.Time
 	if firstSemanticTimer != nil {
 		firstSemanticCh = firstSemanticTimer.C
+	}
+	_, hiddenThinkingProgressEnabled := nianzsKiroHiddenThinkingProgressFromContext(ctx)
+	hiddenGenerationStarted := false
+	resetFirstSemanticTimer := func() {
+		if firstSemanticTimer == nil || firstTokenMs != nil {
+			return
+		}
+		if !firstSemanticTimer.Stop() {
+			select {
+			case <-firstSemanticTimer.C:
+			default:
+			}
+		}
+		firstSemanticTimer.Reset(firstSemanticInterval)
+	}
+	countsAsFirstToken := func(data string) bool {
+		if data == "" || data == "[DONE]" {
+			return false
+		}
+		if !hiddenThinkingProgressEnabled {
+			return true
+		}
+		return isKiroClientSemanticEvent("", data)
 	}
 	// 仅监控上游数据间隔超时，避免下游写入阻塞导致误判
 	var intervalTicker *time.Ticker
@@ -11019,6 +11046,14 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		}
 
 		if eventName == "sub2api_internal_kiro_ping" {
+			return nil, "", nil, nil
+		}
+
+		if eventName == "sub2api_internal_kiro_hidden_thinking_progress" {
+			if hiddenThinkingProgressEnabled {
+				hiddenGenerationStarted = true
+				resetFirstSemanticTimer()
+			}
 			return nil, "", nil, nil
 		}
 
@@ -11220,6 +11255,13 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 
 	for {
 		select {
+		case <-clientDone:
+			cause := context.Cause(ctx)
+			if cause == nil {
+				cause = ctx.Err()
+			}
+			return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, newOpenAIClientCanceledError(cause)
+
 		case ev, ok := <-events:
 			if !ok {
 				// 上游完成，返回结果
@@ -11236,7 +11278,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 						return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, newOpenAIClientCanceledError(context.Canceled)
 					}
 					if data != "" {
-						if firstTokenMs == nil && data != "[DONE]" {
+						if firstTokenMs == nil && countsAsFirstToken(data) {
 							ms := int(time.Since(startTime).Milliseconds())
 							firstTokenMs = &ms
 						}
@@ -11325,7 +11367,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, newOpenAIClientCanceledError(context.Canceled)
 				}
 				if data != "" {
-					if firstTokenMs == nil && data != "[DONE]" {
+					if firstTokenMs == nil && countsAsFirstToken(data) {
 						ms := int(time.Since(startTime).Milliseconds())
 						firstTokenMs = &ms
 					}
@@ -11358,10 +11400,14 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			if firstTokenMs != nil {
 				continue
 			}
+			if hiddenThinkingProgressEnabled && hiddenGenerationStarted {
+				sendErrorEvent("stream_timeout", "Kiro upstream generation stalled before producing response content")
+				return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, errors.New("stream usage incomplete: Kiro hidden generation stalled before semantic output")
+			}
 			return nil, newAnthropicFirstSemanticTimeoutFailover(account, originalModel)
 
 		case <-keepaliveCh:
-			if clientDisconnected || (firstSemanticInterval > 0 && firstTokenMs == nil) {
+			if clientDisconnected || (firstSemanticInterval > 0 && firstTokenMs == nil && !hiddenGenerationStarted) {
 				// Keep the response uncommitted until the first upstream event so a
 				// pre-semantic timeout can be retried on another account safely.
 				resetKeepaliveTimer()

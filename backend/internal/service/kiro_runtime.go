@@ -840,6 +840,10 @@ func (s *GatewayService) kiroStreamErrorToFailover(ctx context.Context, account 
 	if err == nil || account == nil {
 		return nil
 	}
+	var postGenerationErr *nianzsKiroPostGenerationError
+	if errors.As(err, &postGenerationErr) {
+		return nil
+	}
 	upstreamDone := UpstreamDoneFromError(err)
 
 	var exceptionErr *kiropkg.UpstreamExceptionError

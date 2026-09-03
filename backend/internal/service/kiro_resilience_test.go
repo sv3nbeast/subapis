@@ -752,6 +752,26 @@ func TestRunKiroFirstSemanticGateBuffersMetadataAndDropsInternalPing(t *testing.
 	require.NotContains(t, string(output), "sub2api_internal_kiro_ping")
 }
 
+func TestRunKiroFirstSemanticGateReleasesOnHiddenThinkingProgressAndForwardsControlEvent(t *testing.T) {
+	input := strings.Join([]string{
+		"event: sub2api_internal_kiro_hidden_thinking_progress\ndata: {}\n\n",
+		"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\"}}\n\n",
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n",
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+	}, "")
+	reader, writer := io.Pipe()
+	ready := make(chan error, 1)
+	go runKiroFirstSemanticGate(context.Background(), io.NopCloser(strings.NewReader(input)), writer, 1024, 64*1024, ready)
+
+	require.NoError(t, <-ready)
+	output, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.Contains(t, string(output), "sub2api_internal_kiro_hidden_thinking_progress")
+	require.Contains(t, string(output), "message_start")
+	require.Contains(t, string(output), "hello")
+	require.Contains(t, string(output), "message_stop")
+}
+
 func TestRunKiroFirstSemanticGateAllowsLargeLinesAfterRelease(t *testing.T) {
 	largeText := strings.Repeat("x", 300*1024)
 	input := strings.Join([]string{

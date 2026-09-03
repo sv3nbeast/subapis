@@ -725,7 +725,12 @@ func runKiroFirstSemanticGate(ctx context.Context, src io.ReadCloser, dst *io.Pi
 		if err := writeBlock(block); err != nil {
 			return err
 		}
-		if !released && isKiroClientSemanticEvent(eventType, data) {
+		// Hidden-thinking progress contains no model text. It is nevertheless proof
+		// that Kiro has started generation, so replay is no longer safe. Release it
+		// to the downstream adapter, which consumes the control event and refreshes
+		// the hidden-generation idle timer without exposing it to the client.
+		hiddenThinkingProgress := eventType == "sub2api_internal_kiro_hidden_thinking_progress"
+		if !released && (hiddenThinkingProgress || isKiroClientSemanticEvent(eventType, data)) {
 			released = true
 			signalReady(nil)
 			if buffered.Len() > 0 {

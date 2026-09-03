@@ -3095,6 +3095,53 @@ func TestStreamEventStreamAsAnthropicSuppressesAdaptiveThinkingText(t *testing.T
 	require.Equal(t, "final answer", visibleText.String())
 }
 
+func TestStreamEventStreamAsAnthropicEmitsContentFreeHiddenThinkingProgress(t *testing.T) {
+	providerSignature := providerThinkingSignatureFixture(t, true)
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+		"reasoningContentEvent": map[string]any{"text": "provider-only long adaptive reasoning"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+		"reasoningContentEvent": map[string]any{"signature": providerSignature},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "final answer"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+
+	var out bytes.Buffer
+	_, err := StreamEventStreamAsAnthropicWithContext(
+		context.Background(), stream, &out, "claude-opus-5", 11,
+		KiroRequestContext{
+			ThinkingEnabled:                  true,
+			SuppressAdaptiveThinkingText:     true,
+			RequireProviderThinkingSignature: true,
+			RequireTerminalEvent:             true,
+			EmitProtocolPing:                 true,
+			EmitHiddenThinkingProgress:       true,
+			HiddenThinkingProgressInterval:   time.Hour,
+		},
+	)
+	require.NoError(t, err)
+	wire := out.String()
+	progressAt := strings.Index(wire, "event: sub2api_internal_kiro_hidden_thinking_progress")
+	messageStartAt := strings.Index(wire, "event: message_start")
+	require.GreaterOrEqual(t, progressAt, 0)
+	require.Greater(t, messageStartAt, progressAt, "the service must consume generation progress before the public message lifecycle starts")
+	require.Equal(t, 1, strings.Count(wire, "event: sub2api_internal_kiro_hidden_thinking_progress"))
+	require.NotContains(t, wire, "provider-only long adaptive reasoning")
+	var visibleText strings.Builder
+	for _, event := range parseAnthropicSSEEventsForTest(t, wire) {
+		if event.Get("delta.type").String() == "text_delta" {
+			visibleText.WriteString(event.Get("delta.text").String())
+		}
+	}
+	require.Equal(t, "final answer", visibleText.String())
+	require.Equal(t, 1, strings.Count(wire, "event: message_stop"))
+}
+
 func TestStreamEventStreamAsAnthropicRejectsUnauthenticatedThinkingBeforeClientOutput(t *testing.T) {
 	tests := []struct {
 		name      string
