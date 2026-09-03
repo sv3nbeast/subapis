@@ -2,13 +2,14 @@
 
 这个文件用于记录官方 `Wei-Shaw/sub2api` 的同步状态，避免后续继续靠临时记忆判断。
 
-## 2026-09-04：同步官方 `0.2.0` 候选
+## 2026-09-04：同步官方 `0.2.0` 并提升本地 main
 
 - 同步前 `main` / `sv3nbeast/main`：`2abf8f89ae4f3d4999f4a574ecb64f545c652ffc`
 - 共同祖先：`0e82efe48951cb7da1f8554639afdeab05bf16b8`
 - 官方目标 `origin/main`：`b1748c4ea99ce2120401a269142aa071e18a84da`
 - 官方范围：688 个提交（440 个非 merge、248 个 merge）；例行项含 7 个 sponsors 更新、12 个版本同步提交。
-- 融合分支：`codex/official-sync-review`
+- 融合提交：`e05e267464ff222b7a707761a82ad6678552e3d7`
+- 融合分支：`codex/official-sync-review`，已快进提升到本地 `main`
 
 主要更新与融合结论：
 
@@ -26,7 +27,7 @@
 - 所有变更后端 Go 包使用全新缓存运行 `-count=1`：通过；`go build ./...`：通过。
 - 强制网关回归审查：`PASS`，无 P0/P1；流式/WS/缓存/TTFT 聚焦用例在 `-race` 下通过。
 - 相对同步前快照的前端意外删除：0。
-- 本记录对应最终候选生成前状态；未执行 push 或生产发布。
+- 已执行 `bash scripts/sub2api-threeway-sync.sh --mode promote`，本地 `main` 已提升到 `e05e26746`；未 push fork，未生产发布。
 
 ## 使用规则
 
@@ -2981,3 +2982,45 @@ aa4a3509c debug(kiro): separate translated 与 client stream capture
 - 代理/插件/部署/依赖：探测目标、IPv6、OAuth 传输插件、配置透传、数据库重试、Go 1.27、gosec 与 DOMPurify 安全升级；工具链验证后吸收。
 - 完整逐提交 diff 与全部 440 个非 merge SHA 的唯一主题映射保存在 `/tmp/sub2api-threeway-sync.md`。
 - 当前结论均为移植前结论；每批完成后回填“已吸收/本地等价覆盖/明确不采用”，promote 前不得留有未决定项。
+
+## 2026-09-04 04:13:01 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `e05e267464ff222b7a707761a82ad6678552e3d7`
+- 官方提交: `b1748c4ea99ce2120401a269142aa071e18a84da`
+- 合并基线: `b1748c4ea99ce2120401a269142aa071e18a84da`
+- 官方领先数量: `0`
+- 本地领先数量: `765`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+（无）
+
+### 本地领先
+
+e05e26746 sync: merge official main 0.2.0 与 preserve local behavior
+63740f1ab 文档（sync）：record official 0.2.0 review scope
+2abf8f89a 修复（kiro）：keep hidden reasoning streams alive
+073162c67 修复（billing）：pin verified Fable 5.1 rates
+42178f70f 新增（anthropic）：增加Claude Fable 5.1 支持
+1f754a058 修复（pricing）：canonicalize Kiro Claude model aliases
+17911d91a 文档（前端）：rebuild user integration guide
+a40dbf823 修复（kiro）：surface deterministic metadata-only failures
+e773dc254 回退：移除completed Try again capture
+1ec7b82b6 debug(kiro): follow marked reproduction across session rotation
+64c92864a debug(kiro): capture active Try again reproduction
+a01a952bc debug(kiro): arm capture 与 explicit request marker
+00562dfa8 Revert "Revert "Revert "revert: remove temporary Kiro full capture"""
+1e964155d Revert "Revert "revert: remove temporary Kiro full capture""
+9b2066c49 Revert "revert: remove temporary Kiro full capture"
+a7acd9e3e 回退：移除temporary Kiro full capture
+4b59eb883 debug(kiro): follow active reproduction session
+d0869d329 debug(kiro): scope full capture 到 request 96aa8a81
+0608915b7 debug(kiro): scope admin capture 到 affected key
+aa4a3509c debug(kiro): separate translated 与 client stream capture
