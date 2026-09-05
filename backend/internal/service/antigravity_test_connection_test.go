@@ -250,6 +250,30 @@ func TestAntigravityGatewayService_TestConnection_ForceRefreshesValidationErrorT
 	require.Equal(t, "Bearer new-token", upstream.authorization)
 }
 
+func TestAntigravityForceRefreshRejectsNewlyIneligibleAccount(t *testing.T) {
+	for _, tc := range []struct{ status, message string }{
+		{StatusDisabled, "Validation required"},
+		{StatusError, "invalid_grant: revoked"},
+	} {
+		t.Run(tc.status+tc.message, func(t *testing.T) {
+			stale := &Account{ID: 6607, Platform: PlatformAntigravity, Type: AccountTypeOAuth,
+				Status: StatusError, ErrorMessage: "Validation required",
+				Credentials: map[string]any{"access_token": "old", "refresh_token": "refresh"}}
+			fresh := *stale
+			fresh.Status, fresh.ErrorMessage = tc.status, tc.message
+			repo := &accountTestRepoStub{account: &fresh}
+			executor := &antigravityForceRefreshExecutorStub{token: "must-not-refresh"}
+			provider := &AntigravityTokenProvider{accountRepo: repo,
+				refreshAPI: NewOAuthRefreshAPI(repo, nil), executor: executor}
+			token, err := provider.ForceRefreshAccessToken(context.Background(), stale)
+			require.Error(t, err)
+			require.Empty(t, token)
+			require.Zero(t, executor.refreshCalls, "must honor state re-read under the refresh lock")
+			require.Equal(t, "old", stale.GetCredential("access_token"))
+		})
+	}
+}
+
 func TestAntigravityGatewayService_TestConnection_AbnormalOAuthKeepsDefaultUserAgent(t *testing.T) {
 	t.Setenv(antigravityForwardBaseURLEnv, "")
 

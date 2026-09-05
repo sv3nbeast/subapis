@@ -2530,6 +2530,12 @@ func (s *GatewayService) applyClaudeCodeOAuthMimicryToBody(
 	}
 
 	systemPromptInjectionEnabled, systemPrompt, systemPromptBlocks := s.claudeOAuthSystemPromptInjectionSettings(ctx)
+	// Fable accepts the Claude Code identity but rejects the generic expansion.
+	// Keep explicit operator prompt/block overrides intact.
+	if account.Platform == PlatformAnthropic && strings.HasPrefix(strings.ToLower(model), "claude-fable-") &&
+		strings.TrimSpace(systemPrompt) == "" && strings.TrimSpace(systemPromptBlocks) == "" {
+		systemPromptBlocks = `[{"type":"text","text":"{billing_header}"},{"type":"text","text":"{claude_code_system_prompt}"}]`
+	}
 	systemRewritten := false
 	if systemPromptInjectionEnabled {
 		body = rewriteSystemForNonClaudeCodeWithPromptBlocks(body, normalizeSystemParam(systemRaw), systemPrompt, systemPromptBlocks)
@@ -14409,6 +14415,7 @@ func (s *GatewayService) debugLogGatewaySnapshot(tag string, headers http.Header
 func sanitizeCountTokensRequestBody(body []byte) []byte {
 	out := body
 	for _, path := range []string{
+		"max_tokens",
 		"temperature",
 		"top_p",
 		"top_k",
@@ -14422,7 +14429,7 @@ func sanitizeCountTokensRequestBody(body []byte) []byte {
 			}
 		}
 	}
-	return out
+	return stripDeferredToolCacheControl(out)
 }
 
 func (s *GatewayService) computeFinalAnthropicBeta(

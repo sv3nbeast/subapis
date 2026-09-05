@@ -8259,7 +8259,7 @@ func openAICompatPayloadWithEventType(payload, eventType string) string {
 	if eventType == "" || strings.TrimSpace(payload) == "" || strings.TrimSpace(payload) == "[DONE]" {
 		return payload
 	}
-	if gjson.Get(payload, "type").Exists() {
+	if strings.TrimSpace(gjson.Get(payload, "type").String()) != "" {
 		return payload
 	}
 	patched, err := sjson.Set(payload, "type", eventType)
@@ -10556,7 +10556,8 @@ func groupMediaPricingLooksIncomplete(group *Group) bool {
 		return false
 	}
 	return group.ImagePrice1K == nil && group.ImagePrice2K == nil && group.ImagePrice4K == nil &&
-		group.VideoPrice480P == nil && group.VideoPrice720P == nil && group.VideoPrice1080P == nil
+		group.VideoPrice480P == nil && group.VideoPrice720P == nil && group.VideoPrice1080P == nil &&
+		len(group.VideoModelPrices) == 0 && group.SearchPricePer1k == nil && group.AudioRealtimePricePerMin == nil
 }
 
 func (s *OpenAIGatewayService) resolveOpenAIChannelPricing(ctx context.Context, billingModel string, apiKey *APIKey) *ResolvedPricing {
@@ -11842,5 +11843,7 @@ func supportsOpenAIReasoningEffortMax(model string) bool {
 	}
 	normalized := strings.ToLower(lastOpenAIModelSegment(model))
 	normalized = strings.ReplaceAll(normalized, "_", "-")
-	return strings.HasPrefix(normalized, "deepseek-v4") || strings.HasPrefix(normalized, "glm-")
+	return strings.HasPrefix(normalized, "deepseek-v4") || strings.HasPrefix(normalized, "glm-") ||
+		strings.HasPrefix(normalized, "kimi-") || strings.HasPrefix(normalized, "moonshot-") ||
+		normalized == "k3" || strings.HasPrefix(normalized, "k3-")
 }

@@ -314,9 +314,15 @@ func TestHandleStreamingResponse_NormalizesAskUserQuestionInput(t *testing.T) {
 
 	body := rec.Body.String()
 	require.Contains(t, body, `"name":"AskUserQuestion"`)
-	require.Contains(t, body, `"question":"第一项"`)
-	require.Contains(t, body, `"question":"第二项"`)
-	require.NotContains(t, body, `"questions":[{"header":"第一项","options"`)
+	var toolJSON strings.Builder
+	forEachOpenAISSEFrame(body, func(_ string, data []byte) {
+		if gjson.GetBytes(data, "delta.type").String() == "input_json_delta" {
+			toolJSON.WriteString(gjson.GetBytes(data, "delta.partial_json").String())
+		}
+	})
+	require.True(t, gjson.Valid(toolJSON.String()))
+	require.Equal(t, "第一项", gjson.Get(toolJSON.String(), "questions.0.question").String())
+	require.Equal(t, "第二项", gjson.Get(toolJSON.String(), "questions.1.question").String())
 }
 
 func TestNormalizeAnthropicAskUserQuestionResponseBody(t *testing.T) {

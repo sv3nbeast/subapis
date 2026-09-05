@@ -189,9 +189,10 @@ func TestForwardGrokResponsesCompactSynthesizesAndReturnsCompactionItem(t *testi
 	account := &Account{
 		ID: 57, Name: "grok", Platform: PlatformGrok, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{
-			"access_token": "access-token",
-			"expires_at":   time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
-			"base_url":     xai.DefaultCLIBaseURL,
+			"access_token":  "access-token",
+			"refresh_token": "refresh-token",
+			"expires_at":    time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			"base_url":      xai.DefaultCLIBaseURL,
 		},
 	}
 	repo := &grokQuotaAccountRepo{
@@ -243,9 +244,10 @@ func TestForwardGrokResponsesCodexModelInputCompatRetryDefault(t *testing.T) {
 	account := &Account{
 		ID: 520, Name: "grok", Platform: PlatformGrok, Type: AccountTypeOAuth, Concurrency: 1, Status: StatusActive, Schedulable: true,
 		Credentials: map[string]any{
-			"access_token": "access-token",
-			"expires_at":   time.Now().Add(2 * grokTokenRefreshSkew).UTC().Format(time.RFC3339),
-			"base_url":     xai.DefaultCLIBaseURL,
+			"access_token":  "access-token",
+			"refresh_token": "refresh-token",
+			"expires_at":    time.Now().Add(2 * grokTokenRefreshSkew).UTC().Format(time.RFC3339),
+			"base_url":      xai.DefaultCLIBaseURL,
 		},
 	}
 	modelInputError := `{"error":"Failed to deserialize the JSON body into the target type: data did not match any variant of untagged enum ModelInput"}`
@@ -285,9 +287,10 @@ func TestForwardGrokResponsesDoesNotRetryUnrelated422Default(t *testing.T) {
 	body := []byte(`{"model":"grok","input":[{"type":"reasoning","id":"rs_1"},{"role":"user","content":[{"type":"input_text","text":"hi"}]}],"stream":true}`)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
 	account := &Account{ID: 521, Name: "grok", Platform: PlatformGrok, Type: AccountTypeOAuth, Concurrency: 1, Status: StatusActive, Schedulable: true, Credentials: map[string]any{
-		"access_token": "access-token",
-		"expires_at":   time.Now().Add(2 * grokTokenRefreshSkew).UTC().Format(time.RFC3339),
-		"base_url":     xai.DefaultCLIBaseURL,
+		"access_token":  "access-token",
+		"refresh_token": "refresh-token",
+		"expires_at":    time.Now().Add(2 * grokTokenRefreshSkew).UTC().Format(time.RFC3339),
+		"base_url":      xai.DefaultCLIBaseURL,
 	}}
 	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusUnprocessableEntity, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":"invalid tool schema"}`))}}
 	svc := &OpenAIGatewayService{

@@ -103,3 +103,107 @@ Service 的 `unit` 标签集在基线和当前均不能编译。已经恢复部�
 - 剩余需核实类别包括 Antigravity 映射/验证刷新、注册域名及默认值、价格/分层合同、旧主动监控默认模式、CountTokens 的历史兼容字段及混合调度。部分已是本地实现与上游测试期望的差异，不能盲目改价格或削弱守卫。
 - Server unit API contract 已执行，仍有 4 个子项失败：可用分组、系统设置的两个 GET 快照，以及批量账号更新 fixture（500）。不能把默认标签的“无测试”视为通过。
 - 最终精确提交的完整 backend unit/API contract 门禁和最终四项不变量评审仍待完成；目标保持 active。仍未推送、未发布、未改生产数据。
+
+## 第三轮检查点（2026-09-05，尚非发布候选）
+
+### 本轮恢复的调用链
+
+- 定价：渠道区间倍率被旧 `filterValidIntervals` 丢弃；区间分支又绕过 flat 基础价覆盖。恢复先应用基础价、再应用区间，保留本地 5m/1h 价格和 Fast 比例；显式价格与倍率优先级、区间空洞回退都有真实计费探针测试。恢复官方已提供的 GPT-5.5 Pro 独立 fallback，不改本地 GPT-5.5 Fast 2.5x 策略。
+- 账号恢复：显式 Antigravity validation recovery 被共享 OAuth 非 active 守卫拦下。仅该探测允许刷新 validation-error 账号；在锁内重读为 disabled 或其他错误时仍拒绝，负向测试证明不会返回旧 token 冒充恢复成功。
+- Grok 凭据：恢复缺失客户端及代理查找失败的明确错误；不再将未找到代理静默变成直连。补回完整凭据守卫；转发测试的健康 OAuth fixture 相应补齐 refresh token，没有放宽生产守卫。刷新 jitter 最小窗口与现有五分钟 soft-expiry 对齐。
+- Grok 错误分类：已有 classifier/apply helper 未被真实错误入口调用。恢复 body-first 分类、明确模型限额只限制该模型、容量不足只作模型短暂避让、明确 reset 优先、缺失 reset 的短探测；pool 默认不整池停调，但显式管理员规则仍有效。Spending limit 保留可恢复状态和已观察到的账期，不伪造永久禁用。旧 24h 整账号限额测试与模型作用域/短探测新合同仍需完成整包核对，未给予基线豁免。
+- 配置：Grok 默认模型、跨客户端模型映射、OpenAI TTFT 模式，以及监控模式/吞吐隐藏/额度展示只读不写。补齐 handler 接收、保存、响应、公开字段及相关运行时缓存；省略字段不覆盖，显式 false 可保存。未变化的模型设置不刷新模型映射版本。
+- 注册：恢复域名黑名单调用；保留当前非白名单域名限量注册策略。来源并发显式设为默认值 5 时也能覆盖全局设置，缺省继续继承。
+- 协议：CountTokens 移除生成专用 max_tokens 和 literal deferred tool 的 cache_control；Fable 默认注入遵从其既有两段合同，自定义管理员提示不覆盖。工具转换拒绝尾随第二份 JSON；移除 thinking signature 时保留大整数精度。补齐空 SSE type 的 event 字段回退、语音缺失上游 ID 时的一次性计费 ID。
+- CN 推理：恢复 Kimi/Moonshot/K3 独立 max 档判断；三种 CN 平台的别名通过 Anthropic native 上游转发时，流式/非流式六种入口均保留 max 记录。
+- 分组统计：`GetAllGroupUsageSummary` 丢失现有 rollup/tail helper 调用，导致全量扫描且昨日金额缺失；已接回，复用已有迁移与时区/水位实现。补回用户维度统计的 native compaction 过滤。
+- 清理失配测试：修正被合并串入 Kiro 断言的 Gemini 限流测试、按现有模型映射验证 Antigravity、按当前 Grok 默认 4.6 更新旧默认别名断言。数据库 SQL mock 保留现有 5m/启用字段与新增 reasoning 元数据，不修改真实列序来迁就测试。
+
+### 本轮证据与边界
+
+- 完整 Service unit 已可运行到结束：第 9 轮执行 8,041 个顶层测试，66 个顶层失败，耗时约 221 秒。原始逐测试证据 `/tmp/sub2api-cn-unit-full-round9.jsonl`。这比先前在前段 panic 的诊断更完整，不代表新增了 66 个产品问题；也不能直接声称这些都是历史失败。
+- 第 9 轮之后又恢复了 CN max、分组日汇总/压缩过滤及部分 SQL/mock 合同，定向 Service/Repository 验证通过：`/tmp/sub2api-cn-final-reconnect.log`、`/tmp/sub2api-cn-repo-fixtures-round6.log`。这些不能替代最终整包门禁。
+- settings/admin 与 server API contract 已从前轮失败恢复，真实设置往返覆盖保存、响应及无关修改保留；日志 `/tmp/sub2api-cn-settings-entrypoint-round4.log`、`/tmp/sub2api-cn-entrypoint-round6.log`。后者 Repository 仍有两个统计入口失败，已在随后接回 helper 并定向验证。
+- 定价阶梯、OAuth 恢复正反向、CountTokens builder、Grok 分类、JSON 完整性、CN 完整流、缓存与首写边界的定向 race 集通过：`/tmp/sub2api-cn-race-round4.log`。最终补充检查使用 `round5`。
+- 第三批补充完成后，admin、DTO、server、repository 四个 unit 全包均通过（`/tmp/sub2api-cn-entrypoint-round7.log`）；包含 CN max 六入口的新 race 集通过（`/tmp/sub2api-cn-race-round5.log`），server 构建通过（`/tmp/sub2api-cn-build-round4.log`）。Service 全 unit 仍需在最终干净检查点复跑，不宣称整包通过。
+- 本轮没有 frontend 改动；前轮 305 文件/1,989 测试、typecheck、build 通过记录保持，但仍不冒充最终发布候选验证。
+- 无生产连接、数据修改、推送或部署；主工作区保持 `9d9508779`，本轮仅修改专用 worktree。
+
+### 发布门禁结论
+
+**Verdict: INCONCLUSIVE（禁止发布，目标仍 active）。**
+
+Reviewed range: `04ce360b0..a13a19410` + 本轮专用 worktree 改动。高风险未决项包括 OpenAI 429 模型/账号作用域、流式 bare error 与失败透传优先级、Grok 兼容/用量提取、Kiro 重试与 token cache 合同。必须继续做三方核对及真实入口测试，不能用定向绿灯掩盖整包失败。
+
+四项不变量：CN 完整终态、既有缓存连续性/去重、Grok first-write 定向测试通过；整个候选版本的 stream/cache/latency 仍未获得完整 PASS。没有生产 canary 或可比 TTFT 数据，且本轮未授权发布。
+
+第 9 轮全部失败先按“未能分类”登记；其中后续已修复者以补充日志为准，仍需最终干净提交复跑。未进行严格同命令基线复现者一律不豁免。
+
+| 第 9 轮顶层失败 | 分类 |
+| --- | --- |
+| `TestOpenAIGatewayGrokFreeUsageExhausted429RateLimitsForRollingWindow` | 未能分类，不豁免 |
+| `TestHandleOpenAIAccountUpstreamError_Grok429UsesOnlyGrokCooldown` | 未能分类，不豁免 |
+| `TestGetBaseURL_KiroAPIKeyWithoutBaseURLReturnsEmpty` | 未能分类，不豁免 |
+| `TestNewKiroJSONRequestAddsConditionalHeaders` | 未能分类，不豁免 |
+| `TestExecuteKiroUpstreamClears429CooldownAndContinues` | 未能分类，不豁免 |
+| `TestExecuteKiroUpstreamKeepsServerErrorRetriesAtDefaultLimit` | 未能分类，不豁免 |
+| `TestOpenAI429FastPath_KeepsOAuthAccountSchedulableDuringRetryWindow` | 未能分类，不豁免 |
+| `TestOpenAI429FastPath_SparkQuotaOnlyBlocksSparkModel` | 未能分类，不豁免 |
+| `TestOpenAI429FastPath_SparkTransient429UsesShortFallback` | 未能分类，不豁免 |
+| `TestOpenAIStream429_SparkQuotaUsesQuotaHeaders` | 未能分类，不豁免 |
+| `TestOpenAIStreamFailover_Spark429KeepsModelScope` | 未能分类，不豁免 |
+| `TestOpenAIWSErrorEvent_OrdinaryModelIgnoresHandshakeQuotaHeaders` | 未能分类，不豁免 |
+| `TestOpenAIWSErrorEvent_SparkQuotaUsesHandshakeQuotaHeaders` | 未能分类，不豁免 |
+| `TestOpenAI429FastPath_SparkShadowQuotaStaysModelScoped` | 未能分类，不豁免 |
+| `TestOpenAIStream429IgnoresSuccessfulQuotaSnapshotHeaders` | 未能分类，不豁免 |
+| `TestOpenAIHTTP429StillUsesQuotaResetHeaders` | 未能分类，不豁免 |
+| `TestShouldStopOpenAIOAuth429Failover_AfterBoundedFullWindows` | 未能分类，不豁免 |
+| `TestOpenAIRefineChannelRestrictionError_AllowedConfiguredAccountKeepsCapacityError` | 未能分类，不豁免 |
+| `TestOpenAIGatewayService_OAuthPassthrough_SanitizesNativeToolItemIDs` | 未能分类，不豁免 |
+| `TestOpenAIGatewayService_SetupTokenLegacy_SanitizesAndTransforms` | 未能分类，不豁免 |
+| `TestForwardGrokChatViaResponsesNonStreamingRejectsCompletedResponseWithoutUsage` | 未能分类，不豁免 |
+| `TestForwardGrokResponsesCompactSynthesizesAndReturnsCompactionItem` | 未能分类，不豁免 |
+| `TestForwardGrokChatViaResponsesDropsRedundantViewImage` | 未能分类，不豁免 |
+| `TestForwardGrokMessagesDropsRedundantViewImage` | 未能分类，不豁免 |
+| `TestForwardGrokResponses_PropagatesSearchCountFromJSON` | 未能分类，不豁免 |
+| `TestForwardGrokResponses_PropagatesSearchCountFromSSE` | 未能分类，不豁免 |
+| `TestGetSchedulableAccount_AppliesGrokFreeSoftGate` | 未能分类，不豁免 |
+| `TestOpenAIGetSchedulableAccount_AppliesGrokFreeSoftGate` | 未能分类，不豁免 |
+| `TestParseGrokMediaRequestBuildsMultipartModerationBody` | 未能分类，不豁免 |
+| `TestForwardGrokMediaImagesEditMultipartConvertsToJSON` | 未能分类，不豁免 |
+| `TestBindGrokMediaVideoRequestAccountUsesOwnerScopedStickyHash` | 未能分类，不豁免 |
+| `TestForwardAsChatCompletionsForGrokUsesXAIChatCompletionsAndSnapshots` | 未能分类，不豁免 |
+| `TestForwardGrokResponsesStreamingUsesXAIResponsesAndSnapshots` | 未能分类，不豁免 |
+| `TestForwardAsChatCompletionsForGrokStreamingUsesRawXAIChatCompletions` | 未能分类，不豁免 |
+| `TestForwardAsAnthropicForGrokUsesXAIResponses` | 未能分类，不豁免 |
+| `TestForwardAsAnthropic_StreamingBareErrorAfterOutputIsVisible` | 未能分类，不豁免 |
+| `TestForwardAsAnthropic_StreamingBareErrorBeforeOutputFailsOver` | 未能分类，不豁免 |
+| `TestForwardAsAnthropic_StreamingGenericBareErrorBeforeOutputIsNotHiddenByFailover` | 未能分类，不豁免 |
+| `TestResponsesStreamAccessStateFailoverPrecedesPassthroughRule` | 未能分类，不豁免 |
+| `TestResponsesStreamCyberPolicyPrecedesPassthroughRule` | 未能分类，不豁免 |
+| `TestForwardResponses_ForceChatCompletionsOmitsNoneReasoningEffort` | 未能分类，不豁免 |
+| `TestOpenAIGatewayServiceForward_NormalizesResponsesLiteToolsForOAuth` | 未能分类，不豁免 |
+| `TestOpenAIGatewayServiceForward_PinsParallelToolCallsForToollessResponsesLite` | 未能分类，不豁免 |
+| `TestOpenAIGatewayServiceForward_DisablesParallelToolCallsForResponsesLiteAPIKey` | 未能分类，不豁免 |
+| `TestHandle529_AnthropicSkipsPersistentAccountOverload` | 未能分类，不豁免 |
+| `TestExecuteSubscriptionFulfillmentAppliesAffiliateRebate` | 未能分类，不豁免 |
+| `TestRateLimitService_HandleUpstreamError_OAuth401InvalidatorError` | 未能分类，不豁免 |
+| `TestRateLimitService_HandleUpstreamError_OAuth401DoesNotOverwriteCredentials` | 未能分类，不豁免 |
+| `TestRateLimitService_HandleUpstreamError_CodexPlanGatedModelUsesModelRateLimit` | 未能分类，不豁免 |
+| `TestRateLimitService_HandleUpstreamError_CodexPlanGatedModelIgnoresAPIKeyAccount` | 未能分类，不豁免 |
+| `TestRateLimitService_HandleUpstreamError_CodexPlanGatedImageModelSkipsCooldown` | 未能分类，不豁免 |
+| `TestRateLimitService_HandleUpstreamError_CodexPlanGatedTextModelStillCoolsDown` | 未能分类，不豁免 |
+| `TestRateLimitService_HandleUpstreamError_CodexPlanGatedImageModelKeepsCooldownOnImagesEndpoint` | 未能分类，不豁免 |
+| `TestRateLimitService_HandleUpstreamError_CodexPlanGatedImageModelSkipsCooldownOnIntentOnly` | 未能分类，不豁免 |
+| `TestRateLimitService_HandleUpstreamError_CodexPlanGatedImageModelSkipsCooldownViaModelMapping` | 未能分类，不豁免 |
+| `TestOpenAIGatewayServiceForwardImages_CapabilityLossCoolsImageScope` | 未能分类，不豁免 |
+| `TestCompositeTokenCacheInvalidator_Kiro` | 未能分类，不豁免 |
+| `TestTokenRefreshService_RefreshWithRetry_AntigravityClearsForceRefreshOnSuccess` | 未能分类，不豁免 |
+| `TestTokenRefreshService_RefreshWithRetry_AntigravityNonRetryableError` | 未能分类，不豁免 |
+| `TestPathA_NonRetryableError` | 未能分类，不豁免 |
+| `TestPathA_DBUpdateFailed` | 未能分类，不豁免 |
+| `TestGrokQuotaFetcherBuildUsageInfoFromSnapshot` | 未能分类，不豁免 |
+| `TestExtractCCReasoningEffortFromBody` | 未能分类，不豁免 |
+| `TestGroupMediaPricingLooksIncomplete_VideoModelPricesComplete` | 未能分类，不豁免 |
+| `TestPatchGrokResponsesBodyDropsNestedUnsupportedFields` | 未能分类，不豁免 |
+| `TestOAuthService_RefreshAccountToken_WithProxy` | 未能分类，不豁免 |

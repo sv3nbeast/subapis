@@ -98,6 +98,32 @@ func TestCNAdaptiveProtocolCompletionMatrix(t *testing.T) {
 	}
 }
 
+func TestCNNativeAnthropicAliasPreservesMaxEffort(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for platform, model := range map[string]string{PlatformKimi: "kimi-k3", PlatformZhipu: "glm-5.2", PlatformDeepseek: "deepseek-v4-flash"} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%v", platform, stream), func(t *testing.T) {
+				upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK,
+					Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+					Body:   io.NopCloser(strings.NewReader(cnCompletionFixture(APIProtocolAnthropic, true)))}}
+				svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+				account := adaptiveProtocolTestAccount(platform, nil)
+				account.Credentials["api_protocol"] = APIProtocolAnthropic
+				account.Credentials["base_url"] = "http://anthropic.example"
+				account.Credentials["model_mapping"] = map[string]any{"public-alias": model}
+				body := []byte(fmt.Sprintf(`{"model":"public-alias","reasoning_effort":"max","stream":%v,"messages":[{"role":"user","content":"hello"}]}`, stream))
+				c := adaptiveProtocolTestContext("/v1/chat/completions", body)
+				result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				require.NotNil(t, result.ReasoningEffort)
+				require.Equal(t, "max", *result.ReasoningEffort)
+				require.Equal(t, model, gjson.GetBytes(upstream.lastBody, "model").String())
+			})
+		}
+	}
+}
+
 func cnCompletionFixture(protocol string, stream bool) string {
 	switch protocol {
 	case APIProtocolAnthropic:

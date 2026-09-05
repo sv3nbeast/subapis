@@ -191,6 +191,14 @@ func (e forceOAuthRefreshExecutor) NeedsRefresh(account *Account, refreshWindow 
 	return e.OAuthRefreshExecutor != nil && e.OAuthRefreshExecutor.CanRefresh(account)
 }
 
+// Only the explicit validation-recovery probe may refresh an error account.
+// Disabled/paused accounts and all other providers retain the shared guard.
+type validationRecoveryRefreshExecutor struct{ forceOAuthRefreshExecutor }
+
+func (e validationRecoveryRefreshExecutor) allowsValidationErrorRecovery(account *Account) bool {
+	return account != nil && account.Status == StatusError && shouldForceRefreshAntigravityTestToken(account)
+}
+
 // ForceRefreshAccessToken refreshes an Antigravity OAuth token even if the stored
 // expiry has not been reached. This is used by explicit account probes after a
 // Google validation flow, where the old access token can keep returning
@@ -212,7 +220,8 @@ func (p *AntigravityTokenProvider) ForceRefreshAccessToken(ctx context.Context, 
 	refreshCtx, cancel := context.WithTimeout(ctx, antigravityRequestRefreshTimeout)
 	defer cancel()
 
-	result, err := p.refreshAPI.RefreshIfNeeded(refreshCtx, account, forceOAuthRefreshExecutor{OAuthRefreshExecutor: p.executor}, 0)
+	executor := validationRecoveryRefreshExecutor{forceOAuthRefreshExecutor{OAuthRefreshExecutor: p.executor}}
+	result, err := p.refreshAPI.RefreshIfNeeded(refreshCtx, account, executor, 0)
 	if err != nil {
 		return "", err
 	}
@@ -221,6 +230,9 @@ func (p *AntigravityTokenProvider) ForceRefreshAccessToken(ctx context.Context, 
 	}
 	if result.LockHeld {
 		return "", errors.New("token refresh already in progress")
+	}
+	if result.Account != nil && !result.Account.IsActive() && result.Account.Status != "" && !executor.allowsValidationErrorRecovery(result.Account) {
+		return "", errors.New("account is no longer eligible for validation recovery")
 	}
 	if result.NewCredentials != nil {
 		account.Credentials = cloneCredentials(result.NewCredentials)

@@ -697,8 +697,13 @@ func stripAnthropicThinkingSignatures(body []byte) ([]byte, bool) {
 	if len(body) == 0 || !bytes.Contains(body, []byte(`"signature"`)) {
 		return body, false
 	}
+	if !json.Valid(body) {
+		return body, false
+	}
 	var requestBody map[string]any
-	if err := json.Unmarshal(body, &requestBody); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&requestBody); err != nil {
 		return body, false
 	}
 	messages, ok := requestBody["messages"].([]any)
@@ -1763,6 +1768,14 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 	if isGrokContentPolicyRejection(statusCode, responseBody) {
 		return
 	}
+	if statusCode == http.StatusForbidden && s.applyGrokForbiddenPolicy(ctx, account, responseBody) {
+		return
+	}
+	// The upstream pool owns member health; explicit operator rules above
+	// still apply, but automatic cooldowns must not quarantine the relay.
+	if account.IsPoolMode() {
+		return
+	}
 	if statusCode == http.StatusTooManyRequests && len(requestedModel) > 0 &&
 		s.markGrokZeroRPMModelRateLimitIfDetected(ctx, account, requestedModel[0], responseBody) {
 		return
@@ -1782,6 +1795,26 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 		stateCtx, cancel := openAIAccountStateContext(ctx)
 		_ = s.rateLimitService.HandleUpstreamModelNotFound(stateCtx, account, requestedModel[0], statusCode, responseBody)
 		cancel()
+	}
+	model := grokRequestedModelFromCtx(ctx)
+	if len(requestedModel) > 0 {
+		model = requestedModel[0]
+	}
+	decision := classifyGrokUpstreamFailure(statusCode, responseBody, model)
+	// A model-scoped free-usage rejection must not quarantine sibling models.
+	// An explicit provider reset takes precedence over an inferred probe window.
+	if decision.Class == GrokFailureFreeUsage {
+		if decision.Model != "" && isGrokModelSpecificFreeUsage(strings.ToLower(decision.Reason), decision.Model) {
+			if s.applyGrokUpstreamFailureDecision(ctx, account, decision) {
+				return
+			}
+		} else if snapshot := xai.ParseQuotaHeaders(headers, statusCode); snapshot != nil && snapshot.RetryAfterSeconds != nil && *snapshot.RetryAfterSeconds > 0 {
+			s.markGrokQuotaExhaustedUntil(ctx, account, time.Now().Add(time.Duration(*snapshot.RetryAfterSeconds)*time.Second))
+			return
+		}
+	}
+	if decision.Class != GrokFailureRateLimit && s.applyGrokUpstreamFailureDecision(ctx, account, decision) {
+		return
 	}
 	switch statusCode {
 	case http.StatusUnauthorized:

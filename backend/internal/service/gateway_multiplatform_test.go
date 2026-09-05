@@ -1685,11 +1685,11 @@ func TestGatewayService_selectAccountWithMixedScheduling(t *testing.T) {
 			cfg:         testConfig(),
 		}
 
-		acc, err := svc.selectAccountWithMixedScheduling(ctx, nil, "", "claude-sonnet-4-5", nil, PlatformAnthropic)
+		acc, err := svc.selectAccountWithMixedScheduling(ctx, nil, "", "gemini-3-pro-preview", nil, PlatformGemini)
 		require.NoError(t, err)
 		require.NotNil(t, acc)
-		require.Equal(t, int64(2), acc.ID)
-		require.Equal(t, PlatformKiro, acc.Platform)
+		require.Equal(t, int64(3), acc.ID)
+		require.Equal(t, PlatformAntigravity, acc.Platform)
 	})
 
 	t.Run("混合调度-Anthropic可选择启用mixed_scheduling的Droid账户", func(t *testing.T) {
@@ -1780,7 +1780,7 @@ func TestGatewayService_selectAccountWithMixedScheduling(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, acc)
 		require.Equal(t, int64(1), acc.ID)
-		require.Equal(t, PlatformAnthropic, acc.Platform)
+		require.Equal(t, PlatformAntigravity, acc.Platform)
 	})
 
 	t.Run("混合调度-Gemini不选择启用mixed_scheduling的Kiro或Droid账户", func(t *testing.T) {

@@ -29,8 +29,8 @@ func TestGrokTokenRefreshWindowWithJitter_StableAndBounded(t *testing.T) {
 
 func TestGrokTokenRefresher_NeedsRefresh_UsesSkewFloor(t *testing.T) {
 	refresher := NewGrokTokenRefresher(nil)
-	// Expires in 50 minutes — within 1h skew, should need refresh.
-	expires := time.Now().Add(50 * time.Minute).UTC().Format(time.RFC3339)
+	// Within even the minimum jittered five-minute soft-expiry window.
+	expires := time.Now().Add(grokTokenRefreshSkewMin / 2).UTC().Format(time.RFC3339)
 	account := &Account{
 		ID:       7,
 		Platform: PlatformGrok,

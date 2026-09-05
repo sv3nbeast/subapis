@@ -442,7 +442,11 @@ func TestCalculateCostUnified_PartialIntervalInheritsBaseCosts(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cost)
 
-	require.InDelta(t, 1000*5e-6, cost.InputCost, 1e-10)
+	// Standard override retains the catalog's 2x Priority ratio.
+	intervalPricing := resolver.GetIntervalPricing(resolved, 8000)
+	require.InDelta(t, 5e-6, intervalPricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 10e-6, intervalPricing.InputPricePerTokenPriority, 1e-12)
+	require.InDelta(t, 1000*10e-6, cost.InputCost, 1e-10)
 	require.InDelta(t, 2000*30e-6, cost.OutputCost, 1e-10)
 	require.InDelta(t, 1000*3.75e-6+2000*7.5e-6, cost.CacheCreationCost, 1e-10)
 	require.InDelta(t, 4000*0.6e-6, cost.CacheReadCost, 1e-10)

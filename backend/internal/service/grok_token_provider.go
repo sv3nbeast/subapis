@@ -77,6 +77,12 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 	expiresAt := account.GetCredentialAsTime("expires_at")
 	accountAccessToken := strings.TrimSpace(account.GetGrokAccessToken())
 	refreshToken := strings.TrimSpace(account.GetGrokRefreshToken())
+	if accountAccessToken == "" {
+		return "", withGrokCredentialFailureSnapshot(errGrokOAuthAccessTokenMissing, account)
+	}
+	if refreshToken == "" {
+		return "", withGrokCredentialFailureSnapshot(errGrokOAuthRefreshTokenMissing, account)
+	}
 	cacheKey := GrokTokenCacheKey(account)
 	if p.tokenCache != nil {
 		if token, err := p.tokenCache.GetAccessToken(ctx, cacheKey); err == nil {

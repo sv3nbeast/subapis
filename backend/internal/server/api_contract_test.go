@@ -395,8 +395,15 @@ func TestAPIContracts(t *testing.T) {
 						"kiro_cache_emulation_enabled": false,
 						"kiro_cache_emulation_ratio": 0,
 						"kiro_endpoint_mode": "q",
+						"kiro_anthropic_fallback_enabled": false,
+						"kiro_anthropic_fallback_first_semantic_timeout_seconds": 0,
+						"kiro_anthropic_fallback_max_anthropic_attempts": 0,
+						"kiro_cache_emulation_mode": "uniform",
+						"kiro_cache_creation_emulation_ratio": 0,
+						"kiro_cache_read_emulation_ratio": 0,
 						"kiro_sticky_session_ttl_seconds": 0,
 						"max_reasoning_effort": "",
+						"max_reasoning_effort_over_limit": "",
 						"model_quota_ratios": null,
 						"reasoning_effort_mappings": null,
 						"fallback_group_id": null,
@@ -1370,9 +1377,14 @@ func currentSystemSettingsContractJSON(t *testing.T, base string) string {
 		"kiro":        emptyQuota(),
 		"droid":       emptyQuota(),
 		"grok":        emptyQuota(),
+		"kimi":        emptyQuota(),
+		"zhipu":       emptyQuota(),
+		"deepseek":    emptyQuota(),
 	}
 
 	for key, value := range map[string]any{
+		"account_scheduling_thresholds":                                map[string]any{"openai": 100, "anthropic": 100, "grok": 100, "kimi": 100, "zhipu": 100},
+		"openai_ttft_mode":                                             "semantic",
 		"affiliate_admin_recharge_enabled":                             false,
 		"audit_log_retention_days":                                     float64(180),
 		"claude_upstream_user_agent":                                   "",
@@ -1876,7 +1888,11 @@ func (s *stubAccountRepo) GetByID(ctx context.Context, id int64) (*service.Accou
 }
 
 func (s *stubAccountRepo) GetByIDs(ctx context.Context, ids []int64) ([]*service.Account, error) {
-	return nil, errors.New("not implemented")
+	accounts := make([]*service.Account, 0, len(ids))
+	for _, id := range ids {
+		accounts = append(accounts, &service.Account{ID: id, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Status: service.StatusActive})
+	}
+	return accounts, nil
 }
 
 func (s *stubAccountRepo) ExistsByID(ctx context.Context, id int64) (bool, error) {

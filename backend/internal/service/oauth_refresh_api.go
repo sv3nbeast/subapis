@@ -242,7 +242,11 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	if freshAccount.ID != account.ID {
 		return nil, fmt.Errorf("%w: account identity mismatch", errOAuthRefreshAccountRereadFailed)
 	}
-	if !freshAccount.IsActive() && freshAccount.Status != "" {
+	manualErrorRecovery := false
+	if policy, ok := executor.(interface{ allowsValidationErrorRecovery(*Account) bool }); ok {
+		manualErrorRecovery = policy.allowsValidationErrorRecovery(freshAccount)
+	}
+	if !freshAccount.IsActive() && freshAccount.Status != "" && !manualErrorRecovery {
 		if requestPath {
 			return nil, fmt.Errorf("%w: account is not active", errOAuthRefreshAccountStateChanged)
 		}

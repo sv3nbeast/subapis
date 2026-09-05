@@ -468,7 +468,14 @@ func (s *BillingService) initFallbackPricing() {
 		LongContextInputMultiplier:     openAIGPT54LongContextInputMultiplier,
 		LongContextOutputMultiplier:    openAIGPT54LongContextOutputMultiplier,
 	}
-	s.fallbackPrices["gpt-5.5-pro"] = s.fallbackPrices["gpt-5.4"]
+	// Dedicated Pro fallback restored from the official pricing update; do not
+	// alias GPT-5.4 when the dynamic catalog is unavailable.
+	s.fallbackPrices["gpt-5.5-pro"] = &ModelPricing{
+		InputPricePerToken:         30e-6,
+		OutputPricePerToken:        180e-6,
+		CacheCreationPricePerToken: 30e-6,
+		CacheReadPricePerToken:     30e-6,
+	}
 
 	// GPT-6 Astra official standard / Fast rates (USD/token), retrieved 2026-09-05.
 	s.fallbackPrices["gpt-6-astra"] = &ModelPricing{
@@ -1255,34 +1262,7 @@ func (s *BillingService) GetModelPricingWithChannel(model string, channelPricing
 	}
 	// 防止修改 fallbackPrices 中的共享指针
 	pricing = cloneModelPricing(pricing)
-	if channelPricing.InputPrice != nil {
-		pricing.InputPricePerToken = *channelPricing.InputPrice
-		pricing.InputPricePerTokenPriority = *channelPricing.InputPrice
-	}
-	if channelPricing.OutputPrice != nil {
-		pricing.OutputPricePerToken = *channelPricing.OutputPrice
-		pricing.OutputPricePerTokenPriority = *channelPricing.OutputPrice
-	}
-	if channelPricing.CacheWritePrice != nil {
-		pricing.CacheCreationPricePerToken = *channelPricing.CacheWritePrice
-		pricing.CacheCreationPricePerTokenPriority = *channelPricing.CacheWritePrice
-		pricing.CacheCreationPriceExplicit = true
-		pricing.CacheCreation5mPrice = *channelPricing.CacheWritePrice
-		pricing.CacheCreation1hPrice = *channelPricing.CacheWritePrice
-	}
-	if channelPricing.CacheWrite5mPrice != nil {
-		pricing.CacheCreationPricePerToken = *channelPricing.CacheWrite5mPrice
-		pricing.CacheCreation5mPrice = *channelPricing.CacheWrite5mPrice
-		pricing.SupportsCacheBreakdown = true
-	}
-	if channelPricing.CacheWrite1hPrice != nil {
-		pricing.CacheCreation1hPrice = *channelPricing.CacheWrite1hPrice
-		pricing.SupportsCacheBreakdown = true
-	}
-	if channelPricing.CacheReadPrice != nil {
-		pricing.CacheReadPricePerToken = *channelPricing.CacheReadPrice
-		pricing.CacheReadPricePerTokenPriority = *channelPricing.CacheReadPrice
-	}
+	applyChannelTokenPriceOverrides(pricing, channelPricing)
 	if channelPricing.ImageOutputPrice != nil {
 		pricing.ImageOutputPricePerToken = *channelPricing.ImageOutputPrice
 	} else {
@@ -1328,6 +1308,14 @@ func applyChannelTokenPriceOverrides(pricing *ModelPricing, channelPricing *Chan
 			// cache_write_price continues to override both TTL tiers.
 			pricing.CacheCreation1hPrice = *channelPricing.CacheWritePrice
 		}
+	}
+	if channelPricing.CacheWrite5mPrice != nil {
+		priority := channelTierOverridePrice(pricing.CacheCreationPricePerToken, pricing.CacheCreationPricePerTokenPriority, *channelPricing.CacheWrite5mPrice)
+		pricing.CacheCreationPricePerToken = *channelPricing.CacheWrite5mPrice
+		pricing.CacheCreationPricePerTokenPriority = priority
+		pricing.CacheCreation5mPrice = *channelPricing.CacheWrite5mPrice
+		pricing.CacheCreationPriceExplicit = true
+		pricing.SupportsCacheBreakdown = true
 	}
 	if channelPricing.CacheWrite1hPrice != nil {
 		pricing.CacheCreation1hPrice = *channelPricing.CacheWrite1hPrice

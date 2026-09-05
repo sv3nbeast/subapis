@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -233,6 +234,9 @@ func (s *GrokOAuthService) RefreshToken(ctx context.Context, refreshToken, proxy
 }
 
 func (s *GrokOAuthService) refreshTokenForPrincipal(ctx context.Context, refreshToken, proxyURL, clientID, principalType, principalID string) (*GrokTokenInfo, error) {
+	if err := s.requireOAuthClient(); err != nil {
+		return nil, err
+	}
 	refreshToken = strings.TrimSpace(refreshToken)
 	if refreshToken == "" {
 		return nil, infraerrors.New(http.StatusBadRequest, "GROK_OAUTH_NO_REFRESH_TOKEN", "refresh_token is required")
@@ -487,10 +491,13 @@ func (s *GrokOAuthService) proxyURL(ctx context.Context, proxyID *int64) (string
 	}
 	proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
 	if err != nil {
-		return "", infraerrors.Newf(http.StatusBadRequest, "GROK_OAUTH_PROXY_NOT_FOUND", "proxy not found: %v", err)
+		if errors.Is(err, ErrProxyNotFound) {
+			return "", infraerrors.New(http.StatusBadRequest, "GROK_OAUTH_PROXY_NOT_FOUND", "configured proxy not found")
+		}
+		return "", infraerrors.New(http.StatusServiceUnavailable, "GROK_OAUTH_PROXY_LOOKUP_FAILED", "proxy repository lookup failed").WithCause(err)
 	}
 	if proxy == nil {
-		return "", nil
+		return "", infraerrors.New(http.StatusBadRequest, "GROK_OAUTH_PROXY_NOT_FOUND", "configured proxy not found")
 	}
 	return proxy.URL(), nil
 }

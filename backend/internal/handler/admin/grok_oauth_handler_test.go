@@ -83,8 +83,9 @@ func TestGrokOAuthHandlerQueryQuotaProbesUpstream(t *testing.T) {
 		Type:        service.AccountTypeOAuth,
 		Concurrency: 1,
 		Credentials: map[string]any{
-			"access_token": "access-token",
-			"expires_at":   time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			"access_token":  "access-token",
+			"refresh_token": "refresh-token",
+			"expires_at":    time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
 		},
 	}}
 	upstream := &grokQuotaHandlerUpstream{body: `{"config":{"creditUsagePercent":49,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-07-09T18:40:47Z","end":"2026-07-16T18:40:47Z"},"isUnifiedBillingUser":true}}`, resp: &http.Response{

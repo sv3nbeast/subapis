@@ -29,6 +29,11 @@ func adaptResponsesClientToolsForFunctionUpstreamWithMapping(
 	inherited apicompat.ResponsesClientToolMapping,
 	inheritedLoweredTools ...[]any,
 ) ([]byte, apicompat.ResponsesClientToolMapping, error) {
+	// Decode alone accepts a valid first document followed by arbitrary data.
+	// Validate the complete request before any tool/body rewriting.
+	if !json.Valid(body) {
+		return body, apicompat.ResponsesClientToolMapping{}, fmt.Errorf("decode %s Responses client tools: invalid JSON document", upstream)
+	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	var requestBody map[string]any

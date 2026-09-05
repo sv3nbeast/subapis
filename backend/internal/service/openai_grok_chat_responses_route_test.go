@@ -37,9 +37,10 @@ func TestForwardAsChatCompletionsForGrokResponsesRoute(t *testing.T) {
 		Type:        AccountTypeOAuth,
 		Concurrency: 1,
 		Credentials: map[string]any{
-			"access_token": "access-token",
-			"expires_at":   time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
-			"base_url":     xai.DefaultCLIBaseURL,
+			"access_token":  "access-token",
+			"refresh_token": "refresh-token",
+			"expires_at":    time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			"base_url":      xai.DefaultCLIBaseURL,
 		},
 	}
 	upstreamBody := strings.Join([]string{

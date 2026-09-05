@@ -19,7 +19,7 @@ const grokTokenRefreshSkew = 5 * time.Minute
 const grokTokenRefreshJitterMax = 3 * time.Minute
 
 // Floor so jitter cannot shrink the window below a useful threshold.
-const grokTokenRefreshSkewMin = 30 * time.Minute
+const grokTokenRefreshSkewMin = grokTokenRefreshSkew - grokTokenRefreshJitterMax
 
 type GrokTokenRefresher struct {
 	grokOAuthService GrokOAuthTokenService

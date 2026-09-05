@@ -11,7 +11,7 @@ import (
 func StableGrokAudioBillingRequestID(upstreamRequestID string) string {
 	upstreamRequestID = strings.TrimSpace(upstreamRequestID)
 	if upstreamRequestID == "" {
-		return ""
+		upstreamRequestID = uuid.NewString()
 	}
 	if strings.HasPrefix(upstreamRequestID, "grok_audio:") {
 		return upstreamRequestID

@@ -1244,6 +1244,9 @@ func (s *AuthService) validateRegistrationEmailQuota(ctx context.Context, email 
 	if s.settingService == nil {
 		return nil
 	}
+	if IsRegistrationEmailSuffixBlocked(email, s.settingService.GetRegistrationEmailSuffixBlacklist(ctx)) {
+		return buildEmailSuffixBlockedError(email)
+	}
 	whitelist := s.settingService.GetRegistrationEmailSuffixWhitelist(ctx)
 	if !IsRegistrationEmailSuffixLimited(email, whitelist) {
 		return nil

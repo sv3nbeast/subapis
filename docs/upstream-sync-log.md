@@ -3033,3 +3033,12 @@ a7acd9e3e 回退：移除temporary Kiro full capture
 d0869d329 debug(kiro): scope full capture 到 request 96aa8a81
 0608915b7 debug(kiro): scope admin capture 到 affected key
 aa4a3509c debug(kiro): separate translated 与 client stream capture
+
+## 2026-09-05 CN 平台补漏第三批检查点（未发布）
+
+- 范围：专用 `codex/fix-cn-group-platform-gaps-20260905`，基线 `04ce360b0`，承接 `af17c8400` / `a13a19410`；不进行新一轮上游同步，不 promote。
+- 恢复渠道区间倍率与基础价继承、设置读写/缓存、Grok 错误分类调用、Antigravity 显式 validation 恢复、CountTokens 请求清理、JSON 完整性/大整数、Kimi max 与分组日汇总入口；保留本地 Kiro/Droid、Fast、5m/1h、自定义映射。
+- 完整 Service unit 现可执行到结束，第 9 轮 8,041 顶层/66 失败。全部未决失败登记，禁止用基线失败措辞豁免。后续局部修复另有定向验证，不能替代整包。
+- 前端前轮 1,989 测试通过；本轮无前端修改。admin/server contract 恢复，定向 race 通过，完整最终门禁仍 INCONCLUSIVE。未推送、未部署、未改生产。
+- 第三批尾轮 admin/DTO/server/repository 四个 unit 全包通过，CN 六入口及相关缓存/首写/计费/凭据恢复的 race 集通过，server 构建通过；Service 整包仍待后续修复，不作为发布绿灯。
+- 明细与逐项登记：`docs/cn-platform-sync-audit-20260905.md`。

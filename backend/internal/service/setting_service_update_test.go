@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
@@ -16,6 +17,23 @@ import (
 
 type settingUpdateRepoStub struct {
 	updates map[string]string
+}
+
+func TestSettingService_TTFTModeSurvivesCacheRefresh(t *testing.T) {
+	prior, _ := gatewayForwardingCache.Load().(*cachedGatewayForwardingSettings)
+	t.Cleanup(func() {
+		if prior != nil {
+			gatewayForwardingCache.Store(prior)
+		}
+	})
+	repo := newMockSettingRepo()
+	repo.data[SettingKeyOpenAITTFTMode] = OpenAITTFTModeVisible
+	svc := NewSettingService(repo, &config.Config{})
+	gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{expiresAt: time.Now().Add(-time.Minute).UnixNano()})
+	svc.GetGatewayForwardingSettings(context.Background())
+	require.Equal(t, OpenAITTFTModeVisible, svc.GetOpenAITTFTMode(context.Background()))
+	svc.refreshCachedSettings(&SystemSettings{OpenAITTFTMode: OpenAITTFTModeSemantic})
+	require.Equal(t, OpenAITTFTModeSemantic, svc.GetOpenAITTFTMode(context.Background()))
 }
 
 func (s *settingUpdateRepoStub) Get(ctx context.Context, key string) (*Setting, error) {

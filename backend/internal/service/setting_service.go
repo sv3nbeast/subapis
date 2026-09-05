@@ -304,12 +304,13 @@ type SettingService struct {
 }
 
 type ProviderDefaultGrantSettings struct {
-	Balance          float64
-	Concurrency      int
-	Subscriptions    []DefaultSubscriptionSetting
-	GrantOnSignup    bool
-	GrantOnFirstBind bool
-	PlatformQuotas   map[string]*DefaultPlatformQuotaSetting
+	concurrencyConfigured bool
+	Balance               float64
+	Concurrency           int
+	Subscriptions         []DefaultSubscriptionSetting
+	GrantOnSignup         bool
+	GrantOnFirstBind      bool
+	PlatformQuotas        map[string]*DefaultPlatformQuotaSetting
 }
 
 type AuthSourceDefaultSettings struct {
@@ -1122,7 +1123,9 @@ func (s *SettingService) GetAllSettings(ctx context.Context) (*SystemSettings, e
 		return nil, fmt.Errorf("get all settings: %w", err)
 	}
 
-	return s.parseSettings(settings), nil
+	parsed := s.parseSettings(settings)
+	applyGrokRuntimeSettings(parsed)
+	return parsed, nil
 }
 
 // GetFrontendURL 获取前端基础URL（数据库优先，fallback 到配置文件）
@@ -1263,6 +1266,9 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyBalanceLowNotifyRechargeURL,
 		SettingKeyAccountQuotaNotifyEnabled,
 		SettingKeyChannelMonitorEnabled,
+		SettingKeyChannelMonitorMode,
+		SettingKeyChannelMonitorHideThroughput,
+		SettingKeyChannelMonitorShowQuota,
 		SettingKeyChannelMonitorDefaultIntervalSeconds,
 		SettingKeyAvailableChannelsEnabled,
 		SettingKeyModelPlazaEnabled,
@@ -1391,6 +1397,9 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		BalanceLowNotifyRechargeURL:      settings[SettingKeyBalanceLowNotifyRechargeURL],
 
 		ChannelMonitorEnabled:                !isFalseSettingValue(settings[SettingKeyChannelMonitorEnabled]),
+		ChannelMonitorMode:                   normalizeChannelMonitorMode(settings[SettingKeyChannelMonitorMode]),
+		ChannelMonitorHideThroughput:         !isFalseSettingValue(settings[SettingKeyChannelMonitorHideThroughput]),
+		ChannelMonitorShowQuota:              settings[SettingKeyChannelMonitorShowQuota] == "true",
 		ChannelMonitorDefaultIntervalSeconds: parseChannelMonitorInterval(settings[SettingKeyChannelMonitorDefaultIntervalSeconds]),
 
 		AvailableChannelsEnabled:              settings[SettingKeyAvailableChannelsEnabled] == "true",
@@ -3042,6 +3051,9 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyHomeContent] = settings.HomeContent
 	updates[SettingKeyCompactHomeEnabled] = strconv.FormatBool(settings.CompactHomeEnabled)
 	updates[SettingKeyGrokDefaultBaseURLMode] = normalizeGrokDefaultBaseURLMode(settings.GrokDefaultBaseURLMode)
+	updates[SettingKeyGrokDefaultTextModel] = firstNonEmpty(strings.TrimSpace(settings.GrokDefaultTextModel), xai.DefaultTextModel)
+	updates[SettingKeyGrokCrossClientModelMapEnabled] = strconv.FormatBool(settings.GrokCrossClientModelMapEnabled)
+	updates[SettingKeyOpenAITTFTMode] = normalizeOpenAITTFTMode(settings.OpenAITTFTMode)
 	updates[SettingKeyHideCcsImportButton] = strconv.FormatBool(settings.HideCcsImportButton)
 	updates[SettingKeyPurchaseSubscriptionEnabled] = strconv.FormatBool(settings.PurchaseSubscriptionEnabled)
 	updates[SettingKeyPurchaseSubscriptionURL] = strings.TrimSpace(settings.PurchaseSubscriptionURL)
@@ -3110,6 +3122,9 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 
 	// Channel monitor feature switch
 	updates[SettingKeyChannelMonitorEnabled] = strconv.FormatBool(settings.ChannelMonitorEnabled)
+	updates[SettingKeyChannelMonitorMode] = normalizeChannelMonitorMode(settings.ChannelMonitorMode)
+	updates[SettingKeyChannelMonitorHideThroughput] = strconv.FormatBool(settings.ChannelMonitorHideThroughput)
+	updates[SettingKeyChannelMonitorShowQuota] = strconv.FormatBool(settings.ChannelMonitorShowQuota)
 	if v := clampChannelMonitorInterval(settings.ChannelMonitorDefaultIntervalSeconds); v > 0 {
 		updates[SettingKeyChannelMonitorDefaultIntervalSeconds] = strconv.Itoa(v)
 	}
@@ -3308,10 +3323,24 @@ func (s *SettingService) buildAuthSourceDefaultUpdates(ctx context.Context, sett
 	return updates, nil
 }
 
+func applyGrokRuntimeSettings(settings *SystemSettings) {
+	if settings == nil {
+		return
+	}
+	opts := xai.ModelMappingOptions{
+		DefaultText:          firstNonEmpty(strings.TrimSpace(settings.GrokDefaultTextModel), xai.DefaultTextModel),
+		EnableCrossClientMap: settings.GrokCrossClientModelMapEnabled,
+	}
+	if opts != xai.RuntimeModelMappingOptions() {
+		xai.SetRuntimeModelMappingOptions(opts)
+	}
+}
+
 func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	if settings == nil {
 		return
 	}
+	applyGrokRuntimeSettings(settings)
 	if s != nil && s.cfg != nil {
 		s.cfg.SetForwardedClientIPSettings(settings.APIKeyACLTrustForwardedIP, settings.ForwardedClientIPHeaders)
 	}
@@ -3330,6 +3359,7 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	})
 	gatewayForwardingSF.Forget("gateway_forwarding")
 	gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
+		openAITTFTMode:                   normalizeOpenAITTFTMode(settings.OpenAITTFTMode),
 		fingerprintUnification:           settings.EnableFingerprintUnification,
 		metadataPassthrough:              settings.EnableMetadataPassthrough,
 		cchSigning:                       settings.EnableCCHSigning,
@@ -3604,6 +3634,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gatewayForwardingDBTimeout)
 		defer cancel()
 		values, err := s.settingRepo.GetMultiple(dbCtx, []string{
+			SettingKeyOpenAITTFTMode,
 			SettingKeyEnableFingerprintUnification,
 			SettingKeyEnableMetadataPassthrough,
 			SettingKeyEnableCCHSigning,
@@ -3650,6 +3681,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 			clientDatelineNormalization = v == "true"
 		}
 		gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
+			openAITTFTMode:                   normalizeOpenAITTFTMode(values[SettingKeyOpenAITTFTMode]),
 			fingerprintUnification:           fp,
 			metadataPassthrough:              mp,
 			cchSigning:                       cch,
@@ -4772,6 +4804,12 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 
 	// Channel monitor feature (default: enabled, 60s)
 	result.ChannelMonitorEnabled = !isFalseSettingValue(settings[SettingKeyChannelMonitorEnabled])
+	result.ChannelMonitorMode = normalizeChannelMonitorMode(settings[SettingKeyChannelMonitorMode])
+	result.ChannelMonitorHideThroughput = !isFalseSettingValue(settings[SettingKeyChannelMonitorHideThroughput])
+	result.ChannelMonitorShowQuota = settings[SettingKeyChannelMonitorShowQuota] == "true"
+	result.GrokDefaultTextModel = firstNonEmpty(settings[SettingKeyGrokDefaultTextModel], "grok-4.6")
+	result.GrokCrossClientModelMapEnabled = !isFalseSettingValue(settings[SettingKeyGrokCrossClientModelMapEnabled])
+	result.OpenAITTFTMode = normalizeOpenAITTFTMode(settings[SettingKeyOpenAITTFTMode])
 	result.ChannelMonitorDefaultIntervalSeconds = parseChannelMonitorInterval(
 		settings[SettingKeyChannelMonitorDefaultIntervalSeconds],
 	)
@@ -5158,6 +5196,7 @@ func parseProviderDefaultGrantSettings(settings map[string]string, keys authSour
 	}
 	if v, err := strconv.Atoi(strings.TrimSpace(settings[keys.concurrency])); err == nil {
 		result.Concurrency = v
+		result.concurrencyConfigured = true
 	}
 	if items := parseDefaultSubscriptions(settings[keys.subscriptions]); items != nil {
 		result.Subscriptions = items
@@ -5217,7 +5256,7 @@ func mergeProviderDefaultGrantSettings(globalDefaults ProviderDefaultGrantSettin
 	if providerDefaults.Balance != defaultAuthSourceBalance {
 		result.Balance = providerDefaults.Balance
 	}
-	if providerDefaults.Concurrency > 0 && providerDefaults.Concurrency != defaultAuthSourceConcurrency {
+	if providerDefaults.Concurrency > 0 && (providerDefaults.concurrencyConfigured || providerDefaults.Concurrency != defaultAuthSourceConcurrency) {
 		result.Concurrency = providerDefaults.Concurrency
 	}
 	if len(providerDefaults.Subscriptions) > 0 {

@@ -50,9 +50,10 @@ func TestForwardAsRawChatCompletions_GrokZeroRPMTriggersModelFailover(t *testing
 		Status:      StatusActive,
 		Schedulable: true,
 		Credentials: map[string]any{
-			"access_token": "access-token",
-			"expires_at":   time.Now().Add(2 * grokTokenRefreshSkew).UTC().Format(time.RFC3339),
-			"base_url":     xai.DefaultCLIBaseURL,
+			"access_token":  "access-token",
+			"refresh_token": "refresh-token",
+			"expires_at":    time.Now().Add(2 * grokTokenRefreshSkew).UTC().Format(time.RFC3339),
+			"base_url":      xai.DefaultCLIBaseURL,
 		},
 	}
 	result, err := svc.forwardAsRawChatCompletions(context.Background(), c, account, body, "")

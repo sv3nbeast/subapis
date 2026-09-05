@@ -301,7 +301,9 @@ func TestGrokBillingURLFollowsAccountBaseURL(t *testing.T) {
 			},
 		}
 
-		weeklyURL, err := buildGrokBillingURL(account, nil, true)
+		// A custom relay needs an explicit operator URL policy; nil config is
+		// intentionally fail-closed for non-official hosts.
+		weeklyURL, err := buildGrokBillingURL(account, &config.Config{}, true)
 		require.NoError(t, err)
 		require.Equal(t, "https://relay.example.test/v1/billing?format=credits", weeklyURL)
 	})

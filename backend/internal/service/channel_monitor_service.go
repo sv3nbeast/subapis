@@ -115,7 +115,8 @@ func (s *ChannelMonitorService) probeRuntime(ctx context.Context) ChannelMonitor
 	if s != nil && s.runtimeReader != nil {
 		return s.runtimeReader.GetChannelMonitorRuntime(ctx)
 	}
-	return ChannelMonitorRuntime{Enabled: true, Mode: ChannelMonitorModeV1, DefaultIntervalSeconds: channelMonitorIntervalFallback, HideThroughput: true}
+	// Missing settings must never authorize an active upstream probe.
+	return ChannelMonitorRuntime{Enabled: true, Mode: ChannelMonitorModeV2, DefaultIntervalSeconds: channelMonitorIntervalFallback, HideThroughput: true}
 }
 
 // ---------- CRUD ----------
@@ -395,11 +396,14 @@ func validateCreateParams(p ChannelMonitorCreateParams) error {
 	// probe 分支（含 quota_probe 的探活部分）仍需 endpoint + api_key；
 	// quota 模式 endpoint/api_key 留空，避免要求用户填无意义的占位值。
 	if checkMode != MonitorCheckModeQuota {
-		if err := validateEndpoint(p.Endpoint); err != nil {
-			return err
+		if strings.TrimSpace(p.Endpoint) == "" {
+			return ErrChannelMonitorInvalidEndpoint
 		}
 		if strings.TrimSpace(p.APIKey) == "" {
 			return ErrChannelMonitorMissingAPIKey
+		}
+		if err := validateEndpoint(p.Endpoint); err != nil {
+			return err
 		}
 	}
 	if usesQuota && (p.AccountID == nil || *p.AccountID <= 0) {

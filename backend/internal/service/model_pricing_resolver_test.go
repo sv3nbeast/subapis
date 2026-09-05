@@ -378,7 +378,7 @@ func TestGetIntervalPricing_PartialIntervalInheritsBasePricing(t *testing.T) {
 	pricing := r.GetIntervalPricing(resolved, 64000)
 	require.NotNil(t, pricing)
 	require.InDelta(t, 5e-6, pricing.InputPricePerToken, 1e-12)
-	require.InDelta(t, 5e-6, pricing.InputPricePerTokenPriority, 1e-12)
+	require.InDelta(t, 10e-6, pricing.InputPricePerTokenPriority, 1e-12)
 	require.InDelta(t, 15e-6, pricing.OutputPricePerToken, 1e-12)
 	require.InDelta(t, 30e-6, pricing.OutputPricePerTokenPriority, 1e-12)
 	require.InDelta(t, 3.75e-6, pricing.CacheCreationPricePerToken, 1e-12)

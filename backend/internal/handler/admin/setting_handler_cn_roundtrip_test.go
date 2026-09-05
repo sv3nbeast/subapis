@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
@@ -43,4 +44,34 @@ func TestSettingsCNQuotasAndThresholdsRoundTrip(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.Equal(t, storedQuotas, repo.values[service.SettingKeyDefaultPlatformQuotas])
 	require.Equal(t, storedThresholds, repo.values[service.SettingKeyAccountSchedulingThresholds])
+}
+
+func TestSettingsGrokModelAndTTFTRoundTrip(t *testing.T) {
+	original := xai.RuntimeModelMappingOptions()
+	t.Cleanup(func() { xai.SetRuntimeModelMappingOptions(original) })
+	h, repo := newStepUpSwitchTestHandler(t, map[string]string{})
+	for _, enabled := range []bool{true, false} {
+		payload := map[string]any{"grok_default_text_model": "grok-4.3",
+			"grok_cross_client_model_map_enabled": enabled, "openai_ttft_mode": "visible",
+			"channel_monitor_mode": "v2", "channel_monitor_hide_throughput": enabled,
+			"channel_monitor_show_quota": !enabled}
+		rec := doUpdateSettings(t, h, payload, nil)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		var out struct{ Data map[string]any }
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+		for key, value := range payload {
+			require.Equal(t, value, out.Data[key], key)
+		}
+		require.Equal(t, "grok-4.3", repo.values[service.SettingKeyGrokDefaultTextModel])
+		require.Equal(t, "visible", repo.values[service.SettingKeyOpenAITTFTMode])
+		require.Equal(t, xai.ModelMappingOptions{DefaultText: "grok-4.3", EnableCrossClientMap: enabled}, xai.RuntimeModelMappingOptions())
+		version := xai.RuntimeModelMappingVersion()
+		rec = doUpdateSettings(t, h, map[string]any{"site_name": "Unrelated"}, nil)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+		for key, value := range payload {
+			require.Equal(t, value, out.Data[key], key+" must survive unrelated writes")
+		}
+		require.Equal(t, version, xai.RuntimeModelMappingVersion(), "unchanged settings must not invalidate model caches")
+	}
 }

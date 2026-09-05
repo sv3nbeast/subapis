@@ -779,6 +779,11 @@ func validatePricingTimePricing(pricing []ChannelModelPricing) error {
 
 func validateAccountStatsPricingRules(rules []AccountStatsPricingRule) error {
 	for _, rule := range rules {
+		for _, pricing := range rule.Pricing {
+			if pricing.TimePricing != nil && len(pricing.TimePricing.Periods) > 0 {
+				return infraerrors.BadRequest("ACCOUNT_STATS_TIME_PRICING_UNSUPPORTED", "account statistics pricing does not support time pricing")
+			}
+		}
 		if len(rule.GroupIDs) == 0 && len(rule.AccountIDs) == 0 {
 			return infraerrors.BadRequest("ACCOUNT_STATS_RULE_EMPTY_TARGET", "account stats pricing rule requires at least one group or account")
 		}

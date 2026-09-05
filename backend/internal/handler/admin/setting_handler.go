@@ -518,6 +518,12 @@ func loginAgreementDocumentsToService(items []dto.LoginAgreementDocument) []serv
 
 // UpdateSettingsRequest 更新设置请求
 type UpdateSettingsRequest struct {
+	GrokDefaultTextModel           *string `json:"grok_default_text_model"`
+	GrokCrossClientModelMapEnabled *bool   `json:"grok_cross_client_model_map_enabled"`
+	OpenAITTFTMode                 *string `json:"openai_ttft_mode"`
+	ChannelMonitorMode             *string `json:"channel_monitor_mode"`
+	ChannelMonitorHideThroughput   *bool   `json:"channel_monitor_hide_throughput"`
+	ChannelMonitorShowQuota        *bool   `json:"channel_monitor_show_quota"`
 	// 注册设置
 	RegistrationEnabled              bool                         `json:"registration_enabled"`
 	EmailVerifyEnabled               bool                         `json:"email_verify_enabled"`
@@ -1870,6 +1876,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 
 	settings := &service.SystemSettings{
+		GrokDefaultTextModel:             previousSettings.GrokDefaultTextModel,
+		GrokCrossClientModelMapEnabled:   previousSettings.GrokCrossClientModelMapEnabled,
+		OpenAITTFTMode:                   previousSettings.OpenAITTFTMode,
+		ChannelMonitorMode:               previousSettings.ChannelMonitorMode,
+		ChannelMonitorHideThroughput:     previousSettings.ChannelMonitorHideThroughput,
+		ChannelMonitorShowQuota:          previousSettings.ChannelMonitorShowQuota,
 		CompactHomeEnabled:               previousSettings.CompactHomeEnabled,
 		GrokDefaultBaseURLMode:           previousSettings.GrokDefaultBaseURLMode,
 		DefaultPlatformQuotas:            req.DefaultPlatformQuotas,
@@ -2411,6 +2423,24 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	if req.GrokDefaultBaseURLMode != nil {
 		settings.GrokDefaultBaseURLMode = *req.GrokDefaultBaseURLMode
 	}
+	if req.GrokDefaultTextModel != nil {
+		settings.GrokDefaultTextModel = *req.GrokDefaultTextModel
+	}
+	if req.GrokCrossClientModelMapEnabled != nil {
+		settings.GrokCrossClientModelMapEnabled = *req.GrokCrossClientModelMapEnabled
+	}
+	if req.OpenAITTFTMode != nil {
+		settings.OpenAITTFTMode = *req.OpenAITTFTMode
+	}
+	if req.ChannelMonitorMode != nil {
+		settings.ChannelMonitorMode = *req.ChannelMonitorMode
+	}
+	if req.ChannelMonitorHideThroughput != nil {
+		settings.ChannelMonitorHideThroughput = *req.ChannelMonitorHideThroughput
+	}
+	if req.ChannelMonitorShowQuota != nil {
+		settings.ChannelMonitorShowQuota = *req.ChannelMonitorShowQuota
+	}
 	if err := h.settingService.UpdateSettingsWithAuthSourceDefaultsOmitting(c.Request.Context(), settings, authSourceDefaults, omitted); err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -2608,6 +2638,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		HomeContent:                                            updatedSettings.HomeContent,
 		CompactHomeEnabled:                                     updatedSettings.CompactHomeEnabled,
 		GrokDefaultBaseURLMode:                                 updatedSettings.GrokDefaultBaseURLMode,
+		GrokDefaultTextModel:                                   updatedSettings.GrokDefaultTextModel,
+		GrokCrossClientModelMapEnabled:                         updatedSettings.GrokCrossClientModelMapEnabled,
+		OpenAITTFTMode:                                         updatedSettings.OpenAITTFTMode,
 		HideCcsImportButton:                                    updatedSettings.HideCcsImportButton,
 		PurchaseSubscriptionEnabled:                            updatedSettings.PurchaseSubscriptionEnabled,
 		PurchaseSubscriptionURL:                                updatedSettings.PurchaseSubscriptionURL,
@@ -2713,6 +2746,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		PaymentCancelRateLimitMode:                             updatedPaymentCfg.CancelRateLimitMode,
 
 		ChannelMonitorEnabled:                updatedSettings.ChannelMonitorEnabled,
+		ChannelMonitorMode:                   updatedSettings.ChannelMonitorMode,
+		ChannelMonitorHideThroughput:         updatedSettings.ChannelMonitorHideThroughput,
+		ChannelMonitorShowQuota:              updatedSettings.ChannelMonitorShowQuota,
 		ChannelMonitorDefaultIntervalSeconds: updatedSettings.ChannelMonitorDefaultIntervalSeconds,
 
 		AvailableChannelsEnabled:              updatedSettings.AvailableChannelsEnabled,

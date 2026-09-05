@@ -243,11 +243,11 @@ func TestGetModelPricing_OpenAIGPT55FallbackUsesDedicatedPricing(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, pricing)
 	require.InDelta(t, 5e-6, pricing.InputPricePerToken, 1e-12)
-	require.InDelta(t, 10e-6, pricing.InputPricePerTokenPriority, 1e-12)
+	require.InDelta(t, 12.5e-6, pricing.InputPricePerTokenPriority, 1e-12)
 	require.InDelta(t, 30e-6, pricing.OutputPricePerToken, 1e-12)
-	require.InDelta(t, 60e-6, pricing.OutputPricePerTokenPriority, 1e-12)
+	require.InDelta(t, 75e-6, pricing.OutputPricePerTokenPriority, 1e-12)
 	require.InDelta(t, 0.5e-6, pricing.CacheReadPricePerToken, 1e-12)
-	require.InDelta(t, 1e-6, pricing.CacheReadPricePerTokenPriority, 1e-12)
+	require.InDelta(t, 1.25e-6, pricing.CacheReadPricePerTokenPriority, 1e-12)
 	require.Equal(t, 272000, pricing.LongContextInputThreshold)
 	require.InDelta(t, 2.0, pricing.LongContextInputMultiplier, 1e-12)
 	require.InDelta(t, 1.5, pricing.LongContextOutputMultiplier, 1e-12)
@@ -274,7 +274,7 @@ func TestGetModelPricing_OpenAICompactAliasesFallback(t *testing.T) {
 		longContext int
 	}{
 		{model: "openai/gpt5.5", inputPrice: 5e-6, outputPrice: 30e-6, cacheRead: 0.5e-6, longContext: 272000},
-		{model: "openai/gpt5.4", inputPrice: 2.5e-6, outputPrice: 15e-6, cacheRead: 0.25e-6, longContext: 272000},
+		{model: "openai/gpt5.4", inputPrice: 2.5e-6, outputPrice: 15e-6, cacheRead: 0.25e-6, longContext: 0},
 		{model: "gpt5.4-mini", inputPrice: 7.5e-7, outputPrice: 4.5e-6, cacheRead: 7.5e-8, longContext: 0},
 		{model: "gpt5.3codexspark", inputPrice: 1.5e-6, outputPrice: 12e-6, cacheRead: 0.15e-6, longContext: 0},
 	}
