@@ -207,3 +207,11 @@ Reviewed range: `04ce360b0..a13a19410` + 本轮专用 worktree 改动。高风�
 | `TestGroupMediaPricingLooksIncomplete_VideoModelPricesComplete` | 未能分类，不豁免 |
 | `TestPatchGrokResponsesBodyDropsNestedUnsupportedFields` | 未能分类，不豁免 |
 | `TestOAuthService_RefreshAccountToken_WithProxy` | 未能分类，不豁免 |
+## 干净代码检查点复验：4dc2a8a70
+
+- 完整 SHA：`4dc2a8a70ff62c39343c1d48f879d54fae298946`；开始与结束时专用 worktree 均干净，主工作区仍为 `9d9508779` 且干净。
+- 命令：`GOCACHE=/tmp/sub2api-cn-go-validation.TG4x3Q GOMAXPROCS=4 go -C backend test -json -tags unit ./internal/service ./internal/handler/admin ./internal/handler/dto ./internal/server ./internal/repository -timeout 6m -count=1`。
+- admin、DTO、server、repository 四包全部 PASS；Service 执行 8,042 个顶层测试，7,982 PASS / 60 FAIL，耗时 220.195 秒。未跳过任何测试，未发生阻断测试进程的 panic。
+- 逐项原始证据：`/tmp/sub2api-cn-checkpoint-4dc2a8a70.jsonl`。前述第 9 轮 66 失败是较早工作树快照，不是本提交最终计数；本节以 60 失败为准。
+- 本代码检查点定向 race `/tmp/sub2api-cn-race-round5.log` PASS，构建 `/tmp/sub2api-cn-build-round4.log` PASS；frontend 与 `a13a19410` 的代码差异为零。
+- 结论仍 **INCONCLUSIVE / 禁止发布**，目标未完成。下一批应先处理余下 429 作用域/重试合同、裸 SSE 错误、Grok 兼容与搜索用量调用点，再复验 Kiro/token cache 等；模型级限额还需核实上游派生名字与真实调度模型键的一致性。不得在没有逐项证据时把这 60 项统称历史失败。
