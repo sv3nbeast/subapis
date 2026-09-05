@@ -4340,6 +4340,7 @@ import { useAppStore } from "@/stores/app";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { adminAPI } from "@/api/admin";
 import type { AdminGroup, GroupPlatform, SubscriptionType } from "@/types";
+import { GROUP_PLATFORM_OPTIONS } from "@/constants/platforms";
 import type { Column } from "@/components/common/types";
 import AppLayout from "@/components/layout/AppLayout.vue";
 import TablePageLayout from "@/components/layout/TablePageLayout.vue";
@@ -4651,27 +4652,11 @@ const exclusiveOptions = computed(() => [
   { value: "false", label: t("admin.groups.nonExclusive") },
 ]);
 
-const platformOptions = computed(() => [
-  { value: "anthropic", label: "Anthropic" },
-  { value: "openai", label: "OpenAI" },
-  { value: "gemini", label: "Gemini" },
-  { value: "antigravity", label: "Antigravity" },
-  { value: "kiro", label: "Kiro" },
-  { value: "droid", label: "Droid" },
-  { value: "grok", label: "Grok" },
-  { value: "composite", label: t("admin.groups.platforms.composite") },
-]);
+const platformOptions = computed(() => [...GROUP_PLATFORM_OPTIONS]);
 
 const platformFilterOptions = computed(() => [
   { value: "", label: t("admin.groups.allPlatforms") },
-  { value: "anthropic", label: "Anthropic" },
-  { value: "openai", label: "OpenAI" },
-  { value: "gemini", label: "Gemini" },
-  { value: "antigravity", label: "Antigravity" },
-  { value: "kiro", label: "Kiro" },
-  { value: "droid", label: "Droid" },
-  { value: "grok", label: "Grok" },
-  { value: "composite", label: t("admin.groups.platforms.composite") },
+  ...GROUP_PLATFORM_OPTIONS,
 ]);
 
 const editStatusOptions = computed(() => [
@@ -4877,7 +4862,7 @@ const editMessagesDispatchDefaults = createDefaultMessagesDispatchFormState();
 const modelsListCandidatesTracker = createModelsListCandidatesTracker();
 
 const canConfigureModelsList = (platform: GroupPlatform) =>
-  ["anthropic", "openai", "gemini", "antigravity", "kiro", "droid", "composite"].includes(platform);
+  GROUP_PLATFORM_OPTIONS.some((option) => option.value === platform);
 
 const loadModelsListCandidates = async (
   mode: "create" | "edit",

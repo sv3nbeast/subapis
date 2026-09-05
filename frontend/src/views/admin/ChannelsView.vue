@@ -630,6 +630,8 @@ import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import PricingEntryCard from '@/components/admin/channel/PricingEntryCard.vue'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
+import { COMPOSITE_ROUTE_PLATFORM_OPTIONS, CONCRETE_PLATFORM_VALUES } from '@/constants/platforms'
+import { platformBadgeLightClass, platformTextClass } from '@/utils/platformColors'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -740,30 +742,14 @@ const form = reactive({
 let abortController: AbortController | null = null
 
 // ── Platform config ──
-const platformOrder: GroupPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'kiro', 'droid', 'grok']
+const platformOrder: GroupPlatform[] = [...CONCRETE_PLATFORM_VALUES]
 
 function getPlatformTextColor(platform: string): string {
-  switch (platform) {
-    case 'anthropic': return 'text-orange-600 dark:text-orange-400'
-    case 'openai': return 'text-emerald-600 dark:text-emerald-400'
-    case 'gemini': return 'text-blue-600 dark:text-blue-400'
-    case 'antigravity': return 'text-purple-600 dark:text-purple-400'
-    case 'kiro': return 'text-amber-600 dark:text-amber-400'
-    case 'droid': return 'text-cyan-600 dark:text-cyan-400'
-    default: return 'text-gray-600 dark:text-gray-400'
-  }
+  return platformTextClass(platform)
 }
 
 function getRateBadgeClass(platform: string): string {
-  switch (platform) {
-    case 'anthropic': return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
-    case 'openai': return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
-    case 'gemini': return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
-    case 'antigravity': return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
-    case 'kiro': return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
-    case 'droid': return 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300'
-    default: return 'bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-400'
-  }
+  return platformBadgeLightClass(platform)
 }
 
 // ── Helpers ──
@@ -815,7 +801,12 @@ function togglePlatform(platform: GroupPlatform) {
 }
 
 function getGroupsForPlatform(platform: GroupPlatform): AdminGroup[] {
-  return allGroups.value.filter(g => g.platform === platform)
+  return allGroups.value.filter(g => channelGroupSupportsPlatform(g.platform, platform))
+}
+
+function channelGroupSupportsPlatform(groupPlatform: GroupPlatform | undefined, platform: GroupPlatform): boolean {
+  return groupPlatform === platform ||
+    (groupPlatform === 'composite' && COMPOSITE_ROUTE_PLATFORM_OPTIONS.some(option => option.value === platform))
 }
 
 // ── Group helpers ──
@@ -1103,7 +1094,7 @@ function formToAPI(): {
     delete features_config.codex_image_generation_bridge
   }
 
-  return { group_ids, model_pricing, model_mapping, features_config, account_stats_pricing_rules }
+  return { group_ids: [...new Set(group_ids)], model_pricing, model_mapping, features_config, account_stats_pricing_rules }
 }
 
 function apiToForm(channel: Channel): PlatformSection[] {
@@ -1117,7 +1108,9 @@ function apiToForm(channel: Channel): PlatformSection[] {
   const activePlatforms = new Set<GroupPlatform>()
   for (const gid of channel.group_ids || []) {
     const p = groupPlatformMap.get(gid)
-    if (p) activePlatforms.add(p)
+    if (p === 'composite') {
+      COMPOSITE_ROUTE_PLATFORM_OPTIONS.forEach(option => activePlatforms.add(option.value))
+    } else if (p) activePlatforms.add(p)
   }
   for (const p of channel.model_pricing || []) {
     if (p.platform) activePlatforms.add(p.platform as GroupPlatform)
@@ -1144,7 +1137,7 @@ function apiToForm(channel: Channel): PlatformSection[] {
   for (const platform of platformOrder) {
     if (!activePlatforms.has(platform)) continue
 
-    const groupIds = (channel.group_ids || []).filter(gid => groupPlatformMap.get(gid) === platform)
+    const groupIds = (channel.group_ids || []).filter(gid => channelGroupSupportsPlatform(groupPlatformMap.get(gid), platform))
     const mapping = (channel.model_mapping || {})[platform] || {}
     const pricing = (channel.model_pricing || [])
       .filter(p => (p.platform || 'anthropic') === platform)
@@ -1153,11 +1146,11 @@ function apiToForm(channel: Channel): PlatformSection[] {
       .filter(rule => {
         const rulePlatform = rule.pricing?.find(p => p.platform)?.platform
         if (rulePlatform) return rulePlatform === platform
-        return (rule.group_ids || []).some(gid => groupPlatformMap.get(gid) === platform)
+        return (rule.group_ids || []).some(gid => channelGroupSupportsPlatform(groupPlatformMap.get(gid), platform))
       })
       .map(rule => ({
         name: rule.name || '',
-        group_ids: (rule.group_ids || []).filter(gid => groupPlatformMap.get(gid) === platform),
+        group_ids: (rule.group_ids || []).filter(gid => channelGroupSupportsPlatform(groupPlatformMap.get(gid), platform)),
         account_ids_input: formatAccountIDs(rule.account_ids),
         pricing: (rule.pricing || [])
           .filter(p => (p.platform || platform) === platform)

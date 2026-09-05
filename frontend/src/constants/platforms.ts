@@ -23,8 +23,23 @@ export const CONCRETE_PLATFORM_OPTIONS = [
   { value: 'deepseek', label: 'DeepSeek' }
 ] as const satisfies readonly PlatformOption<AccountPlatform>[]
 
+/** Stable platform order shared by quota, channel, and dashboard surfaces. */
+export const CONCRETE_PLATFORM_VALUES = CONCRETE_PLATFORM_OPTIONS.map(
+  (option) => option.value
+)
+
 /** Platforms that can own a group. */
 export const GROUP_PLATFORM_OPTIONS = [
   ...CONCRETE_PLATFORM_OPTIONS,
   { value: 'composite', label: 'Composite' }
 ] as const satisfies readonly PlatformOption<GroupPlatform>[]
+
+/**
+ * Concrete platforms accepted by CompositeModelRoute.target_platform.
+ * Kiro and Droid can own direct groups, but are not composite route targets.
+ */
+const COMPOSITE_ROUTE_EXCLUDED_PLATFORMS = new Set<AccountPlatform>(['kiro', 'droid'])
+
+export const COMPOSITE_ROUTE_PLATFORM_OPTIONS = CONCRETE_PLATFORM_OPTIONS.filter(
+  (option) => !COMPOSITE_ROUTE_EXCLUDED_PLATFORMS.has(option.value)
+)

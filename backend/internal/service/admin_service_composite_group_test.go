@@ -6,7 +6,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/stretchr/testify/require"
 )
 
@@ -206,14 +205,21 @@ func TestAdminService_CompositeModelsListCandidatesIncludeConcreteAccountMapping
 	require.Contains(t, candidates, "gemini-2.5-flash")
 }
 
-// 独立 CN 分组的模型列表候选沿用 default 分支的 Claude 默认列表；
-// composite 支持不得改变独立分组的候选语义。
-func TestAdminService_CNProviderModelsListCandidatesKeepClaudeDefaults(t *testing.T) {
-	want := make([]string, 0, len(claude.DefaultModels))
-	for _, model := range claude.DefaultModels {
-		want = append(want, model.ID)
-	}
+// Only verified account mappings should populate CN group candidates.
+func TestAdminService_CNProviderModelsListCandidatesUseBoundAccounts(t *testing.T) {
 	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek} {
-		require.Equal(t, want, defaultModelsListCandidateIDs(platform), "platform=%s", platform)
+		t.Run(platform, func(t *testing.T) {
+			require.Empty(t, defaultModelsListCandidateIDs(platform))
+			svc := &adminServiceImpl{
+				groupRepo: &groupRepoStubForAdmin{getByIDByID: map[int64]*Group{99: {ID: 99, Platform: platform}}},
+				accountRepo: &accountRepoStubForCompositeModelsList{accounts: []Account{
+					{Platform: platform, Credentials: map[string]any{"model_mapping": map[string]any{"public-model": "upstream-model"}}},
+					{Platform: PlatformAnthropic, Credentials: map[string]any{"model_mapping": map[string]any{"claude-other": "claude-other"}}},
+				}},
+			}
+			candidates, err := svc.GetGroupModelsListCandidates(context.Background(), 99, platform)
+			require.NoError(t, err)
+			require.Equal(t, []string{"public-model"}, candidates)
+		})
 	}
 }

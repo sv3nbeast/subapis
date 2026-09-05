@@ -96,9 +96,47 @@ const OAuthAuthorizationFlowStub = defineComponent({
   `,
 })
 
-function mountModal(proxies: Proxy[] = []) {
+const GroupSelectorStub = defineComponent({
+  name: 'GroupSelector',
+  props: {
+    modelValue: {
+      type: Array,
+      default: () => [],
+    },
+  },
+  emits: ['update:modelValue'],
+  template: `
+    <button
+      type="button"
+      data-testid="select-pricing-groups"
+      @click="$emit('update:modelValue', [1, 2])"
+    >
+      groups
+    </button>
+  `,
+})
+
+const ModelWhitelistSelectorStub = defineComponent({
+  name: 'ModelWhitelistSelector',
+  props: {
+    modelValue: {
+      type: Array,
+      default: () => [],
+    },
+    platform: String,
+    syncCredentials: Object,
+  },
+  emits: ['update:modelValue', 'upstream-synced'],
+  template: `<button
+    type="button"
+    data-testid="model-whitelist-selector"
+    @click="$emit('update:modelValue', ['public-glm']); $emit('upstream-synced')"
+  >models</button>`,
+})
+
+function mountModal(groups: any[] = [], proxies: Proxy[] = []) {
   return mount(CreateAccountModal, {
-    props: { show: true, proxies, groups: [] },
+    props: { show: true, proxies, groups },
     global: {
       stubs: {
         BaseDialog: BaseDialogStub,
@@ -450,7 +488,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
   })
 
   it('keeps the selected account proxy when stable mode is enabled', async () => {
-    const wrapper = mountModal([
+    const wrapper = mountModal([], [
       {
         id: 901,
         name: 'fixed-residential',

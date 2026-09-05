@@ -9,11 +9,7 @@ const source = readFileSync(resolve(currentDir, "../GroupsView.vue"), "utf8");
 
 describe("GroupsView composite group integration", () => {
   it("keeps composite creation, filtering, routing and cross-platform account copy wired", () => {
-    expect(
-      source.match(
-        /value: "composite", label: t\("admin\.groups\.platforms\.composite"\)/g,
-      ),
-    ).toHaveLength(2);
+    expect(source.match(/\.\.\.GROUP_PLATFORM_OPTIONS/g)).toHaveLength(2);
     expect(source).toContain('data-testid="group-composite-routes"');
     expect(source).toContain("<CompositeRoutesModal");
     expect(source).toContain(
@@ -23,6 +19,6 @@ describe("GroupsView composite group integration", () => {
       source.indexOf("const canConfigureModelsList"),
       source.indexOf("const loadModelsListCandidates"),
     );
-    expect(modelsListGuard).toContain('"composite"');
+    expect(modelsListGuard).toContain('GROUP_PLATFORM_OPTIONS.some');
   });
 });

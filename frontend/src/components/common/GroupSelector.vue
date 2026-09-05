@@ -73,6 +73,7 @@ import { useI18n } from 'vue-i18n'
 import GroupBadge from './GroupBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import type { AdminGroup, GroupPlatform } from '@/types'
+import { COMPOSITE_ROUTE_PLATFORM_OPTIONS } from '@/constants/platforms'
 
 const { t } = useI18n()
 
@@ -106,6 +107,9 @@ const filteredGroups = computed(() => {
   let result: AdminGroup[] = props.groups
   if (props.platform) {
     const allowedPlatforms = new Set<GroupPlatform>([props.platform])
+    if (COMPOSITE_ROUTE_PLATFORM_OPTIONS.some((option) => option.value === props.platform)) {
+      allowedPlatforms.add('composite')
+    }
     if (props.mixedScheduling) {
       if (props.platform === 'antigravity') {
         allowedPlatforms.add('anthropic')

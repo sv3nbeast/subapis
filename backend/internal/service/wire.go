@@ -916,6 +916,7 @@ func ProvideAdminService(
 	affiliateService *AffiliateService,
 	compositeRouteRepo CompositeModelRouteRepository,
 	compositeResolver *CompositeRouteResolver,
+	channelCacheInvalidator ChannelCacheInvalidator,
 ) AdminService {
 	svc := NewAdminService(
 		userRepo,
@@ -942,6 +943,7 @@ func ProvideAdminService(
 		impl.affiliateService = affiliateService
 		impl.compositeRouteRepo = compositeRouteRepo
 		impl.compositeResolver = compositeResolver
+		impl.channelCacheInvalidator = channelCacheInvalidator
 	}
 	return svc
 }

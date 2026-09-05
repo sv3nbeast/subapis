@@ -733,16 +733,48 @@ func RemovePreviousResponseIDFromBody(body []byte) []byte {
 // validateChannelConfig 校验渠道的定价和映射配置（冲突检测 + 区间校验 + 计费模式校验）。
 // Create 和 Update 共用此函数，避免重复。
 func validateChannelConfig(pricing []ChannelModelPricing, mapping map[string]map[string]string) error {
+	if err := validatePricingEntries(pricing); err != nil {
+		return err
+	}
+	if err := validateNoConflictingMappings(mapping); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validatePricingEntries(pricing []ChannelModelPricing) error {
 	if err := validateNoConflictingModels(pricing); err != nil {
 		return err
 	}
 	if err := validatePricingIntervals(pricing); err != nil {
 		return err
 	}
-	if err := validateNoConflictingMappings(mapping); err != nil {
+	if err := validatePricingBillingMode(pricing); err != nil {
 		return err
 	}
-	return validatePricingBillingMode(pricing)
+	return validatePricingTimePricing(pricing)
+}
+
+func validatePricingTimePricing(pricing []ChannelModelPricing) error {
+	for i := range pricing {
+		config := pricing[i].TimePricing
+		if config == nil {
+			continue
+		}
+		if len(config.Periods) == 0 {
+			pricing[i].TimePricing = nil
+			continue
+		}
+		mode := pricing[i].BillingMode
+		if mode != "" && mode != BillingModeToken {
+			return infraerrors.BadRequest("TIME_PRICING_UNSUPPORTED_MODE", "time pricing only supports token billing mode")
+		}
+		if err := validateChannelTimePricing(config); err != nil {
+			return infraerrors.BadRequest("INVALID_TIME_PRICING", fmt.Sprintf(
+				"invalid time pricing for platform '%s' models %v: %v", pricing[i].Platform, pricing[i].Models, err))
+		}
+	}
+	return nil
 }
 
 func validateAccountStatsPricingRules(rules []AccountStatsPricingRule) error {

@@ -71,4 +71,19 @@ describe('UserPlatformQuotaCell', () => {
     expect(text.indexOf('anthropic')).toBeLessThan(text.indexOf('gemini'))
     expect(text).not.toContain('openai')
   })
+
+  it('国产平台按共享平台顺序展示', () => {
+    const w = mount(UserPlatformQuotaCell, {
+      props: {
+        quotas: [
+          item({ platform: 'deepseek', daily_limit_usd: 30 }),
+          item({ platform: 'kimi', daily_limit_usd: 10 }),
+          item({ platform: 'zhipu', daily_limit_usd: 20 }),
+        ],
+      },
+    })
+    const text = w.text()
+    expect(text.indexOf('kimi')).toBeLessThan(text.indexOf('zhipu'))
+    expect(text.indexOf('zhipu')).toBeLessThan(text.indexOf('deepseek'))
+  })
 })

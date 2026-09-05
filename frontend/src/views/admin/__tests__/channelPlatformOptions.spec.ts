@@ -3,12 +3,9 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 describe('Composite channel platform options', () => {
-  it('includes the CN concrete providers for pricing and model mapping', () => {
+  it('derives pricing and model-mapping sections from the full platform catalog', () => {
     const source = readFileSync(resolve('src/views/admin/ChannelsView.vue'), 'utf8')
-    const declaration = source.match(/const compositePlatforms:[^=]+=[^\n]+/)?.[0]
-
-    expect(declaration).toContain("'kimi'")
-    expect(declaration).toContain("'zhipu'")
-    expect(declaration).toContain("'deepseek'")
+    expect(source).toMatch(/import .*CONCRETE_PLATFORM_VALUES.*from '@\/constants\/platforms'/)
+    expect(source).toMatch(/platformOrder[^=]*=\s*\[\.\.\.CONCRETE_PLATFORM_VALUES\]/)
   })
 })

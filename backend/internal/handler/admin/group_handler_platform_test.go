@@ -26,7 +26,7 @@ func bindGroupPlatformJSON(t *testing.T, target any, body string) error {
 
 func TestGroupPlatformBinding_AllowedPlatforms(t *testing.T) {
 	allowed := []string{
-		"anthropic", "openai", "gemini", "antigravity", "grok",
+		"anthropic", "openai", "gemini", "antigravity", "kiro", "droid", "grok",
 		"kimi", "zhipu", "deepseek", "composite",
 	}
 	for _, platform := range allowed {

@@ -27,7 +27,11 @@ var accountSchedulingThresholdsCache atomic.Value
 var accountSchedulingThresholdsSF singleflight.Group
 
 func defaultAccountSchedulingThresholds() map[string]int {
-	return map[string]int{PlatformOpenAI: 100, PlatformAnthropic: 100, PlatformGrok: 100}
+	out := make(map[string]int, len(AllowedSchedulingThresholdPlatforms))
+	for _, platform := range AllowedSchedulingThresholdPlatforms {
+		out[platform] = 100
+	}
+	return out
 }
 
 func cloneAccountSchedulingThresholds(input map[string]int) map[string]int {

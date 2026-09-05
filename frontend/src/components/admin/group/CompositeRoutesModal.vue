@@ -359,6 +359,7 @@ import PlatformIcon from "@/components/common/PlatformIcon.vue";
 import Select from "@/components/common/Select.vue";
 import Icon from "@/components/icons/Icon.vue";
 import { useAppStore } from "@/stores/app";
+import { COMPOSITE_ROUTE_PLATFORM_OPTIONS } from "@/constants/platforms";
 import type {
   AdminGroup,
   CompositeModelRoute,
@@ -425,13 +426,7 @@ const dialogTitle = computed(() =>
     : t("admin.groups.compositeRoutes.title"),
 );
 
-const platformOptions = [
-  { value: "anthropic", label: "Anthropic" },
-  { value: "openai", label: "OpenAI" },
-  { value: "gemini", label: "Gemini" },
-  { value: "antigravity", label: "Antigravity" },
-  { value: "grok", label: "Grok" },
-];
+const platformOptions = COMPOSITE_ROUTE_PLATFORM_OPTIONS;
 
 const endpointOptions = computed(() => [
   { value: "any", label: t("admin.groups.compositeRoutes.endpoints.any") },

@@ -715,6 +715,7 @@ type adminServiceImpl struct {
 	affiliateService               adminRechargeAffiliateAccruer
 	compositeRouteRepo             CompositeModelRouteRepository
 	compositeResolver              *CompositeRouteResolver
+	channelCacheInvalidator        ChannelCacheInvalidator
 }
 
 type adminRechargeAffiliateAccruer interface {
@@ -2252,6 +2253,10 @@ func defaultModelsListCandidateIDs(platform string) []string {
 		return droid.DefaultModelIDs()
 	case PlatformGrok:
 		return xai.DefaultModelIDs()
+	case PlatformKimi, PlatformZhipu, PlatformDeepseek:
+		// CN catalogs depend on the account/plan. Bound account mappings are
+		// added by GetGroupModelsListCandidates; never offer Claude defaults.
+		return []string{}
 	default:
 		ids := make([]string, 0, len(claude.DefaultModels))
 		for _, model := range claude.DefaultModels {
@@ -2297,6 +2302,10 @@ func validateKiroCacheEmulationRatioInputs(ratio, creationRatio, readRatio *floa
 }
 
 func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupInput) (*Group, error) {
+	modelPricing, err := normalizeGroupModelPricing(NormalizeGroupPlatform(input.Platform), input.ModelPricing)
+	if err != nil {
+		return nil, err
+	}
 	if input.RateMultiplier <= 0 {
 		return nil, errors.New("rate_multiplier must be > 0")
 	}
@@ -2530,6 +2539,8 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	}
 	NormalizeGroupRuntimeFields(group)
 	sanitizeGroupMessagesDispatchFields(group)
+	group.ModelPricing = modelPricing
+	group.LongContextPricingEnabled = input.LongContextPricingEnabled
 	if err := s.groupRepo.Create(ctx, group); err != nil {
 		return nil, err
 	}
@@ -2663,6 +2674,7 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if err != nil {
 		return nil, err
 	}
+	previousPlatform := group.Platform
 
 	if input.Name != "" {
 		group.Name = input.Name
@@ -2921,8 +2933,21 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	NormalizeGroupRuntimeFields(group)
 	sanitizeGroupMessagesDispatchFields(group)
 
+	if input.ModelPricing != nil {
+		modelPricing, err := normalizeGroupModelPricing(group.Platform, *input.ModelPricing)
+		if err != nil {
+			return nil, err
+		}
+		group.ModelPricing = modelPricing
+	}
+	if input.LongContextPricingEnabled != nil {
+		group.LongContextPricingEnabled = *input.LongContextPricingEnabled
+	}
 	if err := s.groupRepo.Update(ctx, group); err != nil {
 		return nil, err
+	}
+	if group.Platform != previousPlatform && s.channelCacheInvalidator != nil {
+		s.channelCacheInvalidator.InvalidateCache()
 	}
 
 	if s.authCacheInvalidator != nil {

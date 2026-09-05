@@ -117,6 +117,20 @@ function mountKiroBridgeSelector(enabled: boolean) {
 }
 
 describe('GroupSelector mixed scheduling filtering', () => {
+  it.each(['kimi', 'zhipu', 'deepseek'])('binds %s accounts to direct or composite groups, not unrelated groups', async (platform) => {
+    const wrapper = mountSelector(platform, false)
+    await wrapper.setProps({ groups: [
+      group(10, 'CN direct', platform),
+      group(11, 'Unified', 'composite'),
+      group(12, 'Unrelated OpenAI', 'openai')
+    ] })
+    expect(wrapper.text()).toContain('CN direct')
+    expect(wrapper.text()).toContain('Unified')
+    expect(wrapper.text()).not.toContain('Unrelated OpenAI')
+    await wrapper.findAll('input[type="checkbox"]')[1].setValue(true)
+    expect(wrapper.emitted('update:modelValue')?.[0]).toEqual([[11]])
+    wrapper.unmount()
+  })
   it('shows Anthropic groups for Kiro when mixed scheduling is enabled', () => {
     const wrapper = mountSelector('kiro', true)
 

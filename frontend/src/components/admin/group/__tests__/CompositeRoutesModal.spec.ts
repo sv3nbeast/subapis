@@ -155,6 +155,23 @@ describe("CompositeRoutesModal", () => {
     expect(listCompositeRoutes).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['kimi', 'zhipu', 'deepseek'])('saves a %s composite route from the rendered picker', async (platform) => {
+    const wrapper = mountModal();
+    await flushPromises();
+    const picker = wrapper.findAll('select').find(s =>
+      s.findAll('option').some(o => o.attributes('value') === 'zhipu')
+    );
+    expect(picker).toBeDefined();
+    await picker!.setValue(platform);
+    await wrapper.get('[data-testid="composite-public-model"]').setValue('public-cn');
+    await wrapper.get('[data-testid="composite-route-form"]').trigger('submit');
+    await flushPromises();
+    expect(createCompositeRoute).toHaveBeenCalledWith(group.id, expect.objectContaining({
+      target_platform: platform, public_model: 'public-cn'
+    }));
+    wrapper.unmount();
+  });
+
   it("updates and deletes an existing route", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const wrapper = mountModal();

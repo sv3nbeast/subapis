@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AdminGroup } from '@/types'
 import GroupsView from '@/views/admin/GroupsView.vue'
+import { adminAPI } from '@/api/admin'
 
 const {
   listGroups,
@@ -220,6 +221,29 @@ describe('GroupsView duplicate action', () => {
     expect(duplicateGroup).toHaveBeenCalledWith(42)
     expect(showSuccess).toHaveBeenCalledWith('admin.groups.duplicateSuccess')
     expect(listGroups).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it.each(['kimi', 'zhipu', 'deepseek'])('creates a %s group through the rendered platform selector', async (platform) => {
+    vi.mocked(adminAPI.groups.create).mockReset().mockResolvedValue({ ...sourceGroup, platform })
+    getModelsListCandidates.mockResolvedValue(['public-model'])
+    const wrapper = mountView()
+    await flushPromises()
+    const filter = wrapper.findAllComponents({ name: 'Select' })[0]
+    expect(filter.props('options').map((o: any) => o.value)).toContain(platform)
+    await wrapper.get('[data-tour="groups-create-btn"]').trigger('click')
+    await wrapper.get('[data-tour="group-form-name"]').setValue('CN group')
+    const selector = wrapper.getComponent('[data-tour="group-form-platform"]')
+    expect(selector.props('options').map((o: any) => o.value)).toContain(platform)
+    selector.vm.$emit('update:modelValue', platform)
+    await flushPromises()
+    expect(getModelsListCandidates).toHaveBeenCalledWith(0, platform)
+    expect(wrapper.text()).toContain('public-model')
+    await wrapper.get('#create-group-form').trigger('submit')
+    await flushPromises()
+    expect(adminAPI.groups.create).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'CN group', platform, rate_multiplier: 1
+    }))
     wrapper.unmount()
   })
 

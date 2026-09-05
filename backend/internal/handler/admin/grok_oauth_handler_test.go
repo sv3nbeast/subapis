@@ -4,7 +4,6 @@ package admin
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
@@ -106,13 +104,14 @@ func TestGrokOAuthHandlerQueryQuotaProbesUpstream(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"source":"billing_probe"`)
 	require.Contains(t, rec.Body.String(), `"usage_percent":49`)
 	require.NotContains(t, rec.Body.String(), "access-token")
-	require.Len(t, upstream.requests, 2)
+	require.Len(t, upstream.requests, 3)
 	requestURLs := make([]string, 0, len(upstream.requests))
 	for _, upstreamReq := range upstream.requests {
 		requestURLs = append(requestURLs, upstreamReq.URL.String())
 		require.Equal(t, "Bearer access-token", upstreamReq.Header.Get("Authorization"))
 	}
-	require.ElementsMatch(t, []string{xai.BillingCreditsURL, xai.BuildBillingURL(false)}, requestURLs)
+	// Credits/monthly probes plus the local model-entitlement discovery.
+	require.ElementsMatch(t, []string{xai.BillingCreditsURL, xai.DefaultCLIBaseURL + "/models", xai.BuildBillingURL(false)}, requestURLs)
 	require.Empty(t, upstream.lastBody)
 	require.NotNil(t, repo.updates[42])
 }

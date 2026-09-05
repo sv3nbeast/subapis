@@ -112,8 +112,8 @@ func TestUpdateUserPlatformQuotas_Success(t *testing.T) {
 	if len(repo.upsertCalls) != 1 {
 		t.Fatalf("UpsertForUser should be called once, got %d", len(repo.upsertCalls))
 	}
-	// upsert 记录数 = 请求体中给出的平台数（未给出的平台不落库）。
-	if repo.upsertCalls[0].userID != 42 || len(repo.upsertCalls[0].records) != 5 {
+	// 全量替换：未提供的平台以无限额记录补齐。
+	if repo.upsertCalls[0].userID != 42 || len(repo.upsertCalls[0].records) != len(service.AllowedQuotaPlatforms) {
 		t.Errorf("unexpected upsert call: %+v", repo.upsertCalls[0])
 	}
 	// 缓存失效：对所有允许平台统一失效，避免平台列表扩展后漏掉新增平台。
@@ -158,7 +158,7 @@ func TestUpdateUserPlatformQuotas_RejectsNegativeLimit(t *testing.T) {
 func TestUpdateUserPlatformQuotas_RejectsTooManyEntries(t *testing.T) {
 	h := buildTestHandler(&upsertCapturingQuotaRepo{}, &billingCacheStub{})
 	body := `{"quotas":[
-		{"platform":"anthropic"},{"platform":"openai"},{"platform":"gemini"},{"platform":"antigravity"},{"platform":"kiro"},{"platform":"droid"},{"platform":"anthropic"}
+		{"platform":"anthropic"},{"platform":"openai"},{"platform":"gemini"},{"platform":"antigravity"},{"platform":"kiro"},{"platform":"droid"},{"platform":"grok"},{"platform":"kimi"},{"platform":"zhipu"},{"platform":"deepseek"},{"platform":"anthropic"}
 	]}`
 	c, w := putReq(t, body)
 	h.UpdateUserPlatformQuotas(c)
@@ -178,7 +178,11 @@ func TestUpdateUserPlatformQuotas_AllowsAllQuotaPlatforms(t *testing.T) {
 		{"platform":"gemini","daily_limit_usd":3},
 		{"platform":"antigravity","daily_limit_usd":4},
 		{"platform":"kiro","daily_limit_usd":5},
-		{"platform":"droid","daily_limit_usd":6}
+		{"platform":"droid","daily_limit_usd":6},
+		{"platform":"grok","daily_limit_usd":7},
+		{"platform":"kimi","daily_limit_usd":8},
+		{"platform":"zhipu","daily_limit_usd":9},
+		{"platform":"deepseek","daily_limit_usd":10}
 	]}`
 	c, w := putReq(t, body)
 	h.UpdateUserPlatformQuotas(c)

@@ -243,6 +243,14 @@ export function providerGradient(provider: string): string {
       return 'bg-gradient-to-br from-sky-50 to-indigo-100 dark:from-sky-500/10 dark:to-indigo-500/20'
     case PROVIDER_GROK:
       return 'bg-gradient-to-br from-zinc-100 to-zinc-200 dark:from-zinc-500/10 dark:to-zinc-500/20'
+    case PROVIDER_ANTIGRAVITY:
+      return 'bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-500/10 dark:to-purple-500/20'
+    case PROVIDER_KIMI:
+      return 'bg-gradient-to-br from-pink-50 to-pink-100 dark:from-pink-500/10 dark:to-pink-500/20'
+    case PROVIDER_ZHIPU:
+      return 'bg-gradient-to-br from-indigo-50 to-indigo-100 dark:from-indigo-500/10 dark:to-indigo-500/20'
+    case PROVIDER_DEEPSEEK:
+      return 'bg-gradient-to-br from-teal-50 to-teal-100 dark:from-teal-500/10 dark:to-teal-500/20'
     default:
       return 'bg-gradient-to-br from-gray-100 to-gray-200 dark:from-dark-700 dark:to-dark-600'
   }

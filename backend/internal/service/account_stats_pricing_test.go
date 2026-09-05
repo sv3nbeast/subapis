@@ -42,6 +42,7 @@ func TestAccountStatsPricing_CustomRulePriority(t *testing.T) {
 		UsageTokens{InputTokens: 100, OutputTokens: 50},
 		1,
 		99,
+		"",
 	)
 
 	require.NotNil(t, got)
@@ -66,6 +67,7 @@ func TestAccountStatsPricing_ApplyPricingUsesTotalCost(t *testing.T) {
 		UsageTokens{InputTokens: 100},
 		1,
 		0.75,
+		"",
 	)
 
 	require.NotNil(t, got)
@@ -94,6 +96,7 @@ func TestAccountStatsPricing_ModelFileFallback(t *testing.T) {
 		UsageTokens{InputTokens: 100, OutputTokens: 50},
 		1,
 		99,
+		"",
 	)
 
 	require.NotNil(t, got)

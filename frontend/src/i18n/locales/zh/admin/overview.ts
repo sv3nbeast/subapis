@@ -919,6 +919,10 @@ export default {
         antigravity: 'Antigravity',
         grok: 'Grok',
         kiro: 'Kiro',
+        droid: 'Droid',
+        kimi: 'Kimi',
+        zhipu: '智谱 GLM',
+        deepseek: 'DeepSeek',
         composite: '组合分组',
       },
       kiroCache: {

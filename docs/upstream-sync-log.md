@@ -2965,6 +2965,15 @@ a7acd9e3e 回退：移除temporary Kiro full capture
 d0869d329 debug(kiro): scope full capture 到 request 96aa8a81
 0608915b7 debug(kiro): scope admin capture 到 affected key
 aa4a3509c debug(kiro): separate translated 与 client stream capture
+
+## 2026-09-05 国产平台合并漏项修复检查点
+
+- 基线：04ce360b0；三方对照：e05e26746 的两个父提交。
+- 确认官方分组平台目录引用在融合时丢失，并发现组合路由/绑组、渠道定价、平台额度、设置保存、分组价格 JSON 合同、CN 别名计费和客户端配置入口的关联漏项。
+- 保留 Kiro/Droid 本地业务扩展，不改动生产、不新增未经探测的上游模型/价格。
+- 定向前端 261 项通过；后端默认 Service/Repository/Ent/Migrations 全包、admin unit 全包通过；类型检查/构建通过。
+- 全量前端仍有 22 项失败（未修改基线为 54 项）；Service unit 集仍被缺失符号阻断。尚未满足最终门禁，禁止发布，不执行 promote。
+- 完整清单、证据与剩余项：[cn-platform-sync-audit-20260905.md](cn-platform-sync-audit-20260905.md)。
 4ca7bb3ad debug(kiro): capture admin upstream round trip
 4805d13d7 修复（网关）：clarify AWS capacity message
 

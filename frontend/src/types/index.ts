@@ -623,7 +623,7 @@ export interface PaginationConfig {
 
 // ==================== API Key & Group Types ====================
 
-export type KnownGroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'kiro' | 'droid' | 'grok'
+export type KnownGroupPlatform = AccountPlatform
 // Keep known values discoverable while allowing newly added backend platforms
 // to work with template profiles before the frontend is released again.
 export type GroupPlatform = KnownGroupPlatform | 'composite' | (string & {})

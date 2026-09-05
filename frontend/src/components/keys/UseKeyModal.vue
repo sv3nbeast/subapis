@@ -404,11 +404,13 @@ const builtInClientTabs = computed((): ClientTabConfig[] => {
     }
     case 'gemini':
       return [
+        { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon, kind: 'codex', sortOrder: 30 },
         { id: 'gemini', label: t('keys.useKeyModal.cliTabs.geminiCli'), icon: SparkleIcon, kind: 'gemini_cli', sortOrder: 10 },
         { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon, kind: 'opencode', sortOrder: 20 }
       ]
     case 'antigravity':
       return [
+        { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon, kind: 'codex', sortOrder: 40 },
         { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon, kind: 'claude_code', sortOrder: 10 },
         { id: 'gemini', label: t('keys.useKeyModal.cliTabs.geminiCli'), icon: SparkleIcon, kind: 'gemini_cli', sortOrder: 20 },
         { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon, kind: 'opencode', sortOrder: 30 }
@@ -422,6 +424,7 @@ const builtInClientTabs = computed((): ClientTabConfig[] => {
       ]
     default:
       return [
+        { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon, kind: 'codex', sortOrder: 30 },
         { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon, kind: 'claude_code', sortOrder: 10 },
         { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon, kind: 'opencode', sortOrder: 20 }
       ]
@@ -983,11 +986,18 @@ function generateOpenAIWsFiles(baseUrl: string, apiKey: string): FileConfig[] {
 
 function generateCodexConfig(baseUrl: string, websocket: boolean): string {
   const config = usageConfig.value
+  const model = selectCodexCatalogModel(config.codex_model)
+  const reviewModel = selectCodexCatalogModel(config.codex_review_model || model)
   const topLevel = [
     'model_provider = "OpenAI"',
-    `model = ${JSON.stringify(config.codex_model)}`,
-    `review_model = ${JSON.stringify(config.codex_review_model || config.codex_model)}`,
-    `model_reasoning_effort = ${JSON.stringify(config.codex_reasoning_effort)}`,
+    `model = ${JSON.stringify(model)}`,
+    `review_model = ${JSON.stringify(reviewModel)}`,
+    ...(codexModelManifestState.value === 'ready'
+      ? [codexReasoningEffortTomlLine(model).trim()].filter(Boolean)
+      : [`model_reasoning_effort = ${JSON.stringify(config.codex_reasoning_effort)}`]),
+    ...(codexModelManifestState.value === 'ready'
+      ? [`model_catalog_json = "${escapeTomlBasicString(codexModelCatalogPath.value)}"`]
+      : []),
     `disable_response_storage = ${config.codex_disable_response_storage}`,
     `network_access = ${JSON.stringify(config.codex_network_access)}`,
     'windows_wsl_setup_acknowledged = true'

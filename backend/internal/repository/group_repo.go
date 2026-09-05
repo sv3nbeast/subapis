@@ -43,7 +43,13 @@ func newGroupRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor) *groupRep
 
 func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) error {
 	service.NormalizeGroupRuntimeFields(groupIn)
+	modelPricing, err := json.Marshal(groupIn.ModelPricing)
+	if err != nil {
+		return fmt.Errorf("marshal group model pricing: %w", err)
+	}
 	builder := r.client.Group.Create().
+		SetModelPricing(modelPricing).
+		SetLongContextPricingEnabled(groupIn.LongContextPricingEnabled).
 		SetName(groupIn.Name).
 		SetDescription(groupIn.Description).
 		SetPlatform(groupIn.Platform).

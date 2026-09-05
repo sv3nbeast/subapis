@@ -217,7 +217,7 @@ const GRADIENT_SUBTEXT_DEFAULT = 'text-primary-200'
 // ── Public API ──────────────────────────────────────────────────────
 
 function isPlatform(p: string): p is Platform {
-  return p === 'anthropic' || p === 'openai' || p === 'antigravity' || p === 'gemini' || p === 'kiro' || p === 'droid' || p === 'grok' || p === 'composite'
+  return Object.prototype.hasOwnProperty.call(BADGE, p)
 }
 
 export function platformBadgeClass(p: string): string {
@@ -281,6 +281,10 @@ export function platformLabel(p: string): string {
     case 'droid': return 'Droid'
     case 'gemini': return 'Gemini'
     case 'grok': return 'Grok'
+    case 'kimi': return 'Kimi'
+    case 'zhipu': return 'Zhipu GLM'
+    case 'deepseek': return 'DeepSeek'
+    case 'composite': return 'Composite'
     default: return p || 'API'
   }
 }

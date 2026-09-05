@@ -107,7 +107,7 @@ type CreateGroupRequest struct {
 	MonthlyLimitUSD           optionalLimitField            `json:"monthly_limit_usd"`
 	ModelQuotaRatios          map[string]float64            `json:"model_quota_ratios"`
 	LongContextPricingEnabled bool                          `json:"long_context_pricing_enabled"`
-	ModelPricing              []service.ChannelModelPricing `json:"model_pricing"`
+	ModelPricing              []channelModelPricingRequest `json:"model_pricing"`
 	// 图片生成计费配置（antigravity 和 gemini 平台使用，负数表示清除配置）
 	AllowImageGeneration            bool                          `json:"allow_image_generation"`
 	AllowBatchImageGeneration       bool                          `json:"allow_batch_image_generation"`
@@ -193,7 +193,7 @@ type UpdateGroupRequest struct {
 	MonthlyLimitUSD           optionalLimitField             `json:"monthly_limit_usd"`
 	ModelQuotaRatios          map[string]float64             `json:"model_quota_ratios"`
 	LongContextPricingEnabled *bool                          `json:"long_context_pricing_enabled"`
-	ModelPricing              *[]service.ChannelModelPricing `json:"model_pricing"`
+	ModelPricing              *[]channelModelPricingRequest `json:"model_pricing"`
 	// 图片生成计费配置（antigravity 和 gemini 平台使用，负数表示清除配置）
 	AllowImageGeneration            *bool                         `json:"allow_image_generation"`
 	AllowBatchImageGeneration       *bool                         `json:"allow_batch_image_generation"`
@@ -528,6 +528,8 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		WeeklyLimitUSD:                  req.WeeklyLimitUSD.ToServiceInput(),
 		MonthlyLimitUSD:                 req.MonthlyLimitUSD.ToServiceInput(),
 		ModelQuotaRatios:                req.ModelQuotaRatios,
+		ModelPricing:                    groupPricingRequestToService(req.ModelPricing, req.Platform),
+		LongContextPricingEnabled:       req.LongContextPricingEnabled,
 		AllowImageGeneration:            req.AllowImageGeneration,
 		AllowBatchImageGeneration:       req.AllowBatchImageGeneration,
 		ImageRateIndependent:            req.ImageRateIndependent,
@@ -664,6 +666,8 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		WeeklyLimitUSD:                  req.WeeklyLimitUSD.ToServiceInput(),
 		MonthlyLimitUSD:                 req.MonthlyLimitUSD.ToServiceInput(),
 		ModelQuotaRatios:                req.ModelQuotaRatios,
+		ModelPricing:                    optionalGroupPricingRequestToService(req.ModelPricing, req.Platform),
+		LongContextPricingEnabled:       req.LongContextPricingEnabled,
 		AllowImageGeneration:            req.AllowImageGeneration,
 		AllowBatchImageGeneration:       req.AllowBatchImageGeneration,
 		ImageRateIndependent:            req.ImageRateIndependent,
