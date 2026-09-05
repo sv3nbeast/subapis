@@ -23,7 +23,7 @@ func TestForwardGrokChatViaResponsesDropsRedundantViewImage(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
-	c.Set("api_key", &APIKey{ID: 7991})
+	c.Set("api_key", &APIKey{ID: 7991, Group: &Group{Platform: PlatformGrok, GrokChatUpstreamMode: GrokChatUpstreamModeResponses}})
 
 	account := grokChatBridgeTestAccount(799)
 	repo := &grokQuotaAccountRepo{mockAccountRepoForPlatform: &mockAccountRepoForPlatform{

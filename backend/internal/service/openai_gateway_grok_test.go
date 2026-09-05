@@ -189,6 +189,20 @@ func TestStripAnthropicThinkingSignaturesPreservesLargeIntegers(t *testing.T) {
 	require.Equal(t, "9007199254740993", gjson.GetBytes(patched, "metadata.large_id").Raw)
 }
 
+func TestGrokUnsupportedFieldSanitizerPreservesOpaqueInputAndSchemaData(t *testing.T) {
+	body := []byte(`{"external_web_access":true,"input":[{"type":"function_call_output","output":{"external_web_access":true,"id":9007199254740993}}],"tools":[{"type":"function","name":"lookup","external_web_access":true,"parameters":{"type":"object","external_web_access":false,"properties":{"external_web_access":{"type":"boolean"},"q":{"type":"string","external_web_access":true}},"default":{"external_web_access":true},"enum":[{"external_web_access":false}]}}]}`)
+	patched, err := sanitizeGrokResponsesUnsupportedFields(body)
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(patched, "external_web_access").Exists())
+	require.False(t, gjson.GetBytes(patched, "tools.0.external_web_access").Exists())
+	require.False(t, gjson.GetBytes(patched, "tools.0.parameters.properties.q.external_web_access").Exists())
+	require.Equal(t, "boolean", gjson.GetBytes(patched, "tools.0.parameters.properties.external_web_access.type").String())
+	require.True(t, gjson.GetBytes(patched, "tools.0.parameters.default.external_web_access").Bool())
+	require.True(t, gjson.GetBytes(patched, "tools.0.parameters.enum.0.external_web_access").Exists())
+	require.True(t, gjson.GetBytes(patched, "input.0.output.external_web_access").Bool())
+	require.Equal(t, "9007199254740993", gjson.GetBytes(patched, "input.0.output.id").Raw)
+}
+
 func TestPatchGrokResponsesBodyDropsUnsupportedNamespaceTools(t *testing.T) {
 	t.Parallel()
 
@@ -364,7 +378,7 @@ func TestParseGrokMediaRequestBuildsMultipartModerationBody(t *testing.T) {
 	moderationBody := info.ModerationBody()
 	require.NotEmpty(t, moderationBody)
 	require.Equal(t, "edit this private image", gjson.GetBytes(moderationBody, "prompt").String())
-	require.True(t, strings.HasPrefix(gjson.GetBytes(moderationBody, "images.0.image_url").String(), "data:image/"))
+	require.True(t, strings.HasPrefix(gjson.GetBytes(moderationBody, "images.0.url").String(), "data:image/"))
 }
 
 func TestParseGrokMediaVideoRequestResolution(t *testing.T) {
@@ -623,7 +637,7 @@ func TestForwardGrokMediaImagesEditMultipartConvertsToJSON(t *testing.T) {
 	require.Equal(t, "https://xai.test/v1/images/edits", upstream.lastReq.URL.String())
 	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Content-Type"))
 	require.True(t, json.Valid(upstream.lastBody))
-	require.Equal(t, "grok-imagine-edit", gjson.GetBytes(upstream.lastBody, "model").String())
+	require.Equal(t, xai.DefaultImagineImageQualityModel, gjson.GetBytes(upstream.lastBody, "model").String())
 	require.Equal(t, "edit this private image", gjson.GetBytes(upstream.lastBody, "prompt").String())
 	require.True(t, strings.HasPrefix(gjson.GetBytes(upstream.lastBody, "image.url").String(), "data:image/png;base64,"))
 }
@@ -870,7 +884,7 @@ func TestBindGrokMediaVideoRequestAccountUsesOwnerScopedStickyHash(t *testing.T)
 	require.Equal(t, int64(63), accountID)
 
 	otherOwnerID, err := svc.ResolveGrokMediaVideoRequestAccount(ctx, &groupID, "video-request-123", userID+1, apiKeyID)
-	require.NoError(t, err)
+	require.Error(t, err, "another owner's cache binding must remain not found")
 	require.Zero(t, otherOwnerID)
 }
 

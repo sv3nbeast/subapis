@@ -3347,6 +3347,9 @@ func (s *OpenAIGatewayService) getSchedulableAccount(ctx context.Context, accoun
 	if err != nil || account == nil {
 		return account, err
 	}
+	if account.Platform == PlatformGrok && len(filterGrokFreeQuotaAccountsCore(ctx, s.cfg, s.usageLogRepo, &openaiGrokFreeQuotaGateCache, []Account{*account})) == 0 {
+		return nil, nil
+	}
 	return account, nil
 }
 
@@ -3611,6 +3614,28 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if normalized {
 		body = normalizedBody
 	}
+	if account.IsOpenAIOAuthLike() {
+		if next, changed, modeErr := normalizeOpenAIResponsesReasoningMode(body); modeErr != nil {
+			return nil, modeErr
+		} else if changed {
+			body = next
+		}
+	}
+	if account.IsOpenAI() && isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)) {
+		liteBody, changed, liteErr := normalizeOpenAIResponsesLitePayloadForAccount(body, account)
+		if liteErr != nil {
+			param := "tools"
+			var validation *openAIResponsesLiteValidationError
+			if errors.As(liteErr, &validation) {
+				param = validation.param
+			}
+			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "message": liteErr.Error(), "param": param}})
+			return nil, liteErr
+		}
+		if changed {
+			body = liteBody
+		}
+	}
 
 	originalBody := body
 	requestView := newOpenAIRequestView(body)
@@ -3747,7 +3772,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		requestView = newOpenAIRequestView(body)
 		setOpenAIResponsesClientToolMapping(c, mapping)
 	}
-	if account.Platform == PlatformOpenAI && account.Type == AccountTypeAPIKey {
+	if account.Platform == PlatformOpenAI && (account.IsOpenAIApiKey() || account.IsOpenAIOAuthLike()) {
 		sanitizedBody, changed, sanitizeErr := sanitizeOpenAIResponsesInputItemIDs(body)
 		if sanitizeErr != nil {
 			return nil, fmt.Errorf("sanitize OpenAI Responses input item IDs: %w", sanitizeErr)
@@ -4003,7 +4028,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 
-	if account.Type == AccountTypeOAuth {
+	if account.IsOpenAIOAuthLike() {
 		decoded, decodeErr := ensureReqBody()
 		if decodeErr != nil {
 			return nil, decodeErr
@@ -5198,6 +5223,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 		}
 	}
 	s.guardOpenAICodexTurnStateEcho(c, account, req.Header)
+	if account.IsOpenAI() && !isOpenAIImagesSelfBuiltRequest(ctx) && c != nil && isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)) {
+		req.Header.Set(responsesLiteHeader, "true")
+	}
 
 	// 覆盖入站鉴权残留，并注入上游认证
 	req.Header.Del("authorization")
@@ -5885,6 +5913,14 @@ func applyOpenAIStreamFailedErrorPassthroughRule(
 	payload []byte,
 	failedMessage string,
 ) (status int, errType string, errMsg string, matched bool) {
+	// Durable account failures and non-retryable policy refusals retain their
+	// built-in disposition; a display/HTTP-status override cannot hide them.
+	if platform == PlatformOpenAI && isOpenAIUpstreamAccessStateError(failedMessage, payload) {
+		return 0, "", "", false
+	}
+	if hit, _, _ := detectOpenAICyberPolicy(payload); hit {
+		return 0, "", "", false
+	}
 	ruleBody := openAIStreamFailedEventPassthroughBody(payload, failedMessage)
 	upstreamStatus := openAIStreamFailedEventSemanticStatus(payload, failedMessage)
 	return applyErrorPassthroughRule(
@@ -6786,6 +6822,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		}
 	}
 	s.guardOpenAICodexTurnStateEcho(c, account, req.Header)
+	if account.IsOpenAI() && !isOpenAIImagesSelfBuiltRequest(ctx) && isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)) {
+		req.Header.Set(responsesLiteHeader, "true")
+	}
 	if account.UsesOpenAICodexProtocol() {
 		compatMessagesBridge := isOpenAICompatMessagesBridgeContext(c) || isOpenAICompatMessagesBridgeBody(body)
 		// 清除客户端透传的 session 头，后续用隔离后的值重新设置，防止跨用户会话碰撞。
@@ -7581,6 +7620,11 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoningAndToolCorrec
 	streamDoneItems := newResponsesStreamOutputItems()
 	streamImageOutputs := make([]json.RawMessage, 0, 1)
 	streamSeenImages := make(map[string]struct{})
+	searchCount := 0
+	var searchSeen map[string]struct{}
+	if account != nil && account.IsGrok() {
+		searchSeen = make(map[string]struct{})
+	}
 	resultWithUsage := func() *openaiStreamingResult {
 		return &openaiStreamingResult{
 			usage:            usage,
@@ -7588,6 +7632,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoningAndToolCorrec
 			responseID:       responseID,
 			imageCount:       imageCounter.Count(),
 			imageOutputSizes: imageCounter.Sizes(),
+			searchCount:      searchCount,
 		}
 	}
 	flushPending := func(disconnectMessage string) {
@@ -7838,6 +7883,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoningAndToolCorrec
 			imageCounter.AddSSEData(dataBytes)
 
 			// Correct Codex tool calls if needed (apply_patch -> edit, etc.)
+			if searchSeen != nil {
+				searchCount += countGrokNativeSearchCallsInSSEDataDedup(dataBytes, searchSeen)
+			}
 			if correctToolCalls && s.toolCorrector != nil {
 				if correctedData, corrected := s.toolCorrector.CorrectToolCallsInSSEBytes(dataBytes); corrected {
 					dataBytes = correctedData
@@ -8793,6 +8841,10 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
 		c.Data(resp.StatusCode, contentType, body)
 	}
+	searchCount := 0
+	if account != nil && account.IsGrok() {
+		searchCount = countGrokNativeSearchCallsFromJSONBytes(body)
+	}
 
 	return &openaiNonStreamingResult{
 		OpenAIUsage:      usage,
@@ -8800,6 +8852,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
 		imageCount:       countOpenAIResponseImageOutputsFromJSONBytes(body),
 		imageOutputSizes: collectOpenAIResponseImageOutputSizesFromJSONBytes(body),
+		searchCount:      searchCount,
 	}, nil
 }
 

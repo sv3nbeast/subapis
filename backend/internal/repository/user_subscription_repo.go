@@ -428,8 +428,8 @@ func (r *userSubscriptionRepository) ResetUsageWindows(ctx context.Context, id i
 			weekly_usage_usd = CASE WHEN $3 THEN 0 ELSE weekly_usage_usd END,
 			monthly_usage_usd = CASE WHEN $4 THEN 0 ELSE monthly_usage_usd END,
 			daily_window_start = CASE WHEN $2 THEN $5 ELSE daily_window_start END,
-			weekly_window_start = CASE WHEN $3 THEN $5 ELSE weekly_window_start END,
-			monthly_window_start = CASE WHEN $4 THEN $5 ELSE monthly_window_start END,
+			weekly_window_start = CASE WHEN $3 THEN $6 ELSE weekly_window_start END,
+			monthly_window_start = CASE WHEN $4 THEN $6 ELSE monthly_window_start END,
 			model_usage = COALESCE((
 				SELECT jsonb_object_agg(entry.key, entry.value || jsonb_build_object(
 					'daily_usage_usd', CASE WHEN $2 THEN 0 ELSE COALESCE((entry.value->>'daily_usage_usd')::numeric, 0) END,
@@ -440,7 +440,7 @@ func (r *userSubscriptionRepository) ResetUsageWindows(ctx context.Context, id i
 			updated_at = NOW()
 		WHERE id = $1 AND deleted_at IS NULL
 	`
-	result, err := client.ExecContext(ctx, query, id, resetDaily, resetWeekly, resetMonthly, dailyStart)
+	result, err := client.ExecContext(ctx, query, id, resetDaily, resetWeekly, resetMonthly, dailyStart, periodicStart)
 	if err != nil {
 		return err
 	}

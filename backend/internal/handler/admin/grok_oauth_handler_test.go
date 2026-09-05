@@ -22,6 +22,7 @@ import (
 
 type grokQuotaHandlerAccountRepo struct {
 	service.AccountRepository
+	mu      sync.Mutex
 	account *service.Account
 	updates map[int64]map[string]any
 }
@@ -34,10 +35,17 @@ func (r *grokQuotaHandlerAccountRepo) GetByID(_ context.Context, id int64) (*ser
 }
 
 func (r *grokQuotaHandlerAccountRepo) UpdateExtra(_ context.Context, id int64, updates map[string]any) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.updates == nil {
 		r.updates = make(map[int64]map[string]any)
 	}
-	r.updates[id] = updates
+	if r.updates[id] == nil {
+		r.updates[id] = make(map[string]any)
+	}
+	for key, value := range updates {
+		r.updates[id][key] = value
+	}
 	return nil
 }
 
@@ -105,16 +113,29 @@ func TestGrokOAuthHandlerQueryQuotaProbesUpstream(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"source":"billing_probe"`)
 	require.Contains(t, rec.Body.String(), `"usage_percent":49`)
 	require.NotContains(t, rec.Body.String(), "access-token")
-	require.Len(t, upstream.requests, 3)
-	requestURLs := make([]string, 0, len(upstream.requests))
-	for _, upstreamReq := range upstream.requests {
+	// Model discovery intentionally runs off the handler's critical path.
+	// Wait for the asynchronous mock request under its lock; do not race it.
+	require.Eventually(t, func() bool {
+		upstream.mu.Lock()
+		defer upstream.mu.Unlock()
+		return len(upstream.requests) == 3
+	}, 2*time.Second, 10*time.Millisecond)
+	upstream.mu.Lock()
+	requests := append([]*http.Request(nil), upstream.requests...)
+	lastBody := append([]byte(nil), upstream.lastBody...)
+	upstream.mu.Unlock()
+	requestURLs := make([]string, 0, len(requests))
+	for _, upstreamReq := range requests {
 		requestURLs = append(requestURLs, upstreamReq.URL.String())
 		require.Equal(t, "Bearer access-token", upstreamReq.Header.Get("Authorization"))
 	}
 	// Credits/monthly probes plus the local model-entitlement discovery.
 	require.ElementsMatch(t, []string{xai.BillingCreditsURL, xai.DefaultCLIBaseURL + "/models", xai.BuildBillingURL(false)}, requestURLs)
-	require.Empty(t, upstream.lastBody)
-	require.NotNil(t, repo.updates[42])
+	require.Empty(t, lastBody)
+	repo.mu.Lock()
+	_, updated := repo.updates[42]
+	repo.mu.Unlock()
+	require.True(t, updated)
 }
 
 func TestGrokOAuthHandlerResetQuotaReturnsUnsupported(t *testing.T) {

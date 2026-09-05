@@ -217,7 +217,9 @@ func TestForwardGrokResponsesCompactSynthesizesAndReturnsCompactionItem(t *testi
 	require.NotNil(t, result)
 	require.Equal(t, "compaction", gjson.Get(recorder.Body.String(), "output.0.type").String())
 	require.Equal(t, "opaque-reasoning", gjson.Get(recorder.Body.String(), "output.0.encrypted_content").String())
-	require.Contains(t, string(upstream.lastBody), grokCompactSummaryPrompt)
+	input := gjson.GetBytes(upstream.lastBody, "input").Array()
+	require.NotEmpty(t, input)
+	require.Contains(t, input[len(input)-1].Get("content.0.text").String(), grokCompactSummaryPrompt)
 	require.NotContains(t, string(upstream.lastBody), "compaction_trigger")
 	require.False(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
 }

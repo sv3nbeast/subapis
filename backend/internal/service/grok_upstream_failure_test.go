@@ -13,14 +13,16 @@ import (
 
 func TestClassifyGrokUpstreamFailure_FreeUsage(t *testing.T) {
 	cases := []struct {
-		name   string
-		status int
-		body   string
+		name        string
+		status      int
+		body        string
+		modelScoped bool
 	}{
 		{
-			name:   "code free-usage-exhausted",
-			status: http.StatusTooManyRequests,
-			body:   `{"error":{"code":"subscription:free-usage-exhausted","message":"You've used all the included free usage for model grok-4.5. Usage resets over a rolling 24-hour window."}}`,
+			name:        "code free-usage-exhausted",
+			modelScoped: true,
+			status:      http.StatusTooManyRequests,
+			body:        `{"error":{"code":"subscription:free-usage-exhausted","message":"You've used all the included free usage for model grok-4.5. Usage resets over a rolling 24-hour window."}}`,
 		},
 		{
 			name:   "chinese body without 429",
@@ -28,9 +30,10 @@ func TestClassifyGrokUpstreamFailure_FreeUsage(t *testing.T) {
 			body:   `{"error":{"message":"模型额度用完，请稍后再试"}}`,
 		},
 		{
-			name:   "token pair with free marker",
-			status: http.StatusOK,
-			body:   `{"error":{"message":"free usage tokens (actual / limit): 2000000 / 2000000 for model grok-4.5"}}`,
+			name:        "token pair with free marker",
+			modelScoped: true,
+			status:      http.StatusOK,
+			body:        `{"error":{"message":"free usage tokens (actual / limit): 2000000 / 2000000 for model grok-4.5"}}`,
 		},
 	}
 	for _, tc := range cases {
@@ -39,7 +42,7 @@ func TestClassifyGrokUpstreamFailure_FreeUsage(t *testing.T) {
 			require.Equal(t, GrokFailureFreeUsage, d.Class)
 			require.True(t, d.ShouldCooldown)
 			require.True(t, d.ShouldFailover)
-			require.False(t, d.BlockModel, "free-usage must not soft-block models")
+			require.Equal(t, tc.modelScoped, d.BlockModel, "only an explicitly named model is model-scoped")
 			require.Equal(t, grokFreeUsageProbeCooldown, d.Cooldown)
 		})
 	}

@@ -41,6 +41,14 @@ func TestGrokModelQuotaBlockFiltersMappedUpstreamModel(t *testing.T) {
 	require.Empty(t, filterGrokModelQuotaBlockedAccounts([]Account{account}, "gpt-5", time.Now()))
 }
 
+func TestGrokModelQuotaBlockPreservesShortProviderReset(t *testing.T) {
+	now := time.Now()
+	const accountID = 712009
+	markGrokModelQuotaBlock(accountID, "grok-4.5", now.Add(time.Second))
+	require.True(t, isGrokModelQuotaBlocked(accountID, "grok-4.5", now))
+	require.False(t, isGrokModelQuotaBlocked(accountID, "grok-4.5", now.Add(2*time.Second)), "short provider resets must not become two-hour blocks")
+}
+
 func TestIsGrokModelSpecificFreeUsage(t *testing.T) {
 	require.True(t, isGrokModelSpecificFreeUsage(
 		"you've used all the included free usage for model grok-4.5", "grok-4.5"))

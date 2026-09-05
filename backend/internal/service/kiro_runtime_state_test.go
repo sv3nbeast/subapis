@@ -296,7 +296,7 @@ func TestExecuteKiroUpstreamSuspendedCooldownReturnsFailoverError(t *testing.T) 
 	require.False(t, failoverErr.RetryableOnSameAccount)
 }
 
-func TestExecuteKiroUpstreamClears429CooldownAndContinues(t *testing.T) {
+func TestExecuteKiroUpstreamIgnoresLegacy429CooldownWithoutMutatingIt(t *testing.T) {
 	account := &Account{
 		ID:          42,
 		Platform:    PlatformKiro,
@@ -336,7 +336,7 @@ func TestExecuteKiroUpstreamClears429CooldownAndContinues(t *testing.T) {
 	require.NotNil(t, resp)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Equal(t, 0, store.reserveCalls)
-	require.True(t, store.clearCalled)
+	require.False(t, store.clearCalled, "default legacy path ignores the transient record; it must not erase shared cooldown state")
 	require.Len(t, upstream.requests, 1)
 }
 
@@ -561,6 +561,12 @@ func TestExecuteKiroUpstreamKeepsServerErrorRetriesAtDefaultLimit(t *testing.T) 
 			newJSONResponse(http.StatusBadGateway, `{"message":"bad gateway 1"}`),
 			newJSONResponse(http.StatusBadGateway, `{"message":"bad gateway 2"}`),
 			newJSONResponse(http.StatusBadGateway, `{"message":"bad gateway 3"}`),
+			newJSONResponse(http.StatusBadGateway, `{"message":"bad gateway 4"}`),
+			newJSONResponse(http.StatusBadGateway, `{"message":"bad gateway 5"}`),
+			newJSONResponse(http.StatusBadGateway, `{"message":"bad gateway 6"}`),
+			newJSONResponse(http.StatusBadGateway, `{"message":"bad gateway 7"}`),
+			newJSONResponse(http.StatusBadGateway, `{"message":"bad gateway 8"}`),
+			newJSONResponse(http.StatusBadGateway, `{"message":"bad gateway 9"}`),
 		},
 	}
 	store := &stubKiroCooldownStore{}
@@ -577,8 +583,17 @@ func TestExecuteKiroUpstreamKeepsServerErrorRetriesAtDefaultLimit(t *testing.T) 
 
 	resp, _, err := svc.executeKiroUpstream(context.Background(), account, payloadBytes, "claude-sonnet-4-6", "claude-sonnet-4-6", "test-token", nil)
 	require.NoError(t, err)
+	require.NotNil(t, resp)
 	require.Equal(t, http.StatusBadGateway, resp.StatusCode)
-	require.Len(t, upstream.requests, 3)
+	require.Len(t, upstream.requests, 9, "three bounded attempts for each default endpoint")
+	byEndpoint := map[string]int{}
+	for _, req := range upstream.requests {
+		byEndpoint[req.URL.String()+"|"+req.Header.Get("X-Amz-Target")]++
+	}
+	require.Len(t, byEndpoint, 3)
+	for _, attempts := range byEndpoint {
+		require.Equal(t, 3, attempts)
+	}
 	require.Equal(t, 0, store.mark429Calls)
 }
 

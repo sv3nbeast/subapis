@@ -435,6 +435,6 @@ func TestOpenAIRefineChannelRestrictionError_AllowedConfiguredAccountKeepsCapaci
 	got := svc.refineOpenAIChannelRestrictionSelectionError(
 		context.Background(), &groupID, PlatformOpenAI, "gpt-4.1", false, false, "", original,
 	)
-	require.Same(t, original, got)
+	require.ErrorIs(t, got, original)
 	require.NotContains(t, got.Error(), "channel pricing restriction")
 }

@@ -27,11 +27,11 @@ var globalGrokModelQuotaBlocks = &grokModelQuotaBlockStore{
 const (
 	grokModelQuotaBlockDefaultTTL = 2 * time.Hour
 	grokModelQuotaBlockMaxTTL     = 6 * time.Hour
-	grokModelQuotaBlockMinTTL     = 20 * time.Minute
+	grokModelQuotaBlockMinTTL     = time.Second
 )
 
 func grokModelQuotaBlockKey(accountID int64, model string) string {
-	return strings.TrimSpace(strings.ToLower(model)) + "|" + strconv.FormatInt(accountID, 10)
+	return strings.ToLower(normalizeGrokFailureModelID(model)) + "|" + strconv.FormatInt(accountID, 10)
 }
 
 // markGrokModelQuotaBlock soft-blocks accountID for model until the given time.
@@ -41,8 +41,10 @@ func markGrokModelQuotaBlock(accountID int64, model string, until time.Time) {
 		return
 	}
 	now := time.Now()
-	if !until.After(now.Add(grokModelQuotaBlockMinTTL)) {
+	if !until.After(now) {
 		until = now.Add(grokModelQuotaBlockDefaultTTL)
+	} else if until.Before(now.Add(grokModelQuotaBlockMinTTL)) {
+		until = now.Add(grokModelQuotaBlockMinTTL)
 	}
 	if max := now.Add(grokModelQuotaBlockMaxTTL); until.After(max) {
 		until = max
@@ -126,7 +128,7 @@ func filterGrokModelQuotaBlockedAccounts(accounts []Account, model string, now t
 // a named model (account may still serve other models).
 func isGrokModelSpecificFreeUsage(low, model string) bool {
 	model = strings.ToLower(strings.TrimSpace(model))
-	if model == "" || low == "" {
+	if model == "" || low == "" || !strings.Contains(low, model) {
 		return false
 	}
 	if strings.Contains(low, "for model") || strings.Contains(low, "模型") {

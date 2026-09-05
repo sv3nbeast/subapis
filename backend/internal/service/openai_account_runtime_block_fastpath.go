@@ -381,11 +381,7 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	// changes in the Grok handler so the generic 429 fallback cannot overwrite a
 	// rolling 24-hour free-usage cooldown with a short retry window.
 	if account != nil && account.Platform == PlatformGrok {
-		s.handleGrokAccountUpstreamError(stateCtx, account, statusCode, headers, responseBody)
-		if s.rateLimitService != nil && len(requestedModel) > 0 && s.rateLimitService.HandleUpstreamModelNotFound(stateCtx, account, requestedModel[0], statusCode, responseBody) {
-			return true
-		}
-		return false
+		return s.handleGrokAccountUpstreamError(stateCtx, account, statusCode, headers, responseBody, requestedModel...)
 	}
 	canonicalModel := ""
 	if len(requestedModel) > 0 {
@@ -404,18 +400,39 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 		return false
 	}
 
-	if statusCode == http.StatusTooManyRequests {
-		s.markOpenAIOAuth429RateLimited(stateCtx, account, headers, responseBody)
-	}
-	if s == nil || account == nil || s.rateLimitService == nil {
+	if isOpenAIImagesSelfBuiltRequest(ctx) && isOpenAIImageCapabilityLossError(statusCode, responseBody) {
+		if s.rateLimitService != nil {
+			_ = s.rateLimitService.HandleOpenAIImageCapabilityLoss(stateCtx, account, statusCode, responseBody)
+		}
 		return false
 	}
-	if canonicalModel != "" && s.rateLimitService.HandleUpstreamModelNotFound(stateCtx, account, canonicalModel, statusCode, responseBody) {
+	if account == nil {
+		return false
+	}
+	if s.rateLimitService != nil {
+		s.rateLimitService.maybeHandleOpenAITeamLinkedError(stateCtx, account, statusCode, responseBody)
+	}
+	if s.rateLimitService != nil && canonicalModel != "" && s.rateLimitService.HandleUpstreamModelNotFound(stateCtx, account, canonicalModel, statusCode, responseBody) {
 		return true
 	}
-	if statusCode != http.StatusUnauthorized && canonicalModel != "" &&
+	if s.rateLimitService != nil && statusCode != http.StatusUnauthorized && canonicalModel != "" &&
 		s.rateLimitService.HandleTempUnschedulable(stateCtx, account, statusCode, responseBody, canonicalModel) {
 		return true
+	}
+	if statusCode == http.StatusTooManyRequests {
+		if s.rateLimitService != nil && canonicalModel != "" &&
+			s.rateLimitService.HandleOpenAICodexSparkRateLimit(stateCtx, account, canonicalModel, statusCode, headers, responseBody) {
+			return false
+		}
+		s.markOpenAIOAuth429RateLimited(stateCtx, account, headers, responseBody)
+		// The local bounded OAuth retry window must not be overwritten by the
+		// generic persistent 429 cooldown below. Explicit model rules run first.
+		if s.shouldRetryOpenAIOAuth429OnSameAccountWithResponse(account, statusCode, false, headers, responseBody) {
+			return false
+		}
+	}
+	if s.rateLimitService == nil {
+		return false
 	}
 	shouldDisable := s.rateLimitService.HandleUpstreamError(stateCtx, account, statusCode, headers, responseBody)
 	modelTempMatched := statusCode != http.StatusUnauthorized && tempUnschedulableModel(stateCtx, nil) != "" &&
@@ -423,7 +440,8 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	if shouldDisable && !modelTempMatched {
 		s.BlockAccountScheduling(account, time.Time{}, "upstream_disable")
 	}
-	if !shouldDisable && account.Platform == PlatformOpenAI && account.Type == AccountTypeAPIKey && shouldCooldownOpenAITransientUpstreamError(statusCode, responseBody) {
+	poolModeRetryable := account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode)
+	if !shouldDisable && account.Platform == PlatformOpenAI && account.Type == AccountTypeAPIKey && shouldCooldownOpenAITransientUpstreamError(statusCode, responseBody) && !poolModeRetryable {
 		decision := s.recordOpenAIAccountModelTransientFailure(account, canonicalModel, time.Now())
 		if decision.FailureStreak > 0 {
 			slog.Warn("openai_model_transient_state",

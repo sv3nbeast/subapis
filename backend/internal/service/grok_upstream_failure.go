@@ -34,8 +34,7 @@ const (
 
 // GrokUpstreamFailureDecision is a pure classification result. Callers map it
 // onto existing account state helpers (tempUnscheduleGrok / rateLimitGrok).
-// BlockModel is retained for observability; the current scheduler does not
-// implement per-model soft-blocks, so free-usage deliberately never sets it.
+// BlockModel distinguishes an explicit model quota from account-wide usage.
 type GrokUpstreamFailureDecision struct {
 	Class          GrokUpstreamFailureClass
 	Model          string
@@ -45,8 +44,7 @@ type GrokUpstreamFailureDecision struct {
 	// terminal response (pre-commit only). Content-policy rejections are
 	// handled separately and never reach this classifier for failover.
 	ShouldFailover bool
-	// BlockModel is true only for empty-output when a model id is known.
-	// Free-usage never sets this: the account cools, not a single model.
+	// BlockModel is also set for explicitly model-scoped free-usage exhaustion.
 	BlockModel   bool
 	Reason       string
 	TokensActual *int64
@@ -60,7 +58,7 @@ var (
 
 // classifyGrokUpstreamFailure decides cooldown/failover from status + body.
 // Priority (body/code first, status second):
-//  1. free-usage exhausted → account cool, no model block, failover
+//  1. free-usage exhausted → named-model block or account probe, failover
 //  2. billing hard quota → longer cool, failover
 //  3. empty model output → short cool + optional model soft-block marker, failover
 //  4. model capacity → short cool, failover
@@ -85,7 +83,7 @@ func classifyGrokUpstreamFailure(statusCode int, responseBody []byte, requestedM
 			Cooldown:       grokFreeUsageCooldownDuration(low),
 			ShouldCooldown: true,
 			ShouldFailover: true,
-			BlockModel:     false,
+			BlockModel:     isGrokModelSpecificFreeUsage(low, model),
 			Reason:         firstNonEmpty(text, code, "free usage exhausted"),
 		}
 		if hasTokens {
@@ -545,6 +543,11 @@ func extractGrokFailureModel(text string, responseBody []byte, fallback string) 
 func normalizeGrokFailureModelID(model string) string {
 	model = strings.TrimSpace(model)
 	model = strings.TrimRight(model, ".,;:!?")
+	// The free Build gateway can label its quota bucket with this suffix even
+	// though forwarding/scheduling uses the public Grok model name.
+	if strings.HasPrefix(strings.ToLower(model), "grok-") && strings.HasSuffix(strings.ToLower(model), "-build-free") {
+		model = model[:len(model)-len("-build-free")]
+	}
 	return strings.TrimSpace(model)
 }
 
@@ -566,8 +569,7 @@ func (s *OpenAIGatewayService) applyGrokUpstreamFailureDecision(
 		reason = "grok free usage exhausted"
 		// Model-scoped free usage: soft-block only the named model so other
 		// models on the same account remain pickable (grok2api ModelQuotaBlock).
-		low := strings.ToLower(decision.Reason)
-		if decision.Model != "" && isGrokModelSpecificFreeUsage(low, decision.Model) {
+		if decision.Model != "" && decision.BlockModel {
 			until := time.Now().Add(decision.Cooldown)
 			markGrokModelQuotaBlock(account.ID, decision.Model, until)
 			// The upstream explicitly scoped exhaustion to this model, so an

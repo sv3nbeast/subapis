@@ -230,7 +230,9 @@ func scheduleGrokFreeQuotaStatsRefresh(
 			}
 		}()
 		now := time.Now().UTC()
-		statsByID, err := queryGrokFreeQuotaWindowStats(context.Background(), usageLogRepo, toFetch, now.Add(-window))
+		queryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		statsByID, err := queryGrokFreeQuotaWindowStats(queryCtx, usageLogRepo, toFetch, now.Add(-window))
 		if err != nil {
 			grokFreeQuotaGateQueryFailureTotal.Add(1)
 			// Store a negative entry so subsequent hot-path calls do not thrash.

@@ -3042,3 +3042,10 @@ aa4a3509c debug(kiro): separate translated 与 client stream capture
 - 前端前轮 1,989 测试通过；本轮无前端修改。admin/server contract 恢复，定向 race 通过，完整最终门禁仍 INCONCLUSIVE。未推送、未部署、未改生产。
 - 第三批尾轮 admin/DTO/server/repository 四个 unit 全包通过，CN 六入口及相关缓存/首写/计费/凭据恢复的 race 集通过，server 构建通过；Service 整包仍待后续修复，不作为发布绿灯。
 - 明细与逐项登记：`docs/cn-platform-sync-audit-20260905.md`。
+## 2026-09-05 CN 补漏第四批（未发布）
+
+- 承接 `dd93c07d8`：恢复 429 模型作用域、裸 SSE 失败及已输出禁止重放、Responses-Lite/legacy setup-token 协议、Grok 搜索计数/额度/内容保真与冗余图片工具处理。
+- 401 改为凭据代次 CAS 过期标记，避免整列回写旧 refresh token；补回生产刷新 pager、单调限流与观测代次恢复。订阅周/月 reset 修正实际未使用 periodicStart 的 SQL。
+- Service 8,045 顶层 unit 已全部通过；Repository/admin/DTO/server、Ent schema 分别全包通过；相关 race 与本机临时 PG/Redis 定向集成通过。admin race 的 mock map 读写已修复。
+- **仍不能发布**：完整 Repository integration 的并发活跃索引/清扫功能仍漏合并，须完整恢复接口、Lua/索引和后台任务后复验。没有推送或生产变更。
+- 完整证据、测试合同处理和剩余门禁见 `docs/cn-platform-sync-audit-20260905.md`。

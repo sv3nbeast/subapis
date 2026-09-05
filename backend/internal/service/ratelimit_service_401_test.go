@@ -51,6 +51,46 @@ type tokenCacheInvalidatorRecorder struct {
 	err      error
 }
 
+type oauth401ExpiryRepoStub struct {
+	rateLimitAccountRepoStub
+	applied     bool
+	err         error
+	expiryCalls int
+}
+
+func (r *oauth401ExpiryRepoStub) ExpireOAuthCredentialsIfUnchanged(_ context.Context, account *Account, _ time.Time) (bool, error) {
+	r.expiryCalls++
+	return r.applied, r.err
+}
+
+func TestOAuth401ExpiryDoesNotOverwriteOrCoolChangedCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		applied      bool
+		err          error
+		wantCooldown int
+		wantDisable  bool
+	}{
+		{name: "same generation forces refresh", applied: true, wantCooldown: 1, wantDisable: true},
+		{name: "already rotated stays schedulable", applied: false},
+		{name: "database failure retains temporary isolation", err: errors.New("db down"), wantCooldown: 1, wantDisable: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &oauth401ExpiryRepoStub{applied: tc.applied, err: tc.err}
+			svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+			account := &Account{ID: 9041, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+				Credentials: map[string]any{"access_token": "old-access", "refresh_token": "old-refresh", "expires_at": "2030-01-01T00:00:00Z"}}
+			disabled := svc.HandleUpstreamError(context.Background(), account, http.StatusUnauthorized, nil, []byte("expired"))
+			require.Equal(t, tc.wantDisable, disabled)
+			require.Equal(t, 1, repo.expiryCalls)
+			require.Equal(t, tc.wantCooldown, repo.tempCalls)
+			require.Zero(t, repo.updateCredentialsCalls)
+			require.Equal(t, "2030-01-01T00:00:00Z", account.Credentials["expires_at"])
+			require.Equal(t, "old-refresh", account.Credentials["refresh_token"])
+		})
+	}
+}
+
 type openAI403CounterCacheStub struct {
 	counts     []int64
 	resetCalls []int64

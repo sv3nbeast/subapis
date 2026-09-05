@@ -481,7 +481,7 @@ func patchGrokResponsesBody(body []byte, upstreamModel string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, unsupportedField := range []string{"prompt_cache_retention", "safety_identifier"} {
+	for _, unsupportedField := range []string{"prompt_cache_retention", "safety_identifier", "metadata"} {
 		if gjson.GetBytes(out, unsupportedField).Exists() {
 			out, err = sjson.DeleteBytes(out, unsupportedField)
 			if err != nil {
@@ -536,7 +536,7 @@ func patchGrokResponsesBody(body []byte, upstreamModel string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	return stripRedundantGrokResponsesViewImageTool(out)
 }
 
 func normalizeGrokResponsesResponseFormat(body []byte) ([]byte, error) {
@@ -1149,43 +1149,69 @@ func sanitizeGrokResponsesUnsupportedFields(body []byte) ([]byte, error) {
 		return body, nil
 	}
 
-	var payload any
+	var payload map[string]any
 	if err := decodeOpenAIJSONUseNumber(body, &payload); err != nil {
 		return nil, err
 	}
-	if !deleteJSONFields(payload, grokResponsesUnsupportedRecursiveFields) {
+	changed := deleteGrokProtocolFields(payload)
+	if tools, ok := payload["tools"].([]any); ok {
+		for _, raw := range tools {
+			tool, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			changed = deleteGrokProtocolFields(tool) || changed
+			changed = stripGrokUnsupportedSchemaFields(tool["parameters"]) || changed
+			if function, ok := tool["function"].(map[string]any); ok {
+				changed = deleteGrokProtocolFields(function) || changed
+				changed = stripGrokUnsupportedSchemaFields(function["parameters"]) || changed
+			}
+		}
+	}
+	if !changed {
 		return body, nil
 	}
 	return marshalOpenAIUpstreamJSON(payload)
 }
 
-func deleteJSONFields(value any, fields map[string]struct{}) bool {
-	switch typed := value.(type) {
-	case map[string]any:
-		changed := false
-		for field := range fields {
-			if _, ok := typed[field]; ok {
-				delete(typed, field)
-				changed = true
-			}
+// Unsupported protocol settings are not user data: never recurse into
+// input/tool outputs, schema property names, enum/const/default examples.
+func deleteGrokProtocolFields(object map[string]any) bool {
+	changed := false
+	for field := range grokResponsesUnsupportedRecursiveFields {
+		if _, exists := object[field]; exists {
+			delete(object, field)
+			changed = true
 		}
-		for _, child := range typed {
-			if deleteJSONFields(child, fields) {
-				changed = true
-			}
-		}
-		return changed
-	case []any:
-		changed := false
-		for _, child := range typed {
-			if deleteJSONFields(child, fields) {
-				changed = true
-			}
-		}
-		return changed
-	default:
+	}
+	return changed
+}
+
+func stripGrokUnsupportedSchemaFields(value any) bool {
+	schema, ok := value.(map[string]any)
+	if !ok {
 		return false
 	}
+	changed := deleteGrokProtocolFields(schema)
+	for key, child := range schema {
+		switch key {
+		case "properties", "patternProperties", "$defs", "definitions", "dependentSchemas":
+			if properties, ok := child.(map[string]any); ok {
+				for _, property := range properties {
+					changed = stripGrokUnsupportedSchemaFields(property) || changed
+				}
+			}
+		case "items", "additionalProperties", "unevaluatedProperties", "contains", "if", "then", "else", "not", "propertyNames":
+			changed = stripGrokUnsupportedSchemaFields(child) || changed
+		case "allOf", "anyOf", "oneOf", "prefixItems":
+			if alternatives, ok := child.([]any); ok {
+				for _, alternative := range alternatives {
+					changed = stripGrokUnsupportedSchemaFields(alternative) || changed
+				}
+			}
+		}
+	}
+	return changed
 }
 
 var grokResponsesSupportedToolTypes = map[string]struct{}{
@@ -1759,7 +1785,7 @@ func (s *OpenAIGatewayService) updateGrokUsageSnapshot(ctx context.Context, acco
 	_ = s.accountRepo.UpdateExtra(ctx, accountID, updates)
 }
 
-func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) {
+func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) (modelUnavailable bool) {
 	if s == nil || account == nil {
 		return
 	}
@@ -1793,8 +1819,11 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 	// the scheduler excludes this account/model on the next selection.
 	if s.rateLimitService != nil && len(requestedModel) > 0 {
 		stateCtx, cancel := openAIAccountStateContext(ctx)
-		_ = s.rateLimitService.HandleUpstreamModelNotFound(stateCtx, account, requestedModel[0], statusCode, responseBody)
+		modelUnavailable = s.rateLimitService.HandleUpstreamModelNotFound(stateCtx, account, requestedModel[0], statusCode, responseBody)
 		cancel()
+		if modelUnavailable {
+			return
+		}
 	}
 	model := grokRequestedModelFromCtx(ctx)
 	if len(requestedModel) > 0 {
@@ -1804,7 +1833,10 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 	// A model-scoped free-usage rejection must not quarantine sibling models.
 	// An explicit provider reset takes precedence over an inferred probe window.
 	if decision.Class == GrokFailureFreeUsage {
-		if decision.Model != "" && isGrokModelSpecificFreeUsage(strings.ToLower(decision.Reason), decision.Model) {
+		if decision.Model != "" && decision.BlockModel {
+			if snapshot := xai.ParseQuotaHeaders(headers, statusCode); snapshot != nil && snapshot.RetryAfterSeconds != nil && *snapshot.RetryAfterSeconds > 0 {
+				decision.Cooldown = time.Duration(*snapshot.RetryAfterSeconds) * time.Second
+			}
 			if s.applyGrokUpstreamFailureDecision(ctx, account, decision) {
 				return
 			}
@@ -1859,6 +1891,7 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 			s.tempUnscheduleGrok(ctx, account, 2*time.Minute, "grok upstream temporary error")
 		}
 	}
+	return
 }
 
 func (s *OpenAIGatewayService) markGrokZeroRPMModelRateLimitIfDetected(ctx context.Context, account *Account, requestedModel string, responseBody []byte) bool {
@@ -1935,13 +1968,20 @@ func (s *OpenAIGatewayService) markGrokQuotaExhaustedUntil(ctx context.Context, 
 		account.RateLimitResetAt = &resetAt
 		if s.accountRepo != nil {
 			stateCtx, cancel := openAIAccountStateContext(ctx)
-			if err := s.accountRepo.SetRateLimited(stateCtx, account.ID, resetAt); err != nil {
+			extendingRepo, atomicExtension := s.accountRepo.(grokRateLimitExtendingRepository)
+			var err error
+			if atomicExtension {
+				err = extendingRepo.SetRateLimitedIfLater(stateCtx, account.ID, resetAt)
+			} else {
+				err = s.accountRepo.SetRateLimited(stateCtx, account.ID, resetAt)
+			}
+			if err != nil {
 				slog.Warn("grok_quota_set_rate_limited_failed", "account_id", account.ID, "error", err)
 			}
 			// Keep the distributed scheduler snapshot in sync immediately. The
 			// outbox worker remains the cross-process fallback, but a local stale
 			// snapshot must not hand this account out in the next request.
-			if s.schedulerSnapshot != nil {
+			if s.schedulerSnapshot != nil && !atomicExtension {
 				if err := s.schedulerSnapshot.UpdateAccountInCache(stateCtx, account); err != nil {
 					slog.Debug("grok_quota_scheduler_cache_update_failed", "account_id", account.ID, "error", err)
 				}

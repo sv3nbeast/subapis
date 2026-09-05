@@ -398,6 +398,9 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			s.handleCustomErrorCode(ctx, account, statusCode, extractUpstreamErrorMessage(responseBody))
 			return true
 		}
+		if account.Platform == PlatformAnthropic && s.tryTempUnschedulable(ctx, account, statusCode, responseBody, firstRequestedModel(requestedModel)) {
+			return true
+		}
 		s.handle529(ctx, account)
 		return false
 	}
@@ -516,15 +519,17 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 				shouldDisable = true
 				break
 			}
-			// 2. 设置 expires_at 为当前时间，强制下次请求刷新 token
-			if authAccount.Credentials == nil {
-				authAccount.Credentials = make(map[string]any)
-			}
-			authAccount.Credentials["expires_at"] = time.Now().Format(time.RFC3339)
-			if err := persistAccountCredentials(ctx, s.accountRepo, authAccount, authAccount.Credentials); err != nil {
-				slog.Warn("oauth_401_force_refresh_update_failed", "account_id", authAccount.ID, "error", err)
-			} else {
-				slog.Info("oauth_401_force_refresh_set", "account_id", authAccount.ID, "platform", authAccount.Platform)
+			// Never write the request-start credentials back wholesale: another
+			// worker may already have rotated the refresh token. A generation CAS
+			// retains the local forced-refresh behavior without reverting rotation.
+			if marker, ok := s.accountRepo.(OAuth401ExpiryRepository); ok {
+				applied, err := marker.ExpireOAuthCredentialsIfUnchanged(ctx, authAccount, time.Now())
+				if err != nil {
+					slog.Warn("oauth_401_force_refresh_update_failed", "account_id", authAccount.ID, "error", err)
+				} else if !applied {
+					slog.Info("oauth_401_skipped_changed_credential_generation", "account_id", authAccount.ID)
+					return false
+				}
 			}
 			// 3. 临时不可调度，替代 SetError（保持 status=active 让刷新服务能拾取）
 			msg := "Authentication failed (401): invalid or expired credentials"
@@ -2265,6 +2270,11 @@ func persistOpenAI429PlanType(ctx context.Context, repo AccountRepository, accou
 // handle529 处理529过载错误
 // 根据配置决定是否暂停账号调度及冷却时长
 func (s *RateLimitService) handle529(ctx context.Context, account *Account) {
+	if account == nil || account.Platform == PlatformAnthropic {
+		// Anthropic overload describes shared upstream capacity, not an account
+		// quota. Request-local retries/failover remain bounded by their owner.
+		return
+	}
 	var settings *OverloadCooldownSettings
 	if s.settingService != nil {
 		var err error
@@ -2842,6 +2852,9 @@ func (s *RateLimitService) HandleUpstreamModelNotFound(ctx context.Context, acco
 	accountModelUnsupported := isUpstreamAccountModelUnsupportedError(statusCode, responseBody)
 	planGatedModel := account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth &&
 		isOpenAICodexPlanGatedModelError(statusCode, responseBody)
+	if account.Platform == PlatformOpenAI && isOpenAICodexPlanGatedModelError(statusCode, responseBody) && !planGatedModel {
+		return false
+	}
 	if !account.ShouldHandleErrorCode(statusCode) && !accountModelUnsupported && !planGatedModel {
 		return false
 	}
@@ -2852,13 +2865,18 @@ func (s *RateLimitService) HandleUpstreamModelNotFound(ctx context.Context, acco
 	if modelKey == "" {
 		return false
 	}
+	// A direct image-model request to /responses is an endpoint mismatch, not
+	// proof that this OAuth account lost its /images capability.
+	if planGatedModel && strings.HasPrefix(strings.ToLower(modelKey), "gpt-image-") && !OpenAIImagesEndpointFromContext(ctx) {
+		return true
+	}
 	resetAt := time.Now().Add(upstreamModelNotFoundCooldown)
 	reason := upstreamModelNotFoundReason
-	if accountModelUnsupported {
-		reason = upstreamAccountModelUnsupportedReason
-	} else if planGatedModel {
+	if planGatedModel {
 		resetAt = time.Now().Add(upstreamCodexPlanGatedModelCooldown)
 		reason = upstreamCodexPlanGatedModelReason
+	} else if accountModelUnsupported {
+		reason = upstreamAccountModelUnsupportedReason
 	}
 	if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, modelKey, resetAt, reason); err != nil {
 		slog.Warn("upstream_model_not_found_set_model_rate_limit_failed", "account_id", account.ID, "model", modelKey, "error", err)

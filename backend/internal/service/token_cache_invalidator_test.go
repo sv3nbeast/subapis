@@ -159,7 +159,8 @@ func TestCompositeTokenCacheInvalidator_Kiro(t *testing.T) {
 
 	err := invalidator.InvalidateToken(context.Background(), account)
 	require.NoError(t, err)
-	require.Equal(t, []string{"kiro:client-hash", "kiro:account:1459"}, cache.deletedKeys)
+	require.Equal(t, []string{"kiro:account:1459"}, cache.deletedKeys,
+		"client registration is shared application identity, not a user token cache key")
 }
 
 func TestCompositeTokenCacheInvalidator_SkipNonOAuth(t *testing.T) {

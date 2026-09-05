@@ -155,10 +155,9 @@ func TestNewKiroJSONRequestAddsConditionalHeaders(t *testing.T) {
 		Platform: PlatformKiro,
 		Type:     AccountTypeOAuth,
 		Credentials: map[string]any{
-			"auth_method":  "external_idp",
-			"provider":     "Internal",
-			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/HEADER",
-			"kiro_api_key": "ksk_generation_key",
+			"auth_method": "external_idp",
+			"provider":    "Internal",
+			"profile_arn": "arn:aws:codewhisperer:us-east-1:123456789012:profile/HEADER",
 		},
 	}
 
@@ -182,7 +181,7 @@ func TestNewKiroJSONRequestAddsConditionalHeaders(t *testing.T) {
 	require.Equal(t, "AmazonCodeWhispererStreamingService.GenerateAssistantResponse", req.Header.Get("X-Amz-Target"))
 	require.Contains(t, req.Header.Get("User-Agent"), "aws-sdk-js/1.0.34")
 	require.Contains(t, req.Header.Get("User-Agent"), "md/nodejs#22.22.0")
-	require.Contains(t, req.Header.Get("User-Agent"), "KiroIDE-0.11.107-")
+	require.Equal(t, kiropkg.BuildRuntimeUserAgent("account-key", buildKiroMachineID(account)), req.Header.Get("User-Agent"))
 	require.Contains(t, req.Header.Get("User-Agent"), buildKiroMachineID(account))
 	require.Contains(t, req.Header.Get("X-Amz-User-Agent"), buildKiroMachineID(account))
 	require.True(t, strings.Contains(req.Header.Get("User-Agent"), "api/codewhispererstreaming#1.0.34"))

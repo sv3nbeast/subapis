@@ -11,7 +11,15 @@ import (
 // 当前轮的内联 image_url 已可由 Grok 直接读取；若同时保留客户端本地
 // view_image，Grok 可能只预告调用工具而不继续作答，因此只移除这一冗余自动选择。
 func stripRedundantGrokChatViewImageTool(body []byte) ([]byte, error) {
-	messages := gjson.GetBytes(body, "messages")
+	return stripRedundantGrokViewImageTool(body, "messages")
+}
+
+func stripRedundantGrokResponsesViewImageTool(body []byte) ([]byte, error) {
+	return stripRedundantGrokViewImageTool(body, "input")
+}
+
+func stripRedundantGrokViewImageTool(body []byte, historyField string) ([]byte, error) {
+	messages := gjson.GetBytes(body, historyField)
 	if !messages.IsArray() {
 		return body, nil
 	}

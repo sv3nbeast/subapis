@@ -215,3 +215,35 @@ Reviewed range: `04ce360b0..a13a19410` + 本轮专用 worktree 改动。高风�
 - 逐项原始证据：`/tmp/sub2api-cn-checkpoint-4dc2a8a70.jsonl`。前述第 9 轮 66 失败是较早工作树快照，不是本提交最终计数；本节以 60 失败为准。
 - 本代码检查点定向 race `/tmp/sub2api-cn-race-round5.log` PASS，构建 `/tmp/sub2api-cn-build-round4.log` PASS；frontend 与 `a13a19410` 的代码差异为零。
 - 结论仍 **INCONCLUSIVE / 禁止发布**，目标未完成。下一批应先处理余下 429 作用域/重试合同、裸 SSE 错误、Grok 兼容与搜索用量调用点，再复验 Kiro/token cache 等；模型级限额还需核实上游派生名字与真实调度模型键的一致性。不得在没有逐项证据时把这 60 项统称历史失败。
+## 第四轮：清除 Service 回归并验证真实 SQL（2026-09-05）
+
+本轮从 `dd93c07d8` 继续；没有推送、发布或修改生产。上一目标轮是实质进展，本轮也有代码、测试和 PostgreSQL 证据。
+
+### 恢复与修正
+
+1. OpenAI 429：恢复 Spark 独立模型限额调用；普通 OAuth 请求保留本地有界重试窗口，不再被通用持久冷却覆盖；保留全局风暴遥测但不提前耗尽本地最多三个账号的尝试预算。HTTP 与 SSE/WS quota header 的不同作用域保持不变。
+2. OpenAI 流错误：Messages 转换器原本将裸 `error` 视为终态却不返回错误，现正确发出错误。已经输出内容后，即使错误本可重试，也不再返回可重放信号；新增真实入口测试同时覆盖 `error` / `response.failed`，没有伪造 `message_stop`。账号停用及 cyber policy 不能被普通展示透传规则掩盖。
+3. Codex 能力：区分 OAuth 套餐拒绝与 API-key 请求；错误端点上直接使用图像模型不污染实际 images 能力，专用 images 端点的真实拒绝仍冷却；恢复 self-built 图像能力丢失处理。
+4. Responses-Lite：接回显式 header、工具 namespace/additional_tools、reasoning context 和 parallel_tool_calls 规则，HTTP managed/passthrough 与 WebSocket normalization 对齐。未更改本地模型目录的默认 Lite 关闭策略，也没有把 Lite header 加进全局 images/raw-Chat 白名单。setup-token 兼容转发补齐 ID 清理及 reasoning.mode 转换。
+5. Grok：消除 model-not-found 的重复写入；模型级免费额度的内部 `-build-free` 桶名与调度模型键对齐；未命名模型的泛化提示不误判为模型级；短 reset 不再膨胀成两小时，保留未观察到绝对 reset 时的短探测。恢复 JSON/SSE 原生搜索调用数及跨事件去重、旧粘性调度的免费额度门限（异步查询限时，不阻塞首个请求）。
+6. Grok 内容保真：内联图片下冗余 view_image 处理扩展到 Responses 转换；unsupported 字段清理只作用于协议对象/Schema 关键字，不再递归删除 input/tool output、Schema 属性名、default/enum 用户数据。增加大整数及同名字段保真测试。Chat→Responses 测试显式开启分组路由，不改变默认 raw-Chat 政策。
+7. 401 并发安全：旧逻辑将请求开始时的 credentials 整列回写，可能回滚另一 worker 刚旋转的 refresh token。新增生产仓库条件更新，只在完整凭据、代理、平台/类型仍相符时修改 expires_at，并在同一 SQL 写 scheduler outbox；保留当前强制刷新意图，禁止覆盖新 token 或绕过新的受管账号状态。真实 PostgreSQL 验证旧快照/新代理/受管账号均不会被误写，成功更新不改请求对象。
+8. 刷新与限流仓库：集成测试暴露 `ListOAuthRefreshCandidatePage`、`SetRateLimitedIfLater`、`ClearRateLimitIfObserved` 被漏合并。特别是生产刷新服务缺失 pager 时会 fail-closed，不能只看 mock 单测！现接回注册平台驱动的有界游标扫描、NULL 安全冷却过滤、限流单调延长与按观测代次清除。Grok 硬额度入口使用单调方法，不再随后用旧对象覆盖仓库刚发布的新快照。
+9. 订阅窗口：`periodicStart` 参数已存在但 SQL 完全未使用，周/月被错误写成日窗口起点。现分开写入，PostgreSQL 测试验证不同起点及模型额度维度重置。
+10. 合同修正而非改业务：Kiro 缓存继续按账号隔离；OAuth header 测试不混入 ksk CLI 凭据；Kiro 5xx 每默认端点最多三次（总九次）的现有行为不改；保留忽略而不删除共享 legacy 429 记录的策略；订阅返利保留现有 GMV 5% 初始档位、不是全局 15% fallback；指纹 integration fixture 补 UAForm，snapshot fixture 使用真实 write token。异步 Grok 模型发现的测试桩增加同步等待和 map 锁，未让生产探测变成同步等待。
+
+### 已获得的证据
+
+- `/tmp/sub2api-cn-round4-final-unit.jsonl`：Service 8,045 个顶层测试全部通过（218.469 秒）；该次 Repository 因新测试桩重名未编译，随后改名并完整通过，不能隐去这个过程。
+- `/tmp/sub2api-cn-round4-final-packages.log`：Repository、admin、DTO、server 四个 unit 全包通过；`/tmp/sub2api-cn-round4-ent-schema.log`：Ent schema 全包通过。
+- `/tmp/sub2api-cn-round4-race.log`：Service、Repository 定向 race 通过；admin 测试桩发现并发读写，修正后 `/tmp/sub2api-cn-round4-admin-race.log` 与 `/tmp/sub2api-cn-round4-safety-race.log` 全部通过。后者还覆盖新增“已输出后不可重放”入口测试。
+- Docker 上下文已核实为本机 `desktop-linux` / `unix:///Users/sven.sun/.docker/run/docker.sock`。专用临时 PostgreSQL/Redis 运行完整 migrations，未使用生产连接。
+- `/tmp/sub2api-cn-round4-postgres-safety-final.jsonl`：真实 PG 下的 401 CAS/outbox/受管状态、分页、单调限流与观测代次恢复、分组 rollup/tail 今日/昨日统计、UA 指纹、写 token 快照、订阅独立窗口起点全部通过。
+- 上述 PG 检查使用全部 production repository Go 文件 + 选定 integration harness/fixtures/test 文件执行，**只是定向真实集成证据**，不冒充整个 Repository integration 包通过。
+- server 构建通过；本轮 frontend 与 `a13a19410` 差异为零。
+
+### 仍未完成的门禁
+
+**Verdict: INCONCLUSIVE / 禁止发布，目标保持 active。** 完整 Repository integration 包仍存在并发缓存活跃索引/过期槽位清扫实现缺失：`accountActiveIndexKey`、`userActiveIndexKey`、`legacyWaitSweepMarkerKey`、`redisUnixSeconds`、`CleanupExpiredAccountSlotKeys` 及服务接口/定时清扫调用链。必须下一轮整体对照官方和本地并发逻辑修复，不能只补常量或空函数让测试编译。
+
+原始全量编译失败：`/tmp/sub2api-cn-round4-integration-compile.log`；签名与仓库接口修复后剩余项应重新编译核实。最终干净代码提交还需全包复验。四项网关不变量已有本轮分支的直接定向证据，整个融合候选仍未获得完整集成 PASS；不把“旧失败”当豁免。

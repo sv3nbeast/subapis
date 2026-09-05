@@ -4,10 +4,18 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 )
 
 type accountCredentialsUpdater interface {
 	UpdateCredentials(ctx context.Context, id int64, credentials map[string]any) error
+}
+
+// OAuth401ExpiryRepository expires only the credential generation that failed.
+// The write must preserve rotated credentials and atomically invalidate the
+// scheduler snapshot. Implementations never replace the full credential map.
+type OAuth401ExpiryRepository interface {
+	ExpireOAuthCredentialsIfUnchanged(ctx context.Context, expected *Account, expiredAt time.Time) (bool, error)
 }
 
 func persistAccountCredentials(ctx context.Context, repo AccountRepository, account *Account, credentials map[string]any) (err error) {

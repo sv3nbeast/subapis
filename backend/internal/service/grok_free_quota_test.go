@@ -44,7 +44,7 @@ func (r *grokFreeQuotaAccountRepo) SetModelRateLimit(_ context.Context, _ int64,
 	return nil
 }
 
-func TestOpenAIGatewayGrokFreeUsageExhausted429RateLimitsForRollingWindow(t *testing.T) {
+func TestOpenAIGatewayGrokFreeUsageExhausted429BlocksOnlyNamedModel(t *testing.T) {
 	repo := &grokFreeQuotaAccountRepo{}
 	svc := &OpenAIGatewayService{accountRepo: repo}
 	account := &Account{
@@ -63,11 +63,14 @@ func TestOpenAIGatewayGrokFreeUsageExhausted429RateLimitsForRollingWindow(t *tes
 
 	svc.handleGrokAccountUpstreamError(context.Background(), account, http.StatusTooManyRequests, http.Header{}, body)
 
-	require.Equal(t, 1, repo.rateLimitedCalls)
+	require.Zero(t, repo.rateLimitedCalls)
 	require.Zero(t, repo.tempUnschedCalls)
-	require.WithinDuration(t, before.Add(grokFreeUsageExhaustedCooldown), repo.lastRateLimitResetAt, time.Second)
-	require.NotNil(t, account.RateLimitResetAt)
-	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	require.Nil(t, account.RateLimitResetAt)
+	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	require.True(t, isGrokModelQuotaBlocked(account.ID, "grok-4.5", before))
+	require.True(t, isGrokModelQuotaBlocked(account.ID, "grok-4.5-build-free", before))
+	require.False(t, isGrokModelQuotaBlocked(account.ID, "grok-4.6", before))
+	require.False(t, isGrokModelQuotaBlocked(account.ID, "grok-4.5", before.Add(grokFreeUsageProbeCooldown+time.Second)), "rolling window is not an absolute reset; permit a bounded probe")
 }
 
 func TestResolveGrokFreeUsageResetDoesNotReuseShortExistingLimit(t *testing.T) {
@@ -190,7 +193,7 @@ func TestHandleOpenAIAccountUpstreamError_Grok429UsesOnlyGrokCooldown(t *testing
 	shouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusTooManyRequests, http.Header{}, body)
 
 	require.False(t, shouldDisable)
-	require.Equal(t, 1, repo.rateLimitedCalls)
-	require.Zero(t, repo.tempUnschedCalls)
-	require.WithinDuration(t, before.Add(grokFreeUsageExhaustedCooldown), repo.lastRateLimitResetAt, time.Second)
+	require.Zero(t, repo.rateLimitedCalls)
+	require.Equal(t, 1, repo.tempUnschedCalls)
+	require.WithinDuration(t, before.Add(grokFreeUsageProbeCooldown), repo.lastTempUnschedUntil, time.Second)
 }

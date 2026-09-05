@@ -462,10 +462,11 @@ func TestTokenRefreshService_RefreshWithRetry_AntigravityClearsForceRefreshOnSuc
 	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil)
 	until := time.Now().Add(10 * time.Minute)
 	account := &Account{
-		ID:                     3709,
-		Platform:               PlatformAntigravity,
-		Type:                   AccountTypeOAuth,
-		TempUnschedulableUntil: &until,
+		ID:                      3709,
+		Platform:                PlatformAntigravity,
+		Type:                    AccountTypeOAuth,
+		TempUnschedulableUntil:  &until,
+		TempUnschedulableReason: "OAuth 401: invalid token",
 		Extra: map[string]any{
 			antigravityForceTokenRefreshExtraKey:       true,
 			antigravityForceTokenRefreshReasonExtraKey: "401_invalid",
@@ -810,7 +811,7 @@ func TestTokenRefreshService_RefreshWithRetry_AntigravityNonRetryableError(t *te
 	err := service.refreshWithRetry(context.Background(), account, refresher, refresher, time.Hour)
 	require.Error(t, err)
 	require.Equal(t, 0, repo.updateCalls)
-	require.Equal(t, 0, invalidator.calls)
+	require.Equal(t, 1, invalidator.calls, "revoked credentials must be evicted after permanent failure")
 	require.Equal(t, 1, repo.setErrorCalls) // 不可重试错误应设置错误状态
 }
 
@@ -1159,7 +1160,7 @@ func TestPathA_NonRetryableError(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, 1, repo.setErrorCalls) // 应标记 error 状态
 	require.Equal(t, 0, repo.updateCalls)   // 不应更新 credentials
-	require.Equal(t, 0, invalidator.calls)  // 不应触发缓存失效
+	require.Equal(t, 1, invalidator.calls)  // 永久撤销的 token 必须失效
 }
 
 // TestPathA_RetryableErrorExhausted 统一 API 路径可重试错误耗尽 → 不标记 error
@@ -1211,7 +1212,7 @@ func TestPathA_DBUpdateFailed(t *testing.T) {
 
 	err := service.refreshWithRetry(context.Background(), account, refresher, refresher, time.Hour)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "DB update failed")
+	require.ErrorIs(t, err, errOAuthRefreshCredentialPersist)
 	require.Equal(t, 1, repo.updateCalls)  // DB 更新被尝试
 	require.Equal(t, 0, invalidator.calls) // DB 失败时不应触发缓存失效
 }

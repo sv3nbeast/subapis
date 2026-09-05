@@ -71,6 +71,12 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	// 国产模型默认 effort 补充：需要 mappedModel 判定，推迟到 billingModel 算出之后。
 	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, billingModel)
 	chatReq.Model = upstreamModel
+	if strings.EqualFold(chatReq.ReasoningEffort, "none") && !isOpenAICodexGPTModel(upstreamModel) {
+		// Unknown/third-party Chat endpoints do not share the GPT "none" enum.
+		// Keep the explicit supported GPT setting, omit the compatibility value
+		// for other providers instead of sending an invalid parameter.
+		chatReq.ReasoningEffort = ""
+	}
 	if clientStream {
 		chatReq.StreamOptions = &apicompat.ChatStreamOptions{IncludeUsage: true}
 	}

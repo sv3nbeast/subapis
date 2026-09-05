@@ -1220,6 +1220,9 @@ func (a *Account) GetBaseURL() string {
 		return ""
 	}
 	baseURL := a.GetCredential("base_url")
+	if a.Platform == PlatformKiro && strings.TrimSpace(baseURL) == "" {
+		return ""
+	}
 	if a.Platform == PlatformDroid {
 		if strings.TrimSpace(baseURL) == "" {
 			return "https://api.factory.ai/api/llm"

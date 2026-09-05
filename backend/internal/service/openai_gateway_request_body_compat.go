@@ -282,6 +282,14 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Ac
 			return body, false, err
 		}
 	}
+	if responsesLite {
+		if next, liteChanged, err := normalizeOpenAIResponsesLitePayloadForAccount(normalized, account); err != nil {
+			return body, false, err
+		} else if liteChanged {
+			normalized = next
+			changed = true
+		}
+	}
 	if next, normalizedReasoningContent, err := normalizeOpenAIResponsesReasoningContentReplay(normalized); err != nil {
 		return body, false, err
 	} else if normalizedReasoningContent {
@@ -308,7 +316,7 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Ac
 		normalized = sanitized
 		changed = true
 	}
-	if account.IsOAuth() {
+	if account.IsOpenAIOAuthLike() {
 		if reasoningBody, reasoningChanged, err := normalizeOpenAIResponsesReasoningMode(normalized); err != nil {
 			return body, false, err
 		} else if reasoningChanged {

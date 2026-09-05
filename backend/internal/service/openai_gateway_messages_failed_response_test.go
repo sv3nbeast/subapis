@@ -155,6 +155,32 @@ func TestForwardAsAnthropic_StreamingBareErrorBeforeOutputFailsOver(t *testing.T
 	require.Empty(t, rec.Body.String(), "failover path must not commit downstream output")
 }
 
+func TestForwardAsAnthropic_RetryableStreamFailureAfterOutputNeverReplays(t *testing.T) {
+	for _, payload := range []string{
+		`{"type":"error","error":{"type":"server_error","code":"upstream_error","message":"temporary upstream failure"}}`,
+		`{"type":"response.failed","response":{"status":"failed","error":{"type":"server_error","code":"upstream_error","message":"temporary upstream failure"}}}`,
+	} {
+		t.Run(payload, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			body := []byte(`{"model":"gpt-5.4","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":true}`)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+			stream := `data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"partial"}` + "\n\n" + "data: " + payload + "\n\n"
+			upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK,
+				Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(stream))}}
+			svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+			_, err := svc.ForwardAsAnthropic(context.Background(), c, rawChatCompletionsTestAccount(), body, "", "")
+			require.Error(t, err)
+			var failover *UpstreamFailoverError
+			require.False(t, errors.As(err, &failover), "output has committed: never authorize replay")
+			require.Contains(t, rec.Body.String(), `"text":"partial"`)
+			require.Equal(t, 1, strings.Count(rec.Body.String(), "event: error"))
+			require.NotContains(t, rec.Body.String(), "event: message_stop")
+		})
+	}
+}
+
 func TestForwardAsAnthropic_StreamingGenericBareErrorBeforeOutputIsNotHiddenByFailover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

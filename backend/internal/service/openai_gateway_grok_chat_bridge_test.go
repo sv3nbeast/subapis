@@ -283,7 +283,7 @@ func TestForwardGrokChatViaResponsesNonStreamingRejectsCompletedResponseWithoutU
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, grokChatRawEndpoint, bytes.NewReader(body))
-	c.Set("api_key", &APIKey{ID: 7102})
+	c.Set("api_key", &APIKey{ID: 7102, Group: &Group{Platform: PlatformGrok, GrokChatUpstreamMode: GrokChatUpstreamModeResponses}})
 
 	account := grokChatBridgeTestAccount(72)
 	repo := &grokQuotaAccountRepo{mockAccountRepoForPlatform: &mockAccountRepoForPlatform{

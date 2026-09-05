@@ -293,9 +293,9 @@ func TestOpenAIStream429IgnoresSuccessfulQuotaSnapshotHeaders(t *testing.T) {
 	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
 	value, ok := svc.openaiAccountRuntimeBlockUntil.Load(account.ID)
 	require.True(t, ok)
-	blockedUntil, ok := value.(time.Time)
+	block, ok := openAIAccountRuntimeBlockFromValue(value)
 	require.True(t, ok)
-	require.Less(t, time.Until(blockedUntil), time.Minute, "stream 429 must not inherit the normal seven-day quota snapshot")
+	require.Less(t, time.Until(block.Until), time.Minute, "stream 429 must not inherit the normal seven-day quota snapshot")
 	if !repo.lastRateLimitedUntil.IsZero() {
 		require.Less(t, time.Until(repo.lastRateLimitedUntil), time.Minute)
 	}
@@ -314,9 +314,9 @@ func TestOpenAIHTTP429StillUsesQuotaResetHeaders(t *testing.T) {
 
 	value, ok := svc.openaiAccountRuntimeBlockUntil.Load(account.ID)
 	require.True(t, ok)
-	blockedUntil, ok := value.(time.Time)
+	block, ok := openAIAccountRuntimeBlockFromValue(value)
 	require.True(t, ok)
-	require.Greater(t, time.Until(blockedUntil), 6*24*time.Hour, "real HTTP 429 must retain the upstream quota reset")
+	require.Greater(t, time.Until(block.Until), 6*24*time.Hour, "real HTTP 429 must retain the upstream quota reset")
 }
 
 func TestOpenAI429RetryDelayHonorsBoundedRetryAfter(t *testing.T) {
@@ -490,7 +490,8 @@ func TestShouldStopOpenAIOAuth429Failover_AfterBoundedFullWindows(t *testing.T) 
 		svc.recordOpenAIOAuth429()
 	}
 
-	require.True(t, svc.ShouldStopOpenAIOAuth429Failover(account, http.StatusTooManyRequests, 1))
+	require.False(t, svc.ShouldStopOpenAIOAuth429Failover(account, http.StatusTooManyRequests, 1), "storm telemetry must not consume the bounded local account budget")
+	require.True(t, svc.ShouldStopOpenAIOAuth429Failover(account, http.StatusTooManyRequests, openAIOAuth429MaxAccountAttempts))
 	require.False(t, svc.ShouldStopOpenAIOAuth429Failover(apiKeyAccount, http.StatusTooManyRequests, 1))
 	require.False(t, svc.ShouldStopOpenAIOAuth429Failover(account, http.StatusInternalServerError, 1))
 	require.False(t, svc.ShouldStopOpenAIOAuth429Failover(account, http.StatusTooManyRequests, 0))

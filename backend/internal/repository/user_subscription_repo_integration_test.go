@@ -477,13 +477,31 @@ func (s *UserSubscriptionRepoSuite) TestResetUsageWindowsResetsMatchingModelDime
 		})
 	})
 
-	s.Require().NoError(s.repo.ResetUsageWindows(s.ctx, sub.ID, true, false, false, time.Now()))
+	now := time.Now()
+	s.Require().NoError(s.repo.ResetUsageWindows(s.ctx, sub.ID, true, false, false, now, now))
 	got, err := s.repo.GetByID(s.ctx, sub.ID)
 	s.Require().NoError(err)
 	modelUsage := got.ModelUsage["claude-fable-5"]
 	s.Require().Zero(modelUsage.DailyUsageUSD)
 	s.Require().InDelta(4, modelUsage.WeeklyUsageUSD, 1e-6)
 	s.Require().InDelta(5, modelUsage.MonthlyUsageUSD, 1e-6)
+}
+
+func (s *UserSubscriptionRepoSuite) TestResetUsageWindowsKeepsDistinctAnchors() {
+	user := s.mustCreateUser("window-anchors@test.com", service.RoleUser)
+	group := s.mustCreateGroup("g-window-anchors")
+	sub := s.mustCreateSubscription(user.ID, group.ID, nil)
+	daily := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+	periodic := daily.Add(7*time.Hour + 45*time.Minute)
+	s.Require().NoError(s.repo.ResetUsageWindows(s.ctx, sub.ID, true, true, true, daily, periodic))
+	got, err := s.repo.GetByID(s.ctx, sub.ID)
+	s.Require().NoError(err)
+	s.Require().NotNil(got.DailyWindowStart)
+	s.Require().NotNil(got.WeeklyWindowStart)
+	s.Require().NotNil(got.MonthlyWindowStart)
+	s.Require().True(got.DailyWindowStart.Equal(daily))
+	s.Require().True(got.WeeklyWindowStart.Equal(periodic))
+	s.Require().True(got.MonthlyWindowStart.Equal(periodic))
 }
 
 func (s *UserSubscriptionRepoSuite) TestIncrementUsageResetsExpiredWindowsToCurrentCost() {
