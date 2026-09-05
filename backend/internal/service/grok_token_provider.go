@@ -106,7 +106,30 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 	if needsRefresh {
 		refreshCtx, cancel := context.WithTimeout(ctx, grokRequestRefreshTimeout)
 		defer cancel()
-		result, err := p.refreshAPI.RefreshIfNeeded(withOAuthRefreshRequestPath(refreshCtx), account, p.executor, grokTokenRefreshSkew)
+		// A rotating token refresh owns a bounded detached commit section, but
+		// the client request must stop waiting promptly when canceled. The API
+		// still persists/invalidates cache and releases its lease in the worker.
+		type refreshOutcome struct {
+			result *OAuthRefreshResult
+			err    error
+		}
+		completed := make(chan refreshOutcome, 1)
+		attempt := snapshotOAuthRefreshAccount(account)
+		go func() {
+			result, err := p.refreshAPI.RefreshIfNeeded(withOAuthRefreshRequestPath(refreshCtx), attempt, p.executor, grokTokenRefreshSkew)
+			completed <- refreshOutcome{result: result, err: err}
+		}()
+		var result *OAuthRefreshResult
+		var err error
+		select {
+		case <-refreshCtx.Done():
+			return "", refreshCtx.Err()
+		case outcome := <-completed:
+			result, err = outcome.result, outcome.err
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
 		if result != nil && result.Account != nil {
 			if eligibilityErr := grokOAuthRequestAccountEligibilityError(result.Account); eligibilityErr != nil {
 				return "", withGrokCredentialFailureSnapshot(eligibilityErr, result.Account)

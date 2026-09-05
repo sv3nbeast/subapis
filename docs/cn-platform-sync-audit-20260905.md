@@ -247,3 +247,34 @@ Reviewed range: `04ce360b0..a13a19410` + 本轮专用 worktree 改动。高风�
 **Verdict: INCONCLUSIVE / 禁止发布，目标保持 active。** 完整 Repository integration 包仍存在并发缓存活跃索引/过期槽位清扫实现缺失：`accountActiveIndexKey`、`userActiveIndexKey`、`legacyWaitSweepMarkerKey`、`redisUnixSeconds`、`CleanupExpiredAccountSlotKeys` 及服务接口/定时清扫调用链。必须下一轮整体对照官方和本地并发逻辑修复，不能只补常量或空函数让测试编译。
 
 原始全量编译失败：`/tmp/sub2api-cn-round4-integration-compile.log`；签名与仓库接口修复后剩余项应重新编译核实。最终干净代码提交还需全包复验。四项网关不变量已有本轮分支的直接定向证据，整个融合候选仍未获得完整集成 PASS；不把“旧失败”当豁免。
+## 第五轮收尾（2026-09-05）
+
+本节取代前面各检查点的“未完成”清单；最终干净提交验证结果另附在本节末。
+
+- 并发缓存已恢复完整活跃索引：占槽/入队标记、释放校正、Redis 服务器时间、分批过期清扫和一次性旧等待键迁移。生产 Redis 实现通过服务已有的可选 cache-wide 接口进入后台任务，不再查询全部可调度账号。保留本地 count_tokens 独立槽位，并增加独立索引；WebSocket ingress/live 租约及原 Lua 参数兼容不被覆盖。
+- 完整 Repository integration 现已能编译并全部通过。补回复制分组的事务内严格 outbox：原来调用普通 Create 吞掉事件写入错误，后续 SQL 在 aborted transaction 上运行并遮蔽根因。现保留全部分组字段，记录/绑定/事件同事务，强制 outbox 失败用例证实完整回滚。
+- 其余集成失败主要为已升级合同的旧 fixture：API-key 测试传入 Ent 事务上下文；指纹 UAForm、snapshot write token、subscription schema_version 和实际 WS transport 独立语义对齐；过期窗口测试以当前日为锚点，不再被正常的自动窗口推进干扰。没有降级生产事务/缓存守卫。
+- 扩大到整个 backend unit 后发现环境变量可达性遗漏：80 个 scalar 配置键不在 Viper AllKeys 中，包含 image_storage。新增按 Config/mapstructure 注册缺失的 BindEnv；保留已有别名、缺省 IsSet 语义和复杂对象的 config-file-only 约定，不改当前业务默认值。
+- handler 收尾：OpenAI 停用状态返回固定安全 502，容量耗尽保留 503/server_error 的语义；已开始的 Responses 流补发正确 response.failed，并避免重复终态；不同协议的 model_not_found/not_found_error 合同不混用。
+- 取消不再拖住 HTTP 请求：Grok 旋转刷新已开始时，有限后台临界区仍保存唯一后继 token；请求可立即响应取消，缓冲完成通道不会阻塞后台提交。新增测试证实后继 refresh token 已持久化、原请求对象未改、不会继续选择健康账号。
+- 竞态检查发现并修复 `wrapReleaseOnDone`：已取消 context 的 AfterFunc 可在 stop 回调赋值前执行；回调现在仅做 once 释放，只有返回后的闭包读取 stop，1000 次预取消回归及真实 failover 入口 -race 通过。
+
+### 验证范围与性能边界
+
+- 整个 backend：`go test -json -tags unit ./... -timeout 8m -count=1` 已全通过（63 个有测试结果的包、11,958 个顶层 PASS；新增最后一个释放安全用例后以最终复验数字为准），证据 `/tmp/sub2api-cn-round5-backend-all2.jsonl`。
+- 完整 repository integration 全通过：`/tmp/sub2api-cn-round5-repository-integration2.jsonl`；相同整包 `-race` 全通过：`/tmp/sub2api-cn-round5-repository-race.jsonl`（含 1,294 个层级 PASS 事件，不把父/子事件相加冒充独立用例数）。
+- gateway/config/concurrency/取消等定向 race：Service、Config 通过；发现的 handler 释放竞态修复后 `/tmp/sub2api-cn-round5-handler-race-final.log` 全通过。Grok 后台提交取消语义独立 race 见 `/tmp/sub2api-cn-round5-grok-cancel-race.log`。
+- 前端完整 305 文件 / 1,989 项通过（`/tmp/sub2api-cn-round5-frontend.log`）；typecheck、Vite 生产构建通过。`go build -tags embed ./cmd/server` 通过，日志 `/tmp/sub2api-cn-round5-embed-build.log`。构建只有已有 chunk 大小、Browserslist 数据日期等警告。
+- 本机独立 Redis 基准，5×100 次：pre-index 占槽中位约 0.369 ms，indexed 约 0.637 ms，额外约 0.268 ms/次，占槽多一次辅助索引写入。基线脚本来自 `bdfc87822`，证据 `/tmp/sub2api-cn-round5-index-benchmark.log`，源码 `concurrency_index_benchmark_test.go`。这是组件耗时，不是生产 TTFT；没有声称完成线上性能验收。发布时仍按发布流程验证实际 Redis 拓扑及可比 warm 流量。
+- 临时 Redis 基准容器已清理；测试容器仅用本机 Docker，未连接生产。临时 frontend/node_modules 链接已移除，主工作区依赖目录未动。
+
+### 目标验收对应关系
+
+| 要求 | 当前证据 |
+| --- | --- |
+| GLM/Zhipu、Kimi、DeepSeek 可创建分组 | 共享平台目录、GroupsView 渲染/提交测试、真实 GroupHandler JSON 往返、Ent schema 全包 |
+| 账号可绑定对应分组及已支持的组合路由 | GroupSelector/composite route/渠道往返测试、两套调度器所有权校验及 snapshot 生命周期回归 |
+| 不只恢复 UI | CN 三平台×三协议×流/非流 18 入口矩阵、别名 max 六入口、定价/平台额度/阈值落库与保存往返 |
+| 检查其他漏更新 | 本台账逐批列出的调用链检查、完整 backend unit、完整 PG/Redis repository integration 与竞态测试 |
+| 保护现有本地行为 | Kiro/Droid、count_tokens 槽位、WS 租约、模型映射/Fast、5m/1h、命名/前端功能合同均保留；测试合同差异逐项说明 |
+| 可审查交付 | 独立 `codex/fix-cn-group-platform-gaps-20260905` 分支上的分批提交；未推送、未发布 |

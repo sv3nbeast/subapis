@@ -631,7 +631,7 @@ func (s *UserSubscriptionRepoSuite) TestResetDailyUsage() {
 func (s *UserSubscriptionRepoSuite) TestResetDailyUsage_StaleResetDoesNotClearNewWindowUsage() {
 	user := s.mustCreateUser("resetd-cas@test.com", service.RoleUser)
 	group := s.mustCreateGroup("g-resetd-cas")
-	oldWindowStart := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	oldWindowStart := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
 	sub := s.mustCreateSubscription(user.ID, group.ID, func(c *dbent.UserSubscriptionCreate) {
 		c.SetDailyWindowStart(oldWindowStart)
 		c.SetDailyUsageUsd(10)

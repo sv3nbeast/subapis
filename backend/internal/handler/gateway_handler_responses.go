@@ -372,9 +372,12 @@ func (h *GatewayHandler) responsesErrorResponse(c *gin.Context, status int, code
 func (h *GatewayHandler) handleResponsesFailoverExhausted(c *gin.Context, lastErr *service.UpstreamFailoverError, streamStarted bool) {
 	applyFailoverRetryAfter(c, lastErr)
 	if streamStarted {
-		if status, code, message, ok := resolveModelCapacityFailover(c, lastErr); ok {
-			h.handleStreamingAwareError(c, status, code, message, true)
+		if _, forwarded := service.GetOpsStreamError(c); forwarded && c.Writer.Written() && !gatewayStreamHasOnlyHeartbeats(c) {
+			return
 		}
+		status, code, message := h.resolveFailoverExhaustedError(c, lastErr, service.PlatformAnthropic)
+		service.MarkOpsStreamError(c, code, message, status)
+		writeResponsesFailedSSE(c, code, sanitizeClientErrorMessage(status, message))
 		return
 	}
 	status, code, message := h.resolveFailoverExhaustedError(c, lastErr, service.PlatformAnthropic)

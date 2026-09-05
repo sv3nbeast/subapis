@@ -17,7 +17,7 @@ func TestGeminiUsageMapping_NoCacheCreationTokens(t *testing.T) {
 		`"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":20,"cachedContentTokenCount":30,"thoughtsTokenCount":5}}`
 
 	t.Run("non-stream", func(t *testing.T) {
-		_, usage, err := TransformGeminiToClaude([]byte(geminiBody), "gemini-3.1-pro-preview")
+		_, usage, err := TransformGeminiToClaude([]byte(geminiBody), "gemini-3.1-pro-preview", nil)
 		require.NoError(t, err)
 		require.NotNil(t, usage)
 		require.Equal(t, 70, usage.InputTokens)
@@ -27,7 +27,7 @@ func TestGeminiUsageMapping_NoCacheCreationTokens(t *testing.T) {
 	})
 
 	t.Run("stream", func(t *testing.T) {
-		p := NewStreamingProcessor("gemini-3.1-pro-preview")
+		p := NewStreamingProcessor("gemini-3.1-pro-preview", nil)
 		out := p.ProcessLine(`data: {"response":` + geminiBody + `}`)
 		require.True(t, strings.Contains(string(out), `"message_start"`))
 		require.NotContains(t, string(out), `"cache_creation_input_tokens"`, "message_start 的 usage 不应携带缓存写入分项")

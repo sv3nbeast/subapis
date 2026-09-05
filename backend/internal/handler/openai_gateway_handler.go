@@ -1745,6 +1745,9 @@ func (h *OpenAIGatewayHandler) resolveAnthropicFailoverExhaustedError(c *gin.Con
 		return status, "api_error", message
 	}
 	if status, errType, message, ok := resolveModelCapacityFailover(c, failoverErr); ok {
+		if errType == "server_error" {
+			errType = "api_error"
+		}
 		return status, errType, message
 	}
 	if status, errType, message, ok := resolveKiroContentProcessingFailover(c, failoverErr); ok {

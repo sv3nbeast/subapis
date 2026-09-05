@@ -2661,7 +2661,7 @@ func setDefaults() {
 	// Subscription Maintenance (bounded queue + worker pool)
 	viper.SetDefault("subscription_maintenance.worker_count", 2)
 	viper.SetDefault("subscription_maintenance.queue_size", 1024)
-
+	bindEnvReachableConfigKeys()
 }
 
 func (c *Config) Validate() error {

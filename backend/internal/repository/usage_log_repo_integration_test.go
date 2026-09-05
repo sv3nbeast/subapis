@@ -586,7 +586,7 @@ func (s *UsageLogRepoSuite) TestGetByID_ReturnsRequestTypeAndLegacyFallback() {
 	s.Require().NoError(err)
 	s.Require().Equal(service.RequestTypeWSV2, got.RequestType)
 	s.Require().True(got.Stream)
-	s.Require().True(got.OpenAIWSMode)
+	s.Require().False(got.OpenAIWSMode, "request type must not overwrite the actual upstream transport")
 }
 
 // --- Delete ---

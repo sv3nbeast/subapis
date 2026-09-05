@@ -275,6 +275,9 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	}
 
 	// 4. 执行平台特定刷新逻辑
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	attemptedAccount := snapshotOAuthRefreshAccount(freshAccount)
 	operationCtx := ctx
 	cancelOperation := func() {}

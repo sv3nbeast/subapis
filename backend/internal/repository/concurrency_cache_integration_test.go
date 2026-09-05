@@ -38,6 +38,57 @@ func (s *ConcurrencyCacheSuite) SetupTest() {
 	s.cache = s.rawCache
 }
 
+func (s *ConcurrencyCacheSuite) TestCountTokensSlotsStayIsolatedAndIndexed() {
+	const userID = 7001
+	ok, err := s.cache.AcquireUserSlot(s.ctx, userID, 1, "current:ordinary")
+	s.Require().NoError(err)
+	s.Require().True(ok)
+	ok, err = s.cache.AcquireCountTokensUserSlot(s.ctx, userID, 1, "current:count")
+	s.Require().NoError(err)
+	s.Require().True(ok, "ordinary user capacity must not consume the count_tokens allowance")
+	ok, err = s.cache.AcquireCountTokensUserSlot(s.ctx, userID, 1, "current:other-count")
+	s.Require().NoError(err)
+	s.Require().False(ok)
+	s.Require().NoError(s.rdb.ZScore(s.ctx, countTokensUserActiveIndexKey, strconv.FormatInt(userID, 10)).Err())
+	s.Require().NoError(s.cache.ReleaseCountTokensUserSlot(s.ctx, userID, "current:count"))
+	s.Require().ErrorIs(s.rdb.ZScore(s.ctx, countTokensUserActiveIndexKey, strconv.FormatInt(userID, 10)).Err(), redis.Nil)
+	count, err := s.cache.GetUserConcurrency(s.ctx, userID)
+	s.Require().NoError(err)
+	s.Require().Equal(1, count)
+}
+
+func (s *ConcurrencyCacheSuite) TestCountTokensStartupCleanupKeepsItsOwnNamespace() {
+	const userID = 7002
+	for _, id := range []string{"old:count", "current:count"} {
+		ok, err := s.cache.AcquireCountTokensUserSlot(s.ctx, userID, 3, id)
+		s.Require().NoError(err)
+		s.Require().True(ok)
+	}
+	ok, err := s.cache.AcquireUserSlot(s.ctx, userID, 1, "current:ordinary")
+	s.Require().NoError(err)
+	s.Require().True(ok)
+	s.Require().NoError(s.cache.CleanupStaleProcessSlots(s.ctx, "current:"))
+	members, err := s.rdb.ZRange(s.ctx, countTokensUserSlotKey(userID), 0, -1).Result()
+	s.Require().NoError(err)
+	s.Require().Equal([]string{"current:count"}, members)
+	count, err := s.cache.GetUserConcurrency(s.ctx, userID)
+	s.Require().NoError(err)
+	s.Require().Equal(1, count)
+}
+
+func (s *ConcurrencyCacheSuite) TestCleanupWorkerUsesRealRedisIndexWithoutAccountRepository() {
+	now, err := s.rawCache.redisUnixSeconds(s.ctx)
+	s.Require().NoError(err)
+	const userID = 7003
+	key := countTokensUserSlotKey(userID)
+	s.Require().NoError(s.rdb.ZAdd(s.ctx, key, redis.Z{Score: float64(now - int64(testSlotTTL.Seconds()) - 1), Member: "expired"}).Err())
+	s.Require().NoError(s.rdb.ZAdd(s.ctx, countTokensUserActiveIndexKey, redis.Z{Score: float64(now - 1), Member: strconv.FormatInt(userID, 10)}).Err())
+	service.NewConcurrencyService(s.cache).StartSlotCleanupWorker(nil, time.Hour)
+	s.Require().Eventually(func() bool {
+		return s.rdb.Exists(s.ctx, key).Val() == 0 && errors.Is(s.rdb.ZScore(s.ctx, countTokensUserActiveIndexKey, strconv.FormatInt(userID, 10)).Err(), redis.Nil)
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
 type apiKeyConcurrencyCacheForTest interface {
 	TrackAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error
 	ReleaseAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error
@@ -681,7 +732,7 @@ func (s *ConcurrencyCacheSuite) TestCleanupExpiredAccountSlotKeys() {
 		redis.Z{Score: float64(now), Member: "302"},
 	).Err())
 
-	require.NoError(s.T(), s.cache.CleanupExpiredAccountSlotKeys(s.ctx))
+	require.NoError(s.T(), s.rawCache.CleanupExpiredAccountSlotKeys(s.ctx))
 
 	accountMembers, err := s.rdb.ZRange(s.ctx, accountKeyWithFresh, 0, -1).Result()
 	require.NoError(s.T(), err)
@@ -724,7 +775,7 @@ func (s *ConcurrencyCacheSuite) TestCleanupExpiredAccountSlotKeys_ReapsUserIndex
 		redis.Z{Score: expiredScore, Member: "not-a-user-id"},
 	).Err())
 
-	require.NoError(s.T(), s.cache.CleanupExpiredAccountSlotKeys(s.ctx))
+	require.NoError(s.T(), s.rawCache.CleanupExpiredAccountSlotKeys(s.ctx))
 
 	score, err := s.rdb.ZScore(s.ctx, userActiveIndexKey, "401").Result()
 	require.NoError(s.T(), err)

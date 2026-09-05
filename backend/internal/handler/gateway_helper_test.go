@@ -105,6 +105,23 @@ func TestWrapReleaseOnDone_NilReleaseFunc(t *testing.T) {
 	}
 }
 
+func TestWrapReleaseOnDone_AlreadyCanceledOnlyReleasesOnce(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for i := 0; i < 1000; i++ {
+		var count atomic.Int32
+		done := make(chan struct{})
+		release := wrapReleaseOnDone(ctx, func() { count.Add(1); close(done) })
+		runtime.Gosched()
+		release()
+		release()
+		<-done
+		if got := count.Load(); got != 1 {
+			t.Fatalf("release count = %d", got)
+		}
+	}
+}
+
 // TestWrapReleaseOnDone_ConcurrentCalls 验证并发调用的安全性
 func TestWrapReleaseOnDone_ConcurrentCalls(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

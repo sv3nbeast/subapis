@@ -251,11 +251,12 @@ func (s *BillingCacheSuite) TestSubscriptionCache() {
 				subKey := fmt.Sprintf("%s%d:%d", billingSubKeyPrefix, userID, groupID)
 
 				fields := map[string]any{
-					"expires_at":    time.Now().Add(1 * time.Hour).Unix(),
-					"daily_usage":   1.0,
-					"weekly_usage":  2.0,
-					"monthly_usage": 3.0,
-					"version":       1,
+					"schema_version": subscriptionCacheSchema,
+					"expires_at":     time.Now().Add(1 * time.Hour).Unix(),
+					"daily_usage":    1.0,
+					"weekly_usage":   2.0,
+					"monthly_usage":  3.0,
+					"version":        1,
 				}
 				require.NoError(s.T(), rdb.HSet(ctx, subKey, fields).Err(), "HSet")
 

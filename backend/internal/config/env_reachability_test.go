@@ -75,8 +75,8 @@ func collectMapstructureKeys(t reflect.Type, prefix string, out map[string]strin
 // as if it were never configured. That is exactly how image_storage credentials
 // were lost, silently disabling async image tasks for env-driven deployments.
 //
-// When this fails, register a zero-valued default in setEnvReachableDefaults
-// for each reported scalar key. Maps and slices of structs are config-file-only.
+// Missing scalar keys are explicitly bound without changing absence-sensitive
+// defaults. Maps and slices of structs remain config-file-only.
 func TestConfigKeysAreEnvReachable(t *testing.T) {
 	bound := map[string]string{}
 	collectMapstructureKeys(reflect.TypeOf(Config{}), "", bound)
@@ -98,7 +98,7 @@ func TestConfigKeysAreEnvReachable(t *testing.T) {
 	sort.Strings(unreachable)
 
 	if len(unreachable) > 0 {
-		t.Fatalf("%d config keys have no default registered, so their environment variables are silently ignored:\n  %s",
+		t.Fatalf("%d config keys have no default or environment binding, so their environment variables are silently ignored:\n  %s",
 			len(unreachable), strings.Join(unreachable, "\n  "))
 	}
 }

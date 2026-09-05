@@ -93,7 +93,7 @@ func init() {
 
 // GetClientVersion 返回当前配置的 Antigravity 客户端版本。
 func GetClientVersion() string {
-	return GetUserAgentVersionForContext(context.Background())
+	return strings.TrimSpace(GetUserAgentVersionForContext(context.Background()))
 }
 
 // NormalizeUserAgentVersion 校验并归一化 Antigravity User-Agent 版本号。

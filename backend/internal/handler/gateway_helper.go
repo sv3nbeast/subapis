@@ -213,20 +213,17 @@ func wrapReleaseOnDone(ctx context.Context, releaseFunc func()) func() {
 		return nil
 	}
 	var once sync.Once
-	var stop func() bool
-
-	release := func() {
-		once.Do(func() {
-			if stop != nil {
-				_ = stop()
-			}
-			releaseFunc()
-		})
+	release := func() { once.Do(releaseFunc) }
+	if ctx == nil {
+		return release
 	}
-
-	stop = context.AfterFunc(ctx, release)
-
-	return release
+	// An already-canceled context may run the callback before AfterFunc
+	// returns. Only the returned closure may read stop, never that callback.
+	stop := context.AfterFunc(ctx, release)
+	return func() {
+		stop()
+		release()
+	}
 }
 
 func wrapReleaseOnce(releaseFunc func()) func() {
@@ -269,6 +266,14 @@ func applyFailoverRetryAfter(c *gin.Context, failoverErr *service.UpstreamFailov
 }
 
 func resolveModelCapacityFailover(c *gin.Context, failoverErr *service.UpstreamFailoverError) (int, string, string, bool) {
+	if failoverErr != nil && failoverErr.IsOpenAICapacityShed() {
+		message := strings.TrimSpace(failoverErr.ClientMessage)
+		if message == "" {
+			message = "Upstream service is temporarily overloaded, please retry later"
+		}
+		service.SetOpsUpstreamError(c, failoverErr.StatusCode, service.ExtractUpstreamErrorMessage(failoverErr.ResponseBody), string(failoverErr.ResponseBody))
+		return http.StatusServiceUnavailable, "server_error", sanitizeClientErrorMessage(http.StatusServiceUnavailable, message), true
+	}
 	if failoverErr == nil || failoverErr.FailureKind != service.UpstreamFailureModelCapacity {
 		return 0, "", "", false
 	}
@@ -348,6 +353,9 @@ func isSafeRetryAfter(value string) bool {
 }
 
 func credentialFailoverClientResponse(failoverErr *service.UpstreamFailoverError) (int, string) {
+	if failoverErr != nil && failoverErr.Reason == service.OpenAIUpstreamAccessStateReason {
+		return http.StatusBadGateway, service.OpenAIUpstreamAccessUnavailableClientMessage
+	}
 	if failoverErr != nil && failoverErr.Reason == service.AntigravityCredentialRejectedReason {
 		return http.StatusBadGateway, service.AntigravityCredentialRejectedClientMessage
 	}

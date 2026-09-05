@@ -3049,3 +3049,10 @@ aa4a3509c debug(kiro): separate translated 与 client stream capture
 - Service 8,045 顶层 unit 已全部通过；Repository/admin/DTO/server、Ent schema 分别全包通过；相关 race 与本机临时 PG/Redis 定向集成通过。admin race 的 mock map 读写已修复。
 - **仍不能发布**：完整 Repository integration 的并发活跃索引/清扫功能仍漏合并，须完整恢复接口、Lua/索引和后台任务后复验。没有推送或生产变更。
 - 完整证据、测试合同处理和剩余门禁见 `docs/cn-platform-sync-audit-20260905.md`。
+## 2026-09-05 CN 补漏第五批收尾（未发布）
+
+- 恢复并发活跃索引及清扫全链，保留 count_tokens 独立槽位/索引和本地 WS 租约；修正复制分组严格 outbox 事务、环境变量遗漏、handler 安全错误/Responses 终态与取消释放竞态。
+- Grok 旋转刷新保留有限后台提交，取消请求不再同步等待；真实入口和持久化回归验证后继 token 不丢失。
+- 整 backend unit、完整 Repository PG/Redis integration 及其 -race、前端 305/1,989 测试、typecheck/build、embed 构建均获得通过证据。最后干净提交复验另记录准确 SHA。
+- Redis 新索引每次占槽增加约 0.268 ms 本机组件开销；不冒充线上 TTFT。未部署，后续生产发布仍需真实流量验证。
+- 详细验收矩阵、差异处置和原始日志见 `docs/cn-platform-sync-audit-20260905.md`。

@@ -1586,6 +1586,7 @@ func (s *OpenAIGatewayService) newOpenAIAccountFailoverErrorWithClassificationHe
 const (
 	openAIUpstreamAccessUnavailableClientMessage = "Upstream access is temporarily unavailable, please retry later"
 	OpenAIUpstreamAccessStateReason              = GatewayFailureReason("openai_upstream_access_state")
+	OpenAIUpstreamAccessUnavailableClientMessage = openAIUpstreamAccessUnavailableClientMessage
 )
 
 func isOpenAIUpstreamAccessStateError(_ string, body []byte) bool {

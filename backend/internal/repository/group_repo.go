@@ -42,12 +42,27 @@ func newGroupRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor) *groupRep
 }
 
 func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) error {
+	if err := createGroupRecord(ctx, clientFromContext(ctx, r.client), groupIn); err != nil {
+		return err
+	}
+	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventGroupChanged, nil, &groupIn.ID, nil); err != nil {
+		logger.LegacyPrintf("repository.group", "[SchedulerOutbox] enqueue group create failed: group=%d err=%v", groupIn.ID, err)
+	}
+	return nil
+}
+
+// Shared record creation lets atomic duplication own its outbox write without
+// swallowing a failed statement and then running on an aborted transaction.
+func createGroupRecord(ctx context.Context, client *dbent.Client, groupIn *service.Group) error {
+	if groupIn == nil {
+		return errors.New("group is nil")
+	}
 	service.NormalizeGroupRuntimeFields(groupIn)
 	modelPricing, err := json.Marshal(groupIn.ModelPricing)
 	if err != nil {
 		return fmt.Errorf("marshal group model pricing: %w", err)
 	}
-	builder := r.client.Group.Create().
+	builder := client.Group.Create().
 		SetModelPricing(modelPricing).
 		SetLongContextPricingEnabled(groupIn.LongContextPricingEnabled).
 		SetName(groupIn.Name).
@@ -127,9 +142,6 @@ func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) er
 		groupIn.ID = created.ID
 		groupIn.CreatedAt = created.CreatedAt
 		groupIn.UpdatedAt = created.UpdatedAt
-		if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventGroupChanged, nil, &groupIn.ID, nil); err != nil {
-			logger.LegacyPrintf("repository.group", "[SchedulerOutbox] enqueue group create failed: group=%d err=%v", groupIn.ID, err)
-		}
 	}
 	return translatePersistenceError(err, nil, service.ErrGroupExists)
 }
@@ -167,8 +179,7 @@ func (r *groupRepository) CreateFromSource(ctx context.Context, groupIn *service
 	if err := lockAnthropicStableCanaryGroupMutation(ctx, txClient, sourceGroupID); err != nil {
 		return err
 	}
-	txRepo := newGroupRepositoryWithSQL(txClient, txClient)
-	if err := txRepo.Create(ctx, groupIn); err != nil {
+	if err := createGroupRecord(ctx, txClient, groupIn); err != nil {
 		return err
 	}
 	result, err := txClient.ExecContext(ctx, `
@@ -183,6 +194,9 @@ func (r *groupRepository) CreateFromSource(ctx context.Context, groupIn *service
 	}
 	if count, err := result.RowsAffected(); err == nil {
 		groupIn.AccountCount = count
+	}
+	if err := enqueueSchedulerOutbox(ctx, txClient, service.SchedulerOutboxEventGroupChanged, nil, &groupIn.ID, nil); err != nil {
+		return err
 	}
 	if tx != nil {
 		return tx.Commit()

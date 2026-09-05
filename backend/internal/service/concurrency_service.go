@@ -42,7 +42,7 @@ type ConcurrencyCache interface {
 	AcquireCountTokensUserSlot(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error)
 	ReleaseCountTokensUserSlot(ctx context.Context, userID int64, requestID string) error
 
-	// 等待队列计数（只在首次创建时设置 TTL）
+	// 等待队列计数（每次入队刷新 TTL，避免长时间排队时提前过期）
 	IncrementWaitCount(ctx context.Context, userID int64, maxWait int) (bool, error)
 	DecrementWaitCount(ctx context.Context, userID int64) error
 
@@ -162,6 +162,8 @@ func (l *OpenAIWSIngressLease) refresh(lastConfirmedAt time.Time) (time.Time, bo
 	return lastConfirmedAt, false
 }
 
+// Redis implements cache-wide cleanup. Keep this an optional extension so
+// existing adapters retain the bounded repository-based fallback below.
 type accountSlotKeyCleanupCache interface {
 	CleanupExpiredAccountSlotKeys(ctx context.Context) error
 }
