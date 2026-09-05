@@ -4072,6 +4072,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			markPatchDelete("max_completion_tokens")
 		}
 		for _, unsupportedField := range []string{"prompt_cache_retention", "safety_identifier", "prompt_cache_options"} {
+			if account.IsOpenAIApiKey() && isOpenAIGPT6AstraModel(upstreamModel) && unsupportedField != "safety_identifier" {
+				continue // Astra uses prompt_cache_options; migrate legacy TTL at the wire boundary.
+			}
 			if gjson.GetBytes(body, unsupportedField).Exists() {
 				markPatchDelete(unsupportedField)
 			}
@@ -5149,6 +5152,11 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	}
 	targetURL = appendOpenAIResponsesRequestPathSuffix(targetURL, openAIResponsesRequestPathSuffix(c))
 	body = normalizeDeepSeekResponsesRequestBody(account, body)
+	if normalized, _, err := normalizeOpenAIAstraRequest(account, body); err != nil {
+		return nil, err
+	} else {
+		body = normalized
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
@@ -6706,6 +6714,11 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	}
 	targetURL = appendOpenAIResponsesRequestPathSuffix(targetURL, openAIResponsesRequestPathSuffix(c))
 	body = normalizeDeepSeekResponsesRequestBody(account, body)
+	if normalized, _, err := normalizeOpenAIAstraRequest(account, body); err != nil {
+		return nil, err
+	} else {
+		body = normalized
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
 	if err != nil {
@@ -11753,6 +11766,11 @@ func normalizeOpenAIReasoningEffort(raw string) string {
 }
 
 func normalizeOpenAIReasoningEffortForModel(raw, model string) string {
+	if isOpenAIGPT6AstraModel(model) {
+		if effort := strings.ToLower(strings.TrimSpace(raw)); effort == "none" || effort == "minimal" {
+			return "low"
+		}
+	}
 	if strings.EqualFold(strings.TrimSpace(raw), "max") && supportsOpenAIReasoningEffortMax(model) {
 		return "max"
 	}
@@ -11760,7 +11778,7 @@ func normalizeOpenAIReasoningEffortForModel(raw, model string) string {
 }
 
 func supportsOpenAIReasoningEffortMax(model string) bool {
-	if isOpenAIGPT56Model(model) {
+	if isOpenAIGPT56Model(model) || isOpenAIGPT6AstraModel(model) {
 		return true
 	}
 	normalized := strings.ToLower(lastOpenAIModelSegment(model))

@@ -173,6 +173,12 @@ func normalizeOpenAIOAuthResponsesCompatibilityBody(body []byte) ([]byte, bool, 
 	}
 	normalized := body
 	changed := false
+	if next, astraChanged, err := normalizeOpenAIAstraRequest(&Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}, normalized); err != nil {
+		return body, false, err
+	} else {
+		normalized = next
+		changed = astraChanged
+	}
 	prompt := gjson.GetBytes(normalized, "prompt")
 	if prompt.Exists() {
 		input := gjson.GetBytes(normalized, "input")
@@ -261,9 +267,17 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Ac
 	}
 	normalized := body
 	changed := false
+	if next, astraChanged, err := normalizeOpenAIAstraRequest(account, normalized); err != nil {
+		return body, false, err
+	} else {
+		normalized = next
+		changed = astraChanged
+	}
 	if account.IsOpenAIOAuthLike() {
 		var err error
-		normalized, changed, err = normalizeOpenAIResponsesLegacyIngress(body)
+		var legacyChanged bool
+		normalized, legacyChanged, err = normalizeOpenAIResponsesLegacyIngress(normalized)
+		changed = changed || legacyChanged
 		if err != nil {
 			return body, false, err
 		}

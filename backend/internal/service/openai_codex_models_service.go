@@ -496,12 +496,20 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 			descriptor.SupportVerbosity = true
 			descriptor.DefaultVerbosity = &defaultVerbosity
 		}
+		if isOpenAIGPT6AstraModel(modelID) {
+			descriptor.DisplayName = "GPT-6 Astra"
+			descriptor.ContextWindow = 922_000 // input headroom; total window is 1,050,000
+			descriptor.MaxContextWindow = 922_000
+		}
 	}
 
 	return descriptor
 }
 
 func configuredCodexSupportsPriorityServiceTier(modelID string) bool {
+	if isOpenAIGPT6AstraModel(modelID) {
+		return true
+	}
 	normalized := canonicalizeOpenAIModelAliasSpelling(modelID)
 	for _, family := range []string{"gpt-5.4", "gpt-5.5", "gpt-5.6"} {
 		if normalized == family || strings.HasPrefix(normalized, family+"-") {
@@ -567,7 +575,7 @@ func configuredCodexGPTReasoningLevels(modelID string) []configuredCodexReasonin
 		{Effort: "xhigh", Description: "Extra-high reasoning depth for difficult tasks"},
 	}
 	normalized := getNormalizedCodexModel(modelID)
-	if isOpenAIGPT56Model(modelID) {
+	if isOpenAIGPT56Model(modelID) || isOpenAIGPT6AstraModel(modelID) {
 		levels = append(levels, configuredCodexReasoningLevel{
 			Effort:      "max",
 			Description: "Maximum reasoning depth for complex tasks",
@@ -592,12 +600,12 @@ func isOpenAICodexGPTModel(modelID string) bool {
 
 func isOpenAICodexReasoningGPTModel(modelID string) bool {
 	normalized := canonicalizeOpenAIModelAliasSpelling(modelID)
-	return strings.HasPrefix(normalized, "gpt-5")
+	return strings.HasPrefix(normalized, "gpt-5") || isOpenAIGPT6AstraModel(modelID)
 }
 
 func isOpenAICodexImageInputModel(modelID string) bool {
 	normalized := canonicalizeOpenAIModelAliasSpelling(modelID)
-	return strings.HasPrefix(normalized, "gpt-5") ||
+	return isOpenAIGPT6AstraModel(modelID) || strings.HasPrefix(normalized, "gpt-5") ||
 		strings.HasPrefix(normalized, "gpt-4o") ||
 		strings.HasPrefix(normalized, "gpt-4.1") ||
 		strings.HasPrefix(normalized, "gpt-4.5") ||
@@ -1834,6 +1842,7 @@ func CodexModelsManifestETag(body []byte) string {
 }
 
 var apiKeyCodexModelsWithoutResponsesLite = map[string]struct{}{
+	"gpt-6-astra":   {},
 	"gpt-5.6-sol":   {},
 	"gpt-5.6-terra": {},
 	"gpt-5.6-luna":  {},

@@ -25,6 +25,16 @@ import (
 )
 
 var (
+	openAIGPT6AstraFallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken: 10e-6, OutputCostPerToken: 50e-6,
+		CacheCreationInputTokenCost: 12.5e-6, CacheReadInputTokenCost: 1e-6,
+		InputCostPerTokenPriority: 20e-6, OutputCostPerTokenPriority: 100e-6,
+		CacheCreationInputTokenCostPriority: 25e-6, CacheReadInputTokenCostPriority: 2e-6,
+		LongContextInputTokenThreshold: 272000,
+		LongContextInputCostMultiplier: 2, LongContextOutputCostMultiplier: 1.5,
+		SupportsServiceTier: true, SupportsPromptCaching: true,
+		LiteLLMProvider: "openai", Mode: "chat",
+	}
 	openAIModelDatePattern     = regexp.MustCompile(`-\d{8}$`)
 	openAIModelBasePattern     = regexp.MustCompile(`^(gpt-\d+(?:\.\d+)?)(?:-|$)`)
 	claudeFamilyVersionPattern = regexp.MustCompile(`^claude-(opus|sonnet|haiku)-(\d+)\.(\d+)(.*)$`)
@@ -1093,6 +1103,9 @@ func (s *PricingService) buildModelLookupCandidates(modelLower string) []string 
 }
 
 func normalizeModelNameForPricing(model string) string {
+	if isOpenAIGPT6AstraModel(model) {
+		return "gpt-6-astra"
+	}
 	// Common Gemini/VertexAI forms:
 	// - models/gemini-2.0-flash-exp
 	// - publishers/google/models/gemini-2.5-pro
@@ -1335,6 +1348,9 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 		}
 	}
 
+	if isOpenAIGPT6AstraModel(model) {
+		return openAIGPT6AstraFallbackPricing
+	}
 	if strings.HasPrefix(model, "gpt-5.6-sol") {
 		logger.With(zap.String("component", "service.pricing")).
 			Info(fmt.Sprintf("[Pricing] OpenAI fallback matched %s -> %s", model, "gpt-5.6-sol(static)"))
@@ -1520,6 +1536,7 @@ func localChannelPricingModelNamesByProvider(provider string) []string {
 	switch provider {
 	case "openai":
 		return []string{
+			"gpt-6-astra",
 			"gpt-5.1",
 			"gpt-5.1-codex",
 			"gpt-5.2",

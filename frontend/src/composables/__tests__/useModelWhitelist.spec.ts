@@ -7,6 +7,13 @@ vi.mock('@/api/admin/accounts', () => ({
 import { buildModelMappingObject, getModelsByPlatform, getPresetMappingsByPlatform, splitModelMappingObject } from '../useModelWhitelist'
 
 describe('useModelWhitelist', () => {
+  it('exposes verified Astra on OpenAI only', () => {
+    expect(getModelsByPlatform('openai')).toContain('gpt-6-astra')
+    expect(getModelsByPlatform('kiro')).not.toContain('gpt-6-astra')
+    expect(getPresetMappingsByPlatform('openai')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: 'gpt-6-astra', to: 'gpt-6-astra' })
+    ]))
+  })
   it('openai 模型列表包含 GPT-5.4 官方快照', () => {
     const models = getModelsByPlatform('openai')
 
