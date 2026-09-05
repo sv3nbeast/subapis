@@ -136,4 +136,77 @@ func TestAstraMigrationIdempotentPricingAndScope(t *testing.T) {
 	before := snapshot()
 	run()
 	require.JSONEq(t, before, snapshot())
+
+	// Apply the forward-only correction after the already-released migration.
+	// Also cover mixed, alias-only and disabled rows added by an operator later.
+	_, err = db.Exec(`
+INSERT INTO channel_model_pricing(id,channel_id,platform,models,input_price,enabled) VALUES
+(990,14,'openai','["gpt-5.5","gpt-6-astra-low","gpt-5.4"]',0.000321,true),
+(991,14,'openai','["gpt-6-astra-max"]',0.000654,true),
+(992,15,'openai','["gpt-6-astra","gpt-6-astra-high"]',0.000987,false),
+(993,16,'kiro','["gpt-6-astra-high"]',0.000111,false);
+INSERT INTO channel_pricing_intervals(pricing_id,min_tokens,input_price) VALUES (991,0,0.000789);
+INSERT INTO channel_account_stats_model_pricing(id,rule_id,platform,models,input_price,enabled) VALUES
+(994,25,'openai','["gpt-5.5","gpt-6-astra-low","gpt-5.4"]',0.000222,true),
+(995,25,'openai','["gpt-6-astra-max"]',0.000333,true),
+(996,26,'openai','["gpt-6-astra","gpt-6-astra-xhigh"]',0.000444,false);
+INSERT INTO channel_account_stats_pricing_intervals(pricing_id,min_tokens,input_price) VALUES (995,0,0.000555);
+`)
+	require.NoError(t, err)
+	immutableSnapshot := func() string {
+		var v string
+		require.NoError(t, db.QueryRow(`SELECT jsonb_build_array(
+ (SELECT jsonb_agg(to_jsonb(p)-'models'-'enabled'-'updated_at' ORDER BY id) FROM channel_model_pricing p),
+ (SELECT jsonb_agg(to_jsonb(p)-'models'-'enabled'-'updated_at' ORDER BY id) FROM channel_account_stats_model_pricing p),
+ (SELECT jsonb_agg(to_jsonb(p) ORDER BY id) FROM channel_pricing_intervals p),
+ (SELECT jsonb_agg(to_jsonb(p) ORDER BY id) FROM channel_account_stats_pricing_intervals p),
+ (SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM accounts a),
+ (SELECT jsonb_agg(to_jsonb(g) ORDER BY id) FROM groups g))`).Scan(&v))
+		return v
+	}
+	immutableBefore := immutableSnapshot()
+	cleanup, err := FS.ReadFile("236_remove_gpt6_astra_effort_aliases.sql")
+	require.NoError(t, err)
+	runCleanup := func() {
+		tx, e := db.BeginTx(ctx, nil)
+		require.NoError(t, e)
+		_, e = tx.Exec(string(cleanup))
+		if e != nil {
+			_ = tx.Rollback()
+		}
+		require.NoError(t, e)
+		require.NoError(t, tx.Commit())
+	}
+	runCleanup()
+	require.JSONEq(t, immutableBefore, immutableSnapshot(), "prices, intervals, mappings and groups must remain untouched")
+	for _, tc := range []struct {
+		table                      string
+		mixed, onlyAlias, disabled int
+	}{
+		{"channel_model_pricing", 990, 991, 992},
+		{"channel_account_stats_model_pricing", 994, 995, 996},
+	} {
+		require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM `+tc.table+` WHERE platform='openai' AND models ?| ARRAY['gpt-6-astra-low','gpt-6-astra-medium','gpt-6-astra-high','gpt-6-astra-xhigh','gpt-6-astra-max']`).Scan(&count))
+		require.Zero(t, count)
+		require.NoError(t, db.QueryRow(`SELECT models,enabled FROM `+tc.table+` WHERE id=$1`, tc.mixed).Scan(&mapping, &enabled))
+		require.JSONEq(t, `["gpt-5.5","gpt-5.4"]`, mapping)
+		require.True(t, enabled)
+		require.NoError(t, db.QueryRow(`SELECT models,enabled FROM `+tc.table+` WHERE id=$1`, tc.onlyAlias).Scan(&mapping, &enabled))
+		require.JSONEq(t, `[]`, mapping)
+		require.False(t, enabled)
+		require.NoError(t, db.QueryRow(`SELECT models,enabled FROM `+tc.table+` WHERE id=$1`, tc.disabled).Scan(&mapping, &enabled))
+		require.JSONEq(t, `["gpt-6-astra"]`, mapping)
+		require.False(t, enabled)
+	}
+	for _, q := range []string{
+		`SELECT models,enabled FROM channel_model_pricing WHERE id=110`,
+		`SELECT models,enabled FROM channel_account_stats_model_pricing WHERE id=220`,
+	} {
+		require.NoError(t, db.QueryRow(q).Scan(&mapping, &enabled))
+		require.JSONEq(t, `["gpt-6-astra"]`, mapping)
+		require.True(t, enabled)
+	}
+	afterCleanup := snapshot()
+	runCleanup()
+	require.JSONEq(t, afterCleanup, snapshot())
 }

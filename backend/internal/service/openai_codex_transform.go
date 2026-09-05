@@ -167,7 +167,7 @@ func isLikelyOpenAIGPT5OrCodexModel(model string) bool {
 	if strings.Contains(normalized, "codex") {
 		return true
 	}
-	return strings.HasPrefix(normalized, "gpt-5") || isOpenAIGPT6AstraModel(modelID)
+	return strings.HasPrefix(normalized, "gpt-5")
 }
 
 type codexTransformResult struct {

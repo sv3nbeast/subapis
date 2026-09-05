@@ -1,8 +1,10 @@
 # GPT-6 Astra support — 2026-09-05
 
-Implementation base: `9d9508779`, isolated branch `codex/add-gpt-6-astra-20260905`.
-No production settings, database rows, or deployment were changed. The only
-upstream writes were bounded short generation probes; probe tools were never executed.
+Initial implementation base: `9d9508779`; the support release is `9f5e9a62c`.
+Canonical-name cleanup base: `9f5e9a62c`, isolated branch
+`codex/astra-canonical-model-20260905`. This cleanup has not been deployed and
+made no production writes. The live capability evidence below comes from the
+initial bounded probes; no probe tools were executed.
 
 ## Verified contract
 
@@ -22,8 +24,11 @@ Official sources retrieved 2026-09-05:
   Flex/Batch are 0.5x. No separate 5-minute/1-hour cache-write rates are advertised
   for this model; do not invent Anthropic TTL prices.
 
-Only the official base ID is exposed in discovery. Local effort aliases are
-`gpt-6-astra-{low,medium,high,xhigh,max}` and normalize to the base on the wire.
+Only the official model ID `gpt-6-astra` is exposed and configured. Reasoning
+effort is supplied separately via `reasoning.effort`, `reasoning_effort` or the
+Messages bridge's `output_config.effort`. The initial release's five built-in
+effort-suffix aliases have been removed at the user's request; they are no longer
+automatically mapped to Astra. Shared normalization for other models is unchanged.
 No dated, bare `gpt-6`, pro, ultra, Bedrock, or Azure aliases were invented.
 Existing defaults and older models remain unchanged.
 
@@ -68,8 +73,8 @@ rows, credential shadows, wildcard mappings and explicit Astra overrides.
 Group lists preserve their enabled flag, order and deduplication, and require a
 direct OpenAI OAuth account membership. Kiro-only groups are excluded.
 
-Each eligible billing channel gets one enabled dedicated Astra row containing all
-six billable aliases, with independent standard and >272K intervals. Dedicated
+Each eligible billing channel gets one enabled dedicated Astra row containing
+only `gpt-6-astra`, with independent standard and >272K intervals. Dedicated
 custom rows retain their prices, mode and intervals. Mixed/duplicate rows lose only
 Astra aliases; empty rows remain stored but disabled.
 
@@ -78,6 +83,14 @@ containing Astra are normalized; Sol cost rows are not expanded or copied from
 customer billing. Read-only production audit found no OpenAI account-statistics
 price rows. Both interval tables were inspected. Astra's 5m/1h breakdown remains
 unset on new rows; existing custom interval values remain untouched.
+
+Forward-only correction `236_remove_gpt6_astra_effort_aliases.sql` removes the
+five aliases from both pricing tables. Migration 235 is retained byte-for-byte
+because it is already applied in production. The correction preserves prices,
+intervals, row IDs, other model order and disabled states; alias-only rows are
+retained but disabled. Read-only audit found the aliases only in user-pricing
+row 310, with none in account/group allowlists or account-statistics pricing.
+This correction has not yet been deployed.
 
 ## Surface audit disposition
 
@@ -104,7 +117,7 @@ scheduling, streaming lifecycle, or billing-write paths were changed.
   duplicate disabling, wildcard/custom preservation, Kiro exclusion, independent
   account-statistics rules and both custom interval tables, and double-run equality.
 - Admin channel-response serializer test asserts the dedicated row increases the
-  rule count and contains all aliases, enabled state and cache-write rate.
+  rule count and contains only the canonical model, enabled state and cache-write rate.
 - New frontend model-list and actual generated OpenCode-config tests pass.
 - Typecheck and production frontend build pass (existing large-chunk warnings).
 - Frontend full suite: 54 failing tests and one failed suite across 10 files are
@@ -132,3 +145,22 @@ scheduling, streaming lifecycle, or billing-write paths were changed.
 
 Production release and post-release settled-usage reconciliation remain a separate,
 explicitly authorized step; this document does not claim deployment.
+
+## Canonical-name cleanup review
+
+Reviewed range: 9f5e9a62c plus the canonical-name cleanup. No attributable P0/P1.
+Verdict: PASS. Normal model/effort payloads and both stream modes of Responses,
+Chat Completions and Messages pass. Deprecated suffixes are no longer translated
+to the official model; previous GPT-5 suffix handling is preserved.
+
+Stream=PASS (unchanged parser/lifetime, full package regressions); cache-hit=PASS
+(canonical requests remain byte-identical across all five efforts); recreate=PASS
+(no cache state or billing mutation); latency=PASS (removed alias code, no new
+hot-path operations). This is not a post-deployment performance claim.
+
+`go test ./... -count=1` and `go build ./...` pass. Astra-focused tests pass;
+PostgreSQL integration applies 235 then 236 and verifies both pricing surfaces,
+unchanged prices/intervals/accounts/groups, mixed/alias-only/disabled rows, and
+double-run equality. Migration 235 remains byte-identical to the release.
+Frontend typecheck/build pass; its unchanged full suite has the same 54 failing
+tests plus one failed suite as the verified baseline, with no new failure names.

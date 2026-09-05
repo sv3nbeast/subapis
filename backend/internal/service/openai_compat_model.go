@@ -84,11 +84,6 @@ func splitOpenAICompatReasoningModel(model string) (normalizedModel string, reas
 		reasoningEffort = last
 	case "xhigh", "extrahigh":
 		reasoningEffort = "xhigh"
-	case "max":
-		if !isOpenAIGPT6AstraModel(modelID) {
-			return trimmed, "", false
-		}
-		reasoningEffort = "max"
 	default:
 		return trimmed, "", false
 	}

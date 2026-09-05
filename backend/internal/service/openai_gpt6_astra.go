@@ -8,22 +8,11 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// Only these local effort aliases are supported. Do not silently map future
-// Astra variants (pro/ultra/dates) to a different upstream model or price.
+// Astra has one model ID. Reasoning effort belongs in the request parameters,
+// never in a synthetic model suffix. Keep the shared provider/name spelling
+// normalization, without introducing any Astra-specific aliases.
 func isOpenAIGPT6AstraModel(model string) bool {
-	m := canonicalizeOpenAIModelAliasSpelling(model)
-	if m == "gpt-6-astra" {
-		return true
-	}
-	suffix, ok := strings.CutPrefix(m, "gpt-6-astra-")
-	if !ok {
-		return false
-	}
-	switch suffix {
-	case "low", "medium", "high", "xhigh", "max":
-		return true
-	}
-	return false
+	return canonicalizeOpenAIModelAliasSpelling(model) == "gpt-6-astra"
 }
 
 func normalizeOpenAIAstraLegacyCacheOptions(req map[string]any) bool {

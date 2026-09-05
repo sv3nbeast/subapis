@@ -24,14 +24,15 @@ func TestAstraModelContract(t *testing.T) {
 	for _, m := range kiro.DefaultModels {
 		require.NotEqual(t, "gpt-6-astra", m.ID)
 	}
-	for _, alias := range []string{"gpt-6-astra", "GPT-6 Astra", "openai/gpt-6-astra-max", "gpt6-astra-high", "gpt_6_astra_medium"} {
-		require.Equal(t, "gpt-6-astra", normalizeCodexModel(alias), alias)
-		require.Equal(t, "gpt-6-astra", normalizeModelNameForPricing(alias), alias)
-		require.True(t, supportsOpenAIReasoningEffortMax(alias))
-	}
-	for _, unknown := range []string{"gpt-6-astra-pro", "gpt-6-astra-ultra", "gpt-6-astra-2026-09-03", "gpt-6-astra2", "gpt-6-other"} {
+	require.Equal(t, "gpt-6-astra", normalizeCodexModel("gpt-6-astra"))
+	require.Equal(t, "gpt-6-astra", normalizeModelNameForPricing("gpt-6-astra"))
+	require.True(t, supportsOpenAIReasoningEffortMax("gpt-6-astra"))
+	for _, unknown := range []string{"gpt-6-astra-low", "gpt-6-astra-medium", "gpt-6-astra-high", "gpt-6-astra-xhigh", "gpt-6-astra-max", "gpt6-astra", "gpt6-astra-high", "gpt_6_astra_medium", "gpt-6-astra-pro", "gpt-6-astra-ultra", "gpt-6-astra-2026-09-03", "gpt-6-astra2", "gpt-6-other"} {
 		require.False(t, isOpenAIGPT6AstraModel(unknown))
 		require.Equal(t, unknown, normalizeCodexModel(unknown))
+		require.NotEqual(t, "gpt-6-astra", normalizeModelNameForPricing(unknown))
+		_, _, supported := splitOpenAICompatReasoningModel(unknown)
+		require.False(t, supported, unknown)
 	}
 	require.Equal(t, "max", normalizeOpenAIReasoningEffortForModel("max", "gpt-6-astra"))
 	require.Equal(t, "xhigh", normalizeOpenAIReasoningEffortForModel("max", "gpt-5.5"))
@@ -44,6 +45,20 @@ func TestAstraModelContract(t *testing.T) {
 	}
 	require.Equal(t, []string{"low", "medium", "high", "xhigh", "max"}, efforts)
 	require.True(t, isOpenAICodexImageInputModel("gpt-6-astra"))
+}
+
+func TestAstraIndependentReasoningEffort(t *testing.T) {
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	for _, effort := range []string{"low", "medium", "high", "xhigh", "max"} {
+		body := []byte(`{"model":"gpt-6-astra","reasoning":{"effort":"` + effort + `"},"input":"hello","prompt_cache_key":"stable"}`)
+		normalized, changed, err := normalizeOpenAIAstraRequest(account, body)
+		require.NoError(t, err)
+		require.False(t, changed)
+		require.Equal(t, body, normalized)
+		require.Equal(t, effort, normalizeOpenAIReasoningEffortForModel(effort, "gpt-6-astra"))
+	}
+	// Existing GPT-5 compatibility is unrelated to this Astra-only cleanup.
+	require.Equal(t, "gpt-5.4", normalizeCodexModel("gpt-5.4-high"))
 }
 
 func TestAstraWireNormalizationPreservesConversation(t *testing.T) {
@@ -253,17 +268,15 @@ func TestAstraPricingFallbackAndCatalog(t *testing.T) {
 	require.NoError(t, err)
 	for _, source := range []*PricingService{nil, catalog, &PricingService{pricingData: map[string]*LiteLLMModelPricing{}}} {
 		s.pricingService = source
-		for _, alias := range []string{"gpt-6-astra", "gpt-6-astra-max", "openai/gpt-6-astra-high"} {
-			price, err := s.GetModelPricing(alias)
-			require.NoError(t, err)
-			require.InDelta(t, 10e-6, price.InputPricePerToken, 1e-12)
-			require.InDelta(t, 50e-6, price.OutputPricePerToken, 1e-12)
-			require.InDelta(t, 12.5e-6, price.CacheCreationPricePerToken, 1e-12)
-			require.InDelta(t, 1e-6, price.CacheReadPricePerToken, 1e-12)
-			require.Equal(t, 272000, price.LongContextInputThreshold)
-			require.False(t, s.shouldApplySessionLongContextPricing(UsageTokens{InputTokens: 272000}, price))
-			require.True(t, s.shouldApplySessionLongContextPricing(UsageTokens{InputTokens: 272001}, price))
-			require.InDelta(t, 25e-6, price.CacheCreationPricePerTokenPriority, 1e-12)
-		}
+		price, err := s.GetModelPricing("gpt-6-astra")
+		require.NoError(t, err)
+		require.InDelta(t, 10e-6, price.InputPricePerToken, 1e-12)
+		require.InDelta(t, 50e-6, price.OutputPricePerToken, 1e-12)
+		require.InDelta(t, 12.5e-6, price.CacheCreationPricePerToken, 1e-12)
+		require.InDelta(t, 1e-6, price.CacheReadPricePerToken, 1e-12)
+		require.Equal(t, 272000, price.LongContextInputThreshold)
+		require.False(t, s.shouldApplySessionLongContextPricing(UsageTokens{InputTokens: 272000}, price))
+		require.True(t, s.shouldApplySessionLongContextPricing(UsageTokens{InputTokens: 272001}, price))
+		require.InDelta(t, 25e-6, price.CacheCreationPricePerTokenPriority, 1e-12)
 	}
 }
