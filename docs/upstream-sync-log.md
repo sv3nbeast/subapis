@@ -3056,3 +3056,10 @@ aa4a3509c debug(kiro): separate translated 与 client stream capture
 - 整 backend unit、完整 Repository PG/Redis integration 及其 -race、前端 305/1,989 测试、typecheck/build、embed 构建均获得通过证据。最后干净提交复验另记录准确 SHA。
 - Redis 新索引每次占槽增加约 0.268 ms 本机组件开销；不冒充线上 TTFT。未部署，后续生产发布仍需真实流量验证。
 - 详细验收矩阵、差异处置和原始日志见 `docs/cn-platform-sync-audit-20260905.md`。
+## 2026-09-05 最终代码验收 PASS（未发布）
+
+- 最终代码：`ef1ef98be5d7204e75232a8334c81f72ef8ad2c6`；基线 `04ce360b0`；修复分支 `codex/fix-cn-group-platform-gaps-20260905`。
+- 干净提交完整 backend unit：63 包、11,959 顶层用例、0 失败。完整 Repository PG/Redis integration + race 全通过。前端 305 文件 / 1,989 测试、typecheck、build、后端 embed 构建通过。
+- GLM/Zhipu、Kimi、DeepSeek 建组、账号绑定、组合路由、配额、定价、协议及相关同步遗漏已补齐；本地 Kiro/Droid/count_tokens/WS/计费合同保留。此前检查点剩余清单已关闭。
+- 本机索引占槽增量约 0.268 ms，线上 TTFT 未宣称验收；没有推送或生产部署。后续发布仍须 production-release 流程。
+- 完整验收矩阵及证据：`docs/cn-platform-sync-audit-20260905.md`。

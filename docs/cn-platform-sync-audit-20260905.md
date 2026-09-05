@@ -278,3 +278,16 @@ Reviewed range: `04ce360b0..a13a19410` + 本轮专用 worktree 改动。高风�
 | 检查其他漏更新 | 本台账逐批列出的调用链检查、完整 backend unit、完整 PG/Redis repository integration 与竞态测试 |
 | 保护现有本地行为 | Kiro/Droid、count_tokens 槽位、WS 租约、模型映射/Fast、5m/1h、命名/前端功能合同均保留；测试合同差异逐项说明 |
 | 可审查交付 | 独立 `codex/fix-cn-group-platform-gaps-20260905` 分支上的分批提交；未推送、未发布 |
+## 最终干净代码验收：ef1ef98be（2026-09-05）
+
+- 代码 SHA：`ef1ef98be5d7204e75232a8334c81f72ef8ad2c6`，审查范围 `04ce360b0..ef1ef98be`。所有本目标代码已提交，开始/结束核查均无源文件脏改动；Ent 生成器的临时 `.entc` 目录已自行清理。
+- **完整 backend unit PASS**：63 个测试包、11,959 个顶层测试、0 失败（Service 8,047）；命令 `go -C backend test -json -tags unit ./... -timeout 8m -count=1`，原始证据 `/tmp/sub2api-cn-final-ef1ef98be-unit.jsonl`。
+- **完整 Repository integration + race PASS**：真实本机 PostgreSQL/Redis、完整 migrations、整个 Repository 包，命令 `go -C backend test -json -race -tags integration ./internal/repository -timeout 12m -count=1`；证据 `/tmp/sub2api-cn-final-ef1ef98be-integration-race.jsonl`。此前定向文件集不再代替这个最终全包结果。
+- **前端 PASS**：305 文件 / 1,989 测试；typecheck、生产 Vite build 均通过；证据 `/tmp/sub2api-cn-final-ef1ef98be-frontend.log`、`-typecheck.log`、`-vite.log`。
+- **生产形式编译 PASS**：前端构建后 `go -C backend build -tags embed ./cmd/server` 成功，证据 `/tmp/sub2api-cn-final-ef1ef98be-embed.log`。
+- **网关定向 race PASS**：取消/后继 token 提交、已输出禁止重放、预取消槽位恰好释放一次、错误终态/安全文案、CN 协议及缓存路径均有直接入口证据。最终释放竞态复验 `/tmp/sub2api-cn-round5-handler-race-final.log`；PG/Redis 的整个包也已以 -race 复验。
+- 本地首写/有界等待/缓存测试及 Redis 基准支持代码级延迟审查；新增辅助索引写的本机增量约 0.268 ms/次占槽已明确记录，未把它当作线上 TTFT。实际生产 warm-canary 属于后续发布验收，此目标没有执行或声称执行部署。
+
+**代码交付判定：PASS。** 请求范围内没有未处理的 P0/P1：流终态/不重放、缓存连续与重复创建、首写与有界等待均有对应代码和回归证据，既有业务行为的差异处置已留档。前文所有“剩余失败/禁止发布候选”是当时检查点，已被此最终代码验收取代；不代表生产已经更新，也不替代后续 production-release 的合并/回滚点/上线 canary 流程。
+
+目标要求的建组、账号绑定、相关平台完整链路补漏、回归测试和可审查提交已完成。分支：`codex/fix-cn-group-platform-gaps-20260905`。主工作区仍为 `9d9508779e688ed0584a3a17c8c03592709c4ee1` 且干净；未推送、未修改生产数据、未部署。
