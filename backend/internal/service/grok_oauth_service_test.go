@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/stretchr/testify/require"
 )
@@ -25,20 +24,24 @@ func grokTestJWT(t *testing.T, claims map[string]any) string {
 }
 
 type grokOAuthClientStub struct {
-	refreshResponse  *xai.TokenResponse
-	ssoResponse      *xai.TokenResponse
-	deviceResponse   *xai.DeviceAuthorizationResponse
-	deviceToken      *xai.TokenResponse
-	devicePollErr    error
-	deviceStartErr   error
-	deviceStartCalls int
-	devicePollCalls  int
-	deviceProxyURL   string
-	deviceClientID   string
-	deviceScope      string
-	exchangeCalls    int
-	principalType    string
-	principalID      string
+	exchangeRedirectURI string
+	loginEmail          string
+	loginPassword       string
+	loginResult         *GrokPasswordLoginResult
+	refreshResponse     *xai.TokenResponse
+	ssoResponse         *xai.TokenResponse
+	deviceResponse      *xai.DeviceAuthorizationResponse
+	deviceToken         *xai.TokenResponse
+	devicePollErr       error
+	deviceStartErr      error
+	deviceStartCalls    int
+	devicePollCalls     int
+	deviceProxyURL      string
+	deviceClientID      string
+	deviceScope         string
+	exchangeCalls       int
+	principalType       string
+	principalID         string
 }
 
 func (s *grokOAuthClientStub) StartDeviceAuthorization(_ context.Context, proxyURL, clientID, scope string) (*xai.DeviceAuthorizationResponse, error) {

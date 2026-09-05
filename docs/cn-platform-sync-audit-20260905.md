@@ -1,5 +1,7 @@
 # 国产平台同步漏项审计（进行中）
 
+前半部分是第一批提交 `af17c8400` 的检查点；第二轮进展、当前验证状态见文末，不能把历史失败数当作当前结果。
+
 ## 范围与状态
 
 - 起点：`04ce360b0f20695e8b322c670efbfd16f230f184`（已发布的 0.2.0 同步修正版）。
@@ -68,3 +70,36 @@ Service 的 `unit` 标签集在基线和当前均不能编译。已经恢复部�
 - **Verdict: INCONCLUSIVE（禁止发布）**：完整 unit 及相关高风险测试尚未可运行，不能把默认标签通过表述成全部回归通过。
 
 下一步先恢复剩余 Service unit 契约并验证 CN/分组定价集，再核对剩余前端失败、运行最终 gate，更新本台账后才可标记目标完成。
+
+## 第二轮检查点（2026-09-05）
+
+### 新确认的实际漏合并
+
+1. CN 自适应协议分流函数存在，但 Chat 入口遗漏调用；GLM 被发到不支持的 Responses 路径。恢复 Chat/Anthropic/Responses 的分派，保留 Grok 本地通道开关。
+2. Responses request builder 忽略协议专属 base URL；固定协议又回退到厂商默认地址。恢复自适应 URL 和固定自定义 URL，并保留 CN 的 max_output_tokens。
+3. 通用组合分组调度未消费已解析平台/账号模型归属，可能选不到自定义别名或选中无对应映射的账号。恢复入口解析和两套调度器的归属守卫。
+4. CN 批量更新事件已识别平台，但重建遍历的旧目录漏三平台；恢复九平台缓存重建。Kiro 独立调度保持不变，保留 Droid 与 OpenAI mixed 桶。生命周期断言按具体平台和查询去重规则更新，不改变租约/epoch/发布时序。
+5. 组合渠道的可匹配平台目录有 CN，但价格匹配谓词仍是旧五平台；恢复统一匹配规则。
+6. 批量 OpenAI 配置归一化/目标验证函数未被调用；恢复前置校验及影子账号继承计数。分组限额更新恢复 nil=省略、-1=清空；恢复 Fast 开关、组合推理策略、复制时丢失的价格/模型额度/本地字段。
+7. Grok 模型隔离的粘性账号种子、quota 到停调阈值快照的写入、调度读取端存在断链；恢复真实入口调用。缺省设置不存在使用正常缓存 TTL，而不是反复按错误 TTL 查询。
+8. 恢复 Responses 空 completed 检测，仅限未有输出/usage/错误的空成功事件；已写出内容的流不重放。
+9. 恢复显式 response_model 计费模式的安全采纳规则：不抬价、不把付费变免费、不绕过显式分组/渠道价。恢复合成工具/任务计费 ID、搜索附加费、Fast 实际档位、失败扣费的未结算用量记录和图像规格元数据。
+10. 前端余项：代理加载失败不阻断分组加载/刷新；补回支付、用量测试桩/操作；支付倍率文案使用真实币种。Fable 目录/配置按仓库已存在的供应商映射及 32K 输出上限对齐，未新增上游声明或修改价格。
+
+### 第二轮证据
+
+- 完整前端：305 文件、1,989 测试全部通过（`/tmp/sub2api-cn-frontend-round4.log`）。
+- 前端 typecheck 与生产构建通过（`/tmp/sub2api-cn-typecheck-round2.log`、`/tmp/sub2api-cn-build-round2.log`）。
+- 新增 `TestCNAdaptiveProtocolCompletionMatrix`：三平台 × 三协议 × 流式/非流式共 18 种组合均返回完整 hello；流式恰好一个正确终态。
+- 分组创建/更新/复制、CN 协议、批量更新及阈值定向 unit 测试通过（`/tmp/sub2api-cn-admin-service-round5.log`）。
+- 网关计费、CN 兼容、调度批量事件定向 unit 测试通过（`/tmp/sub2api-cn-billing-completion-round8.log`）。
+- 调度 snapshot/lifecycle 全定向集通过（`/tmp/sub2api-cn-snapshot-unit-round3.log`）。
+- `-race`：18 种 CN 组合、空 completed、Grok 真实粘性/阈值入口、Kiro 缓存、Grok 缓存、批量/分组生命周期通过（`/tmp/sub2api-cn-race-round3.log`）。
+- 本轮默认标签 Service 全包（约 166 秒）、admin/dto/repository 全包通过（`/tmp/sub2api-cn-default-round2.log`）；admin unit 全包通过。
+
+### 仍未完成，禁止发布
+
+- Service unit 集已能编译，但完整执行仍有历史合同失败并在监控 nil-runtime 测试 panic。一次显式跳过该单个已知 panic 的诊断运行用于发现后续问题，**不是通过证据**；后续计费 panic 已恢复并定向验证，尚须再次完整执行。
+- 剩余需核实类别包括 Antigravity 映射/验证刷新、注册域名及默认值、价格/分层合同、旧主动监控默认模式、CountTokens 的历史兼容字段及混合调度。部分已是本地实现与上游测试期望的差异，不能盲目改价格或削弱守卫。
+- Server unit API contract 已执行，仍有 4 个子项失败：可用分组、系统设置的两个 GET 快照，以及批量账号更新 fixture（500）。不能把默认标签的“无测试”视为通过。
+- 最终精确提交的完整 backend unit/API contract 门禁和最终四项不变量评审仍待完成；目标保持 active。仍未推送、未发布、未改生产数据。

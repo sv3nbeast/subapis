@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -76,7 +77,7 @@ func (s *SettingService) GetAccountSchedulingThresholds(ctx context.Context) map
 			if parsed, parseErr := parseAccountSchedulingThresholdsSetting(raw); parseErr == nil {
 				thresholds = parsed
 			}
-		} else {
+		} else if !errors.Is(err, ErrSettingNotFound) {
 			ttl = accountSchedulingThresholdsErrorTTL
 		}
 		accountSchedulingThresholdsCache.Store(&cachedAccountSchedulingThresholds{thresholds: cloneAccountSchedulingThresholds(thresholds), expiresAt: time.Now().Add(ttl).UnixNano()})

@@ -419,8 +419,9 @@ func normalizeAdminGroupReasoningPolicy(group *Group) error {
 	if group == nil {
 		return nil
 	}
-	if group.Platform != PlatformOpenAI {
+	if group.Platform != PlatformOpenAI && group.Platform != PlatformComposite {
 		group.MaxReasoningEffort = ""
+		group.MaxReasoningEffortOverLimit = ReasoningEffortOverLimitDowngrade
 		group.ReasoningEffortMappings = []ReasoningEffortMapping{}
 		return nil
 	}
@@ -437,6 +438,7 @@ func normalizeAdminGroupReasoningPolicy(group *Group) error {
 		mappings = []ReasoningEffortMapping{}
 	}
 	group.MaxReasoningEffort = maxEffort
+	group.MaxReasoningEffortOverLimit = NormalizeMaxReasoningEffortOverLimit(group.MaxReasoningEffortOverLimit)
 	group.ReasoningEffortMappings = mappings
 	return nil
 }

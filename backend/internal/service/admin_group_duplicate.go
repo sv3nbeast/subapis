@@ -94,7 +94,28 @@ func cloneGroupMessagesDispatchModelConfig(value OpenAIMessagesDispatchModelConf
 }
 
 func cloneGroupForDuplicate(source *Group, operationID string) *Group {
+	var modelPricing []ChannelModelPricing
+	if source.ModelPricing != nil {
+		modelPricing = make([]ChannelModelPricing, len(source.ModelPricing))
+		for i := range source.ModelPricing {
+			modelPricing[i] = source.ModelPricing[i].Clone()
+		}
+	}
+	var modelQuotas map[string]float64
+	if source.ModelQuotaRatios != nil {
+		modelQuotas = make(map[string]float64, len(source.ModelQuotaRatios))
+		for key, value := range source.ModelQuotaRatios {
+			modelQuotas[key] = value
+		}
+	}
 	return &Group{
+		ModelPricing:                                     modelPricing,
+		ModelQuotaRatios:                                 modelQuotas,
+		LongContextPricingEnabled:                        source.LongContextPricingEnabled,
+		AllowNonStreamMessages:                           source.AllowNonStreamMessages,
+		KiroAnthropicFallbackEnabled:                     source.KiroAnthropicFallbackEnabled,
+		KiroAnthropicFallbackFirstSemanticTimeoutSeconds: source.KiroAnthropicFallbackFirstSemanticTimeoutSeconds,
+		KiroAnthropicFallbackMaxAnthropicAttempts:        source.KiroAnthropicFallbackMaxAnthropicAttempts,
 		Name:                            duplicateGroupName(source.Name, 1),
 		Description:                     source.Description,
 		Platform:                        source.Platform,
@@ -156,6 +177,7 @@ func cloneGroupForDuplicate(source *Group, operationID string) *Group {
 		},
 		RPMLimit:                        source.RPMLimit,
 		MaxReasoningEffort:              source.MaxReasoningEffort,
+		MaxReasoningEffortOverLimit:     source.MaxReasoningEffortOverLimit,
 		ReasoningEffortMappings:         append([]ReasoningEffortMapping(nil), source.ReasoningEffortMappings...),
 		KiroCacheEmulationEnabled:       source.KiroCacheEmulationEnabled,
 		KiroAutoStickyEnabled:           source.KiroAutoStickyEnabled,

@@ -352,7 +352,7 @@ func populateChannelCache(channels []Channel, groupPlatforms map[int64]string) *
 // 各平台（antigravity / anthropic / gemini / openai）严格独立，不跨平台匹配。
 func isPlatformPricingMatch(groupPlatform, pricingPlatform string) bool {
 	if groupPlatform == PlatformComposite {
-		return pricingPlatform == PlatformAnthropic || pricingPlatform == PlatformGemini || pricingPlatform == PlatformOpenAI || pricingPlatform == PlatformAntigravity || pricingPlatform == PlatformGrok
+		return isConcreteRequestPlatform(pricingPlatform)
 	}
 	return groupPlatform == pricingPlatform
 }

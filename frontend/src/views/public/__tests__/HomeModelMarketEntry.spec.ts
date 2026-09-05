@@ -5,9 +5,15 @@ import { describe, expect, it } from 'vitest'
 const source = readFileSync(resolve(__dirname, '../../HomeView.vue'), 'utf8')
 
 describe('HomeView public model market entry', () => {
-  it('gates both model market links behind the opt-in feature flag', () => {
+  it('keeps every plaza entry behind its intended opt-in feature gate', () => {
     expect(source).toContain('FeatureFlags.publicModelMarket')
-    expect(source.match(/to="\/model-plaza"/g)).toHaveLength(2)
-    expect(source.match(/v-if="publicModelMarketEnabled"/g)).toHaveLength(2)
+    const entries = source.match(/<router-link\b[^>]*\bto="\/model-plaza"[^>]*>/g) || []
+    expect(entries).toHaveLength(3)
+    expect(entries.map(entry => entry.match(/v-if="([^"]+)"/)?.[1])).toEqual([
+      'showModelPlazaEntry',
+      'showModelPlazaEntry || publicModelMarketEnabled',
+      'publicModelMarketEnabled'
+    ])
+    expect(source).toContain('modelPlazaEnabled.value && (isAuthenticated.value || !modelPlazaRequiresAuth.value)')
   })
 })

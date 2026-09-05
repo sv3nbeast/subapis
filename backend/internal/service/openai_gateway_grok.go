@@ -1745,9 +1745,13 @@ func (s *OpenAIGatewayService) updateGrokUsageSnapshot(ctx context.Context, acco
 	if s.codexSnapshotThrottle != nil && !s.codexSnapshotThrottle.Allow(accountID, time.Now()) {
 		return
 	}
-	_ = s.accountRepo.UpdateExtra(ctx, accountID, map[string]any{
+	updates := map[string]any{
 		grokQuotaSnapshotExtraKey: snapshot,
-	})
+	}
+	for key, value := range buildGrokSchedulerExtraUpdates(snapshot) {
+		updates[key] = value
+	}
+	_ = s.accountRepo.UpdateExtra(ctx, accountID, updates)
 }
 
 func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) {

@@ -392,6 +392,11 @@ func normalizeGatewayNonStreamMessagesFields(g *Group) {
 }
 
 func NormalizeGroupRuntimeFields(g *Group) {
+	if g != nil && !groupSupportsOpenAIFast(g.Platform) {
+		g.ForceOpenAIFast = false
+		g.FreeOpenAIFast = false
+		g.AllowLive = false
+	}
 	normalizeKiroCacheEmulationFields(g)
 	normalizeKiroEndpointFields(g)
 	normalizeKiroAnthropicFallbackFields(g)

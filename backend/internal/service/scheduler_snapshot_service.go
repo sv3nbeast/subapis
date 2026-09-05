@@ -846,8 +846,10 @@ func (s *SchedulerSnapshotService) rebuildByAccount(ctx context.Context, account
 	return s.rebuildBuckets(ctx, buckets, reason)
 }
 
-func schedulerSnapshotPlatforms() [6]string {
-	return [6]string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformDroid, PlatformGrok}
+func schedulerSnapshotPlatforms() [9]string {
+	// Kiro intentionally uses its separate scheduler, but CN accounts need
+	// normal snapshot rebuilds after account/group changes.
+	return [9]string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformDroid, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek}
 }
 
 // 生命周期辅助函数有意排除 group0；full rebuild 构造 group0 canonical 集时必须显式调用 canonical helper。

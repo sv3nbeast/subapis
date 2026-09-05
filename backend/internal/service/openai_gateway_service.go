@@ -1805,6 +1805,9 @@ func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) 
 	if sessionID == "" {
 		return ""
 	}
+	if isGrokRequestContext(c) {
+		sessionID = grokStickyAffinitySeed(sessionID, body)
+	}
 
 	currentHash, legacyHash := deriveOpenAISessionHashes(sessionID)
 	attachOpenAILegacySessionHashToGin(c, legacyHash)
@@ -3097,7 +3100,10 @@ func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, grou
 	platform = normalizeOpenAICompatiblePlatform(platform)
 	if s.schedulerSnapshot != nil {
 		accounts, _, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, false)
-		return accounts, err
+		if err != nil {
+			return nil, err
+		}
+		return s.filterOpenAIAccountsBySchedulingThreshold(ctx, accounts), nil
 	}
 	var accounts []Account
 	var err error
@@ -3111,7 +3117,21 @@ func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, grou
 	if err != nil {
 		return nil, fmt.Errorf("query accounts failed: %w", err)
 	}
-	return accounts, nil
+	return s.filterOpenAIAccountsBySchedulingThreshold(ctx, accounts), nil
+}
+
+func (s *OpenAIGatewayService) filterOpenAIAccountsBySchedulingThreshold(ctx context.Context, accounts []Account) []Account {
+	if s.rateLimitService == nil {
+		return accounts
+	}
+	out := make([]Account, 0, len(accounts))
+	for i := range accounts {
+		if s.rateLimitService.ApplyAccountSchedulingThreshold(ctx, &accounts[i]) {
+			continue
+		}
+		out = append(out, accounts[i])
+	}
+	return out
 }
 
 func (s *OpenAIGatewayService) listSchedulableAccountsForSchedule(ctx context.Context, groupID *int64, platform string, allowKiroBridge bool) ([]Account, error) {
@@ -4041,7 +4061,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		maxOutputTokens := gjson.GetBytes(body, "max_output_tokens")
 		if maxOutputTokens.Exists() {
 			switch account.Platform {
-			case PlatformOpenAI:
+			case PlatformOpenAI, PlatformKimi, PlatformZhipu, PlatformDeepseek:
 				// Preserve the Responses-native limit unless the selected upstream
 				// explicitly rejects it in the bounded HTTP retry loop below.
 			case PlatformAnthropic:
@@ -6268,6 +6288,12 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				}
 			}
 			eventType := effectiveOpenAISSEEventType(dataBytes, pendingSSEEventType)
+			if account.Platform == PlatformOpenAI && !openAIStreamClientOutputStarted(c, clientOutputStarted) &&
+				!sawBareError && !sawResponseFailed &&
+				(eventType == "response.completed" || eventType == "response.done") &&
+				openAIResponsesCompletedEventIsEmpty(dataBytes, usage) {
+				return resultWithUsage(), newOpenAIResponsesEmptyCompletedFailoverError(c, account, upstreamRequestID)
+			}
 			if eventType == "error" {
 				sawBareError = true
 				bareErrorPayload = append(bareErrorPayload[:0], dataBytes...)
@@ -6700,6 +6726,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	case AccountTypeAPIKey:
 		// API Key accounts use Platform API or custom base URL
 		baseURL := account.GetOpenAIBaseURL()
+		if account.IsCNProvider() {
+			baseURL = account.GetCNProtocolBaseURL(APIProtocolResponses)
+		}
 		if baseURL == "" {
 			targetURL = openaiPlatformAPIURL
 		} else {
@@ -7864,6 +7893,13 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoningAndToolCorrec
 				line = s.replaceModelInSSELine(line, mappedModel, originalModel)
 			}
 			startsClientOutput := forceFlushFailedEvent || openAIStreamDataStartsClientOutput(data, eventType)
+			if account.Platform == PlatformOpenAI &&
+				(eventType == "response.completed" || eventType == "response.done") &&
+				!sawFailedEvent && !eventShouldFlush && !openAIStreamClientOutputStarted(c, clientOutputStarted) &&
+				openAIResponsesCompletedEventIsEmpty(dataBytes, usage) {
+				streamEarlyErr = newOpenAIResponsesEmptyCompletedFailoverError(c, account, upstreamRequestID)
+				return
+			}
 			startsTTFTOutput := openAIStreamDataStartsTTFT(data, eventType, forceFlushFailedEvent, ttftMode)
 			if stageFirstOutput {
 				eventStartsClientOutput = eventStartsClientOutput || startsClientOutput
@@ -10037,6 +10073,21 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		cost = &CostBreakdown{BillingMode: string(BillingModeToken)}
 	}
 
+	baselineModel := firstUsageBillingModel(billingModels)
+	if responseModel := responseModelBillingDeclaration(input.BillingModelSource, result.UpstreamResponseModel,
+		result.UpstreamResponseModelConflict, result.ImageCount > 0 || result.VideoCount > 0 ||
+			result.WebSearchCalls > 0 || result.AudioUsage != nil || result.SearchCount > 0); responseModel != "" && !strings.EqualFold(responseModel, baselineModel) {
+		if identified, explicitResponsePrice := s.hasIdentifiedOpenAIResponsePricing(ctx, responseModel, apiKey); identified {
+			responseModels := s.filterCNProviderBillingModelCandidates(ctx, account, apiKey, usageBillingModelCandidates(responseModel))
+			responseCost, responseErr := s.calculateOpenAIRecordUsageCost(ctx, result, apiKey, responseModels,
+				multiplier, imageMultiplier, videoMultiplier, webSearchMultiplier, tokens, serviceTier, longContextBillingEnabled, pricingAt)
+			if responseErr == nil && responseModelBillingAdoptable(cost, responseCost,
+				s.resolveOpenAIChannelPricing(ctx, baselineModel, apiKey) != nil, explicitResponsePrice) {
+				logResponseModelBillingApplied("service.openai_gateway", account, result.RequestID, baselineModel, responseModel, cost, responseCost)
+				billingModels, cost = responseModels, responseCost
+			}
+		}
+	}
 	if groupBillsOpenAIFastAtStandard(apiKey, billingAccount, serviceTier) {
 		standardCost, standardErr := s.calculateOpenAIRecordUsageCost(
 			ctx, result, apiKey, billingModels, multiplier, imageMultiplier, videoMultiplier,
@@ -10274,6 +10325,10 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 	pricingAt time.Time,
 ) (*CostBreakdown, error) {
 	billingModel := firstUsageBillingModel(billingModels)
+	searchCalls := 0
+	if result != nil {
+		searchCalls = result.SearchCount
+	}
 	if result != nil && result.WebSearchCalls > 0 {
 		return s.billingService.CalculateWebSearchCost(
 			result.WebSearchCalls,
@@ -10293,6 +10348,9 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 		}
 	}
 	if len(billingModels) == 0 || billingModel == "" {
+		if result != nil && result.SearchCount > 0 && s.billingService != nil {
+			return addTokenSearchSurcharge(nil, s.billingService, apiKey, result.SearchCount, webSearchMultiplier), nil
+		}
 		return nil, fmt.Errorf("%w: openai usage billing model is empty", ErrModelPricingUnavailable)
 	}
 	var lastErr error
@@ -10305,7 +10363,7 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 			ctx, apiKey, candidate, multiplier, pricingAt, tokens, serviceTier, longContextBillingEnabled,
 		)
 		if err == nil {
-			return cost, nil
+			return addTokenSearchSurcharge(cost, s.billingService, apiKey, searchCalls, webSearchMultiplier), nil
 		}
 		lastErr = err
 	}

@@ -92,7 +92,8 @@ func schedulerBucketsForTest(groupIDs []int64, platforms ...string) []SchedulerB
 				SchedulerBucket{GroupID: groupID, Platform: platform, Mode: SchedulerModeSingle},
 				SchedulerBucket{GroupID: groupID, Platform: platform, Mode: SchedulerModeForced},
 			)
-			if platform == PlatformAnthropic || platform == PlatformGemini {
+			// The local OpenAI/Kiro bridge also owns an OpenAI mixed bucket.
+			if platform == PlatformAnthropic || platform == PlatformGemini || platform == PlatformOpenAI {
 				buckets = append(buckets, SchedulerBucket{GroupID: groupID, Platform: platform, Mode: SchedulerModeMixed})
 			}
 		}

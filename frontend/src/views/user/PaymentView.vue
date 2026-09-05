@@ -131,7 +131,7 @@
                         <span class="font-semibold text-gray-950 dark:text-white">${{ creditedAmount.toFixed(2) }}</span>
                       </div>
                       <p v-if="balanceRechargeMultiplier !== 1" class="rounded-xl bg-gray-50 px-3 py-2 text-xs leading-5 text-gray-500 dark:bg-dark-800 dark:text-gray-400">
-                        {{ t('payment.rechargeRatePreview', { usd: balanceRechargeMultiplier.toFixed(2) }) }}
+                        {{ t('payment.rechargeRatePreview', { currency: selectedCurrency, usd: balanceRechargeMultiplier.toFixed(2) }) }}
                       </p>
                     </div>
                   </div>

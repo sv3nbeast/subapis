@@ -28,6 +28,8 @@ const {
 }))
 
 const messages: Record<string, string> = {
+  'usage.allCompactionTypes': 'All Requests',
+  'usage.compactionOnly': 'Compaction Only',
   'admin.dashboard.timeRange': 'Time range',
   'admin.dashboard.granularity': 'Granularity',
   'admin.dashboard.day': 'Day',
@@ -301,6 +303,7 @@ describe('user UsageView', () => {
     await flushPromises()
     query.mockClear()
     const csv = stubCsvExport()
+    ;(wrapper.vm as any).filters.native_compaction_v2 = true
 
     await (wrapper.vm as any).exportToCSV()
 

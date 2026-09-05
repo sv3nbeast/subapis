@@ -25,6 +25,7 @@ const showInfo = vi.hoisted(() => vi.fn())
 const showWarning = vi.hoisted(() => vi.fn())
 const getCheckoutInfo = vi.hoisted(() => vi.fn())
 const bridgeInvoke = vi.hoisted(() => vi.fn())
+const translate = vi.hoisted(() => vi.fn((key: string) => key))
 const authUser = vi.hoisted(() => ({
   id: 1,
   username: 'demo-user',

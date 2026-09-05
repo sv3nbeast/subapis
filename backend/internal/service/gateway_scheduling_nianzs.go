@@ -1562,11 +1562,7 @@ func (s *GatewayService) filterAccountsBySchedulingThresholdNianzs(ctx context.C
 }
 
 func (s *GatewayService) isAccountBlockedBySchedulingThresholdNianzs(ctx context.Context, account *Account) bool {
-	// The production baseline does not expose nianzs' later admin-configurable
-	// scheduling-threshold setting. Its observable default is therefore always
-	// fail-open, which is exactly what ApplyAccountSchedulingThreshold returns
-	// when no threshold setting exists.
-	return false
+	return s.rateLimitService != nil && s.rateLimitService.ApplyAccountSchedulingThreshold(ctx, account)
 }
 
 func (s *GatewayService) hydrateSelectedAccountNianzs(ctx context.Context, account *Account) (*Account, error) {
@@ -2627,6 +2623,14 @@ func nianzsSummarizeSelectionFailureStats(stats nianzsSelectionFailureStats) str
 // isModelSupportedByAccountWithContextNianzs 根据账户平台检查模型支持（带 context）
 // 对于 Antigravity 平台，会先获取映射后的最终模型名（包括 thinking 后缀）再检查支持
 func (s *GatewayService) isModelSupportedByAccountWithContextNianzs(ctx context.Context, account *Account, requestedModel string) bool {
+	if account == nil {
+		return false
+	}
+	if source, ok := CompositeRouteSourceFromContext(ctx); ok && source == CompositeRouteSourceAccount {
+		if publicModel, ok := RequestedPublicModelFromContext(ctx); ok && !explicitModelMappingClaims(*account, publicModel) {
+			return false
+		}
+	}
 	if account.Platform == PlatformAntigravity {
 		if strings.TrimSpace(requestedModel) == "" {
 			return true

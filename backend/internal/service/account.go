@@ -1720,6 +1720,11 @@ func (a *Account) GetCNProtocolBaseURL(protocol string) string {
 			}
 		}
 	}
+	if a.GetAPIProtocol() == protocol {
+		if baseURL := strings.TrimSpace(a.GetCredential("base_url")); baseURL != "" {
+			return baseURL
+		}
+	}
 	return a.defaultCNProtocolBaseURL(protocol)
 }
 
