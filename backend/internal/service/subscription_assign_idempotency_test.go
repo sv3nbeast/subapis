@@ -340,6 +340,7 @@ func (s *subscriptionUserSubRepoStub) ResetUsageForQuotaCycle(_ context.Context,
 	sub.DailyUsageUSD = 0
 	sub.WeeklyUsageUSD = 0
 	sub.MonthlyUsageUSD = 0
+	sub.ModelUsage = map[string]SubscriptionModelUsage{}
 	sub.DailyWindowStart = &windowStart
 	sub.WeeklyWindowStart = &windowStart
 	sub.MonthlyWindowStart = &windowStart
@@ -532,7 +533,14 @@ func TestAssignSubscriptionRenewsExpiredSemanticMatch(t *testing.T) {
 		DailyUsageUSD:      1,
 		WeeklyUsageUSD:     2,
 		MonthlyUsageUSD:    3,
-		Notes:              " assignment ",
+		ModelUsage: map[string]SubscriptionModelUsage{
+			"claude-fable-5": {
+				DailyUsageUSD:   4,
+				WeeklyUsageUSD:  5,
+				MonthlyUsageUSD: 6,
+			},
+		},
+		Notes: " assignment ",
 	})
 
 	svc := NewSubscriptionService(groupRepo, subRepo, nil, nil, nil)
@@ -558,6 +566,7 @@ func TestAssignSubscriptionRenewsExpiredSemanticMatch(t *testing.T) {
 	require.Zero(t, sub.DailyUsageUSD)
 	require.Zero(t, sub.WeeklyUsageUSD)
 	require.Zero(t, sub.MonthlyUsageUSD)
+	require.Empty(t, sub.ModelUsage)
 	require.Equal(t, " assignment ", sub.Notes)
 }
 
@@ -639,10 +648,17 @@ func TestAssignOrExtendSubscriptionExpiredRenewalResetsUsage(t *testing.T) {
 		DailyUsageUSD:      12.3,
 		WeeklyUsageUSD:     123.4,
 		MonthlyUsageUSD:    456.7,
-		QuotaCycleStartAt:  &oldDailyWindow,
-		QuotaCycleEndAt:    &expiredAt,
-		QuotaCycleDays:     30,
-		Notes:              "old",
+		ModelUsage: map[string]SubscriptionModelUsage{
+			"claude-fable-5": {
+				DailyUsageUSD:   12.3,
+				WeeklyUsageUSD:  123.4,
+				MonthlyUsageUSD: 456.7,
+			},
+		},
+		QuotaCycleStartAt: &oldDailyWindow,
+		QuotaCycleEndAt:   &expiredAt,
+		QuotaCycleDays:    30,
+		Notes:             "old",
 	})
 
 	svc := NewSubscriptionService(groupRepo, subRepo, nil, newSubscriptionAssignTestEntClient(t), nil)
@@ -659,6 +675,7 @@ func TestAssignOrExtendSubscriptionExpiredRenewalResetsUsage(t *testing.T) {
 	require.Zero(t, sub.DailyUsageUSD)
 	require.Zero(t, sub.WeeklyUsageUSD)
 	require.Zero(t, sub.MonthlyUsageUSD)
+	require.Empty(t, sub.ModelUsage)
 	// Expired renewals persist one locked record update. Do not split it into
 	// per-window resets, otherwise a concurrent renewal can mix old and new
 	// window anchors.
@@ -701,7 +718,14 @@ func TestAssignOrExtendSubscriptionActiveRenewalKeepsUsage(t *testing.T) {
 		DailyUsageUSD:     12.3,
 		WeeklyUsageUSD:    123.4,
 		MonthlyUsageUSD:   456.7,
-		Notes:             "old",
+		ModelUsage: map[string]SubscriptionModelUsage{
+			"claude-fable-5": {
+				DailyUsageUSD:   12.3,
+				WeeklyUsageUSD:  123.4,
+				MonthlyUsageUSD: 456.7,
+			},
+		},
+		Notes: "old",
 	})
 
 	svc := NewSubscriptionService(groupRepo, subRepo, nil, newSubscriptionAssignTestEntClient(t), nil)
@@ -717,6 +741,11 @@ func TestAssignOrExtendSubscriptionActiveRenewalKeepsUsage(t *testing.T) {
 	require.Equal(t, 12.3, sub.DailyUsageUSD)
 	require.Equal(t, 123.4, sub.WeeklyUsageUSD)
 	require.Equal(t, 456.7, sub.MonthlyUsageUSD)
+	require.Equal(t, SubscriptionModelUsage{
+		DailyUsageUSD:   12.3,
+		WeeklyUsageUSD:  123.4,
+		MonthlyUsageUSD: 456.7,
+	}, sub.ModelUsage["claude-fable-5"])
 	require.NotNil(t, sub.QuotaCycleEndAt)
 	require.WithinDuration(t, cycleEnd, *sub.QuotaCycleEndAt, time.Microsecond)
 	require.Zero(t, subRepo.resetDailyCalls)

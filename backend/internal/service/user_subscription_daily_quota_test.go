@@ -41,7 +41,14 @@ func TestAssignOrExtendSubscription_ExpiredDailyCardStartsNewOneTimeQuota(t *tes
 		DailyUsageUSD:      10,
 		WeeklyUsageUSD:     20,
 		MonthlyUsageUSD:    30,
-		Notes:              "old",
+		ModelUsage: map[string]SubscriptionModelUsage{
+			"claude-fable-5": {
+				DailyUsageUSD:   10,
+				WeeklyUsageUSD:  20,
+				MonthlyUsageUSD: 30,
+			},
+		},
+		Notes: "old",
 	})
 	svc := NewSubscriptionService(groupRepo, subRepo, nil, nil, nil)
 
@@ -63,6 +70,7 @@ func TestAssignOrExtendSubscription_ExpiredDailyCardStartsNewOneTimeQuota(t *tes
 	require.Equal(t, 0.0, renewed.DailyUsageUSD)
 	require.Equal(t, 0.0, renewed.WeeklyUsageUSD)
 	require.Equal(t, 0.0, renewed.MonthlyUsageUSD)
+	require.Empty(t, renewed.ModelUsage)
 	require.Equal(t, "old\nnew", renewed.Notes)
 }
 
