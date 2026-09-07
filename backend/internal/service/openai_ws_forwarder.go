@@ -2011,6 +2011,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if s == nil || account == nil {
 		return nil, wrapOpenAIWSPrewriteFallback("invalid_state", errors.New("service or account is nil"))
 	}
+	nativeCompactionStream := reqStream && isOpenAINativeCompactionV2(c)
 
 	responseModelObserver := upstreamResponseModelObserverFromContext(c)
 	if responseModelObserver == nil {
@@ -2288,6 +2289,12 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 
 	if err := lease.WriteJSONWithContextTimeout(ctx, payload, s.openAIWSWriteTimeout()); err != nil {
 		lease.MarkBroken()
+		if nativeCompactionStream {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, finalizeNativeCompactStreamFailure(c, "", "write_request_failed", "Compaction connection failed during request submission", http.StatusBadGateway, nil)
+		}
 		logOpenAIWSModeInfo(
 			"write_request_fail account_id=%d conn_id=%s cause=%s payload_bytes=%d",
 			account.ID,
@@ -2320,6 +2327,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		mappedModelBytes = []byte(mappedModel)
 	}
 	bufferedStreamEvents := make([][]byte, 0, 4)
+	nativeCompactionItemDone := false
+	var nativeCompactionAddedItem []byte
 	eventCount := 0
 	tokenEventCount := 0
 	terminalEventCount := 0
@@ -2328,6 +2337,28 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	firstEventType := ""
 	lastEventType := ""
 	upstreamTerminalEvent := ""
+	nativeTerminalFailed := false
+	buildForwardResult := func() *OpenAIForwardResult {
+		return &OpenAIForwardResult{
+			RequestID:                     responseID,
+			Usage:                         *usage,
+			Model:                         originalModel,
+			UpstreamModel:                 mappedModel,
+			UpstreamResponseModel:         responseModelObserver.Model(),
+			UpstreamResponseModelConflict: responseModelObserver.Conflict(),
+			UpstreamResponseServiceTier:   responseModelObserver.ServiceTier(),
+			ImageCount:                    imageCounter.Count(),
+			ImageOutputSizes:              imageCounter.Sizes(),
+			ServiceTier:                   resolvedOpenAIUpstreamServiceTierFromObserver(responseModelObserver, extractOpenAIServiceTier(reqBody)),
+			ReasoningEffort:               extractOpenAIReasoningEffort(reqBody, mappedModel, originalModel),
+			Stream:                        reqStream,
+			OpenAIWSMode:                  true,
+			UpstreamTerminalEvent:         upstreamTerminalEvent,
+			ResponseHeaders:               lease.HandshakeHeaders(),
+			Duration:                      time.Since(startTime),
+			FirstTokenMs:                  firstTokenMs,
+		}
+	}
 
 	var flusher http.Flusher
 	if reqStream {
@@ -2351,6 +2382,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	flushInterval := s.openAIWSEventFlushInterval()
 	pendingFlushEvents := 0
 	lastFlushAt := time.Now()
+	lastDownstreamWriteAt := time.Now()
 	flushStreamWriter := func(force bool) {
 		if clientDisconnected || flusher == nil || pendingFlushEvents <= 0 {
 			return
@@ -2375,11 +2407,15 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		_, wErr := c.Writer.Write(frame)
 		if wErr == nil {
 			wroteDownstream = true
+			lastDownstreamWriteAt = time.Now()
 			pendingFlushEvents++
 			flushStreamWriter(forceFlush)
 			return
 		}
 		clientDisconnected = true
+		if nativeCompactionStream {
+			MarkOpsStreamError(c, "client_write_error", "Compaction downstream write failed", 499)
+		}
 		logger.LegacyPrintf("service.openai_gateway", "[OpenAI WS Mode] client disconnected, continue draining upstream: account=%d", account.ID)
 	}
 	flushBufferedStreamEvents := func(reason string) {
@@ -2405,8 +2441,44 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			)
 		}
 	}
+	failNativeCompaction := func(code, message string, status int) (*OpenAIForwardResult, error) {
+		err := finalizeNativeCompactStreamFailure(c, responseID, code, message, status, emitStreamMessage)
+		if !openAIUsageHasTokens(usage) {
+			return nil, err
+		}
+		upstreamTerminalEvent = "response.failed"
+		return buildForwardResult(), err
+	}
 
 	readTimeout := s.openAIWSReadTimeout()
+	var nativeReader *nativeCompactWSReader
+	var nativeHeartbeat <-chan time.Time
+	var heartbeatInterval time.Duration
+	if nativeCompactionStream && s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
+		heartbeatInterval = time.Duration(s.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+		ticker := time.NewTicker(heartbeatInterval)
+		defer ticker.Stop()
+		nativeHeartbeat = ticker.C
+		nativeReader = newNativeCompactWSReader(ctx, func(readCtx context.Context) ([]byte, error) {
+			return lease.ReadMessageWithContextTimeout(readCtx, readTimeout)
+		})
+		defer nativeReader.Close()
+	}
+	beat := func() error {
+		if clientDisconnected || time.Since(lastDownstreamWriteAt) < heartbeatInterval {
+			return nil
+		}
+		flushStreamWriter(true)
+		n, err := c.Writer.Write([]byte(": keepalive\n\n"))
+		recordOpenAIStreamKeepaliveBytes(c, n)
+		if err != nil {
+			clientDisconnected = true
+			return err
+		}
+		flusher.Flush()
+		lastDownstreamWriteAt = time.Now()
+		return nil
+	}
 	var pendingJSONDocuments [][]byte
 
 	for {
@@ -2416,7 +2488,11 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			message = pendingJSONDocuments[0]
 			pendingJSONDocuments = pendingJSONDocuments[1:]
 		} else {
-			message, readErr = lease.ReadMessageWithContextTimeout(ctx, readTimeout)
+			if nativeReader != nil {
+				message, readErr = nativeReader.Read(nativeHeartbeat, beat)
+			} else {
+				message, readErr = lease.ReadMessageWithContextTimeout(ctx, readTimeout)
+			}
 			if readErr == nil {
 				if documents, repaired := splitOpenAIConcatenatedJSONDocuments(message); repaired {
 					logOpenAIWSModeInfo(
@@ -2445,6 +2521,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				len(message),
 				wroteDownstream,
 			)
+			if nativeCompactionStream {
+				return failNativeCompaction("invalid_event_json", "Upstream returned malformed compaction event JSON", http.StatusBadGateway)
+			}
 			if !wroteDownstream {
 				return nil, wrapOpenAIWSFallback("invalid_event_json", errors.New("upstream websocket returned malformed Responses event JSON"))
 			}
@@ -2469,6 +2548,17 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				truncateOpenAIWSLogValue(firstEventType, openAIWSLogValueMaxLen),
 				truncateOpenAIWSLogValue(lastEventType, openAIWSLogValueMaxLen),
 			)
+			if nativeCompactionStream {
+				if ctx.Err() != nil {
+					MarkOpsStreamError(c, "client_canceled", "Compaction canceled by downstream", 499)
+					return nil, ctx.Err()
+				}
+				if clientDisconnected {
+					MarkOpsStreamError(c, "client_write_error", "Compaction downstream write failed", 499)
+					return nil, newOpenAIClientCanceledError(readErr)
+				}
+				return failNativeCompaction("incomplete_stream", "Upstream compaction stream ended before a terminal event", http.StatusBadGateway)
+			}
 			if !wroteDownstream {
 				return nil, wrapOpenAIWSFallback(classifyOpenAIWSReadFallbackReason(readErr), readErr)
 			}
@@ -2506,7 +2596,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if isTerminalEvent {
 			terminalEventCount++
 		}
-		if firstTokenMs == nil && isTokenEvent {
+		if firstTokenMs == nil && isTokenEvent && !nativeCompactionStream {
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms
 		}
@@ -2619,6 +2709,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			}
 			// error 事件后连接不再可复用，避免回池后污染下一请求。
 			lease.MarkBroken()
+			if nativeCompactionStream {
+				return failNativeCompaction(firstNonEmpty(errCode, errType, "upstream_error"), errMsg, openAIWSErrorHTTPStatusFromRaw(errCodeRaw, errTypeRaw))
+			}
 			if !wroteDownstream && canFallback {
 				return nil, wrapOpenAIWSFallback(fallbackReason, errors.New(errMsg))
 			}
@@ -2639,10 +2732,43 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			return nil, fmt.Errorf("openai ws error event: %s", errMsg)
 		}
 
+		if nativeCompactionStream {
+			if eventType == "response.output_item.done" && gjson.GetBytes(message, "item.type").String() == "compaction" && !nativeCompactItemComplete(gjson.GetBytes(message, "item")) {
+				return failNativeCompaction("incomplete_compaction", "Upstream returned an incomplete compaction continuation item", http.StatusBadGateway)
+			}
+			if eventType == "response.output_item.added" && nativeCompactItemComplete(gjson.GetBytes(message, "item")) {
+				nativeCompactionAddedItem = nativeCompactItemEvent(gjson.GetBytes(message, "item"), int(gjson.GetBytes(message, "output_index").Int()))
+			}
+			if eventType == "response.output_item.done" && nativeCompactItemComplete(gjson.GetBytes(message, "item")) {
+				nativeCompactionItemDone = true
+			}
+			if eventType == "response.completed" && !nativeCompactionItemDone {
+				itemEvent := nativeCompactTerminalItemEvent(message)
+				if len(itemEvent) == 0 {
+					itemEvent = nativeCompactionAddedItem
+				}
+				if len(itemEvent) > 0 {
+					emitStreamMessage(itemEvent, true)
+					nativeCompactionItemDone = true
+				} else {
+					cleanExit = len(pendingJSONDocuments) == 0
+					return failNativeCompaction("incomplete_compaction", "Upstream completed without a compaction continuation item", http.StatusBadGateway)
+				}
+			}
+			if eventType == "response.failed" || eventType == "response.incomplete" {
+				nativeTerminalFailed = true
+				failureCode := gjson.GetBytes(message, "response.error.code").String()
+				failureType := gjson.GetBytes(message, "response.error.type").String()
+				MarkOpsStreamFailure(c, "upstream_error", firstNonEmpty(failureCode, eventType), firstNonEmpty(gjson.GetBytes(message, "response.error.message").String(), "Upstream compaction did not complete"), openAIWSErrorHTTPStatusFromRaw(failureCode, failureType))
+				MarkGatewaySSEErrorWritten(c)
+			}
+		}
 		if reqStream {
 			// 在首个 token 前先缓冲事件（如 response.created），
 			// 以便上游早期断连时仍可安全回退到 HTTP，不给下游发送半截流。
-			shouldBuffer := firstTokenMs == nil && !isTokenEvent && !isTerminalEvent
+			// Native compaction is event-driven, not text-token-driven. Forward
+			// provider progress without manufacturing a token/TTFT observation.
+			shouldBuffer := !nativeCompactionStream && firstTokenMs == nil && !isTokenEvent && !isTerminalEvent
 			if shouldBuffer {
 				buffered := make([]byte, len(message))
 				copy(buffered, message)
@@ -2661,7 +2787,11 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				}
 			} else {
 				flushBufferedStreamEvents(eventType)
-				emitStreamMessage(message, isTerminalEvent)
+				emitStreamMessage(message, isTerminalEvent || nativeCompactionStream)
+				if nativeCompactionStream && !clientDisconnected && firstTokenMs == nil && isTokenEvent {
+					ms := int(time.Since(startTime).Milliseconds())
+					firstTokenMs = &ms
+				}
 			}
 		} else {
 			if responseField.Exists() && responseField.Type == gjson.JSON {
@@ -2745,25 +2875,14 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		clientDisconnected,
 	)
 
-	return &OpenAIForwardResult{
-		RequestID:                     responseID,
-		Usage:                         *usage,
-		Model:                         originalModel,
-		UpstreamModel:                 mappedModel,
-		UpstreamResponseModel:         responseModelObserver.Model(),
-		UpstreamResponseModelConflict: responseModelObserver.Conflict(),
-		UpstreamResponseServiceTier:   responseModelObserver.ServiceTier(),
-		ImageCount:                    imageCounter.Count(),
-		ImageOutputSizes:              imageCounter.Sizes(),
-		ServiceTier:                   resolvedOpenAIUpstreamServiceTierFromObserver(responseModelObserver, extractOpenAIServiceTier(reqBody)),
-		ReasoningEffort:               extractOpenAIReasoningEffort(reqBody, mappedModel, originalModel),
-		Stream:                        reqStream,
-		OpenAIWSMode:                  true,
-		UpstreamTerminalEvent:         upstreamTerminalEvent,
-		ResponseHeaders:               lease.HandshakeHeaders(),
-		Duration:                      time.Since(startTime),
-		FirstTokenMs:                  firstTokenMs,
-	}, nil
+	result := buildForwardResult()
+	if nativeTerminalFailed {
+		if !openAIUsageHasTokens(usage) {
+			result = nil
+		}
+		return result, newOpenAIStreamAlreadyFinalizedError("Upstream compaction did not complete")
+	}
+	return result, nil
 }
 
 // ProxyResponsesWebSocketFromClient 处理客户端入站 WebSocket（OpenAI Responses WS Mode）并转发到上游。

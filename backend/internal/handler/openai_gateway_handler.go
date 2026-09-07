@@ -469,6 +469,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		service.MarkOpenAINativeCompactionV2(c)
 		c.Set(openAIRemoteCompactionV2Key, true)
 	}
+	// Legacy body-signal compact only. Native v2 keeps its own stream-reader
+	// heartbeat active between progress events; do not set the unary bridge marker.
 	// body-signal compact：上游 unary 等待期间向下游发 SSE 注释行心跳，防止
 	// 反向代理空闲超时掐断长压缩连接（#3887）。首拍延迟一个心跳间隔，快速
 	// 失败仍走 JSON+状态码链路；未标记客户端流式或间隔为 0 时是 no-op。
@@ -1016,6 +1018,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				}
 				var finalizedErr *service.OpenAIStreamAlreadyFinalizedError
 				if errors.As(err, &finalizedErr) {
+					if nativeV2 {
+						submitResponsesUsage(result)
+					}
 					h.gatewayService.ReportOpenAIAccountScheduleResult(account, account.GetMappedModel(reqModel), false, nil)
 					reqLog.Warn("openai.forward_stream_finalized_failed",
 						zap.Int64("account_id", account.ID),

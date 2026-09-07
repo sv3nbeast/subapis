@@ -4473,6 +4473,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			return wsResult, nil
 		}
+		var nativeFinalized *OpenAIStreamAlreadyFinalizedError
+		if isOpenAINativeCompactionV2(c) && errors.As(wsErr, &nativeFinalized) {
+			// Preserve actual provider usage on a finalized failure, without replay.
+			return wsResult, wsErr
+		}
 		if clientTransport == OpenAIClientTransportHTTP && (c == nil || c.Writer == nil || !c.Writer.Written()) {
 			if reason, prewrite := isOpenAIWSPrewriteFallbackError(wsErr); prewrite {
 				s.markOpenAIWSFallbackCooling(account.ID, reason)
