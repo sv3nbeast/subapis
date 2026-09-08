@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
@@ -2320,6 +2321,15 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	var firstTokenMs *int
 	responseID := ""
 	var finalResponse []byte
+	// Unary HTTP clients cannot consume the WS deltas. Retain output only for
+	// this path; streaming clients keep their existing first-write behavior.
+	var unaryOutput *apicompat.BufferedResponseAccumulator
+	var unaryDoneItems *responsesStreamOutputItems
+	var unaryOutputBytes int64
+	if !reqStream {
+		unaryOutput = apicompat.NewBufferedResponseAccumulator()
+		unaryDoneItems = newResponsesStreamOutputItems()
+	}
 	wroteDownstream := false
 	needModelReplace := originalModel != mappedModel
 	var mappedModelBytes []byte
@@ -2794,6 +2804,28 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				}
 			}
 		} else {
+			// Bound retained delta/done data using the same budget as HTTP unary
+			// aggregation. A limit failure must not replay already generated output.
+			unaryOutputBytes += int64(len(message))
+			if unaryOutputBytes > resolveUpstreamResponseReadLimit(s.cfg) {
+				lease.MarkBroken()
+				setOpsUpstreamError(c, http.StatusBadGateway, "upstream response too large", "")
+				openAITooLargeError(c)
+				return nil, ErrUpstreamResponseBodyTooLarge
+			}
+			unaryDoneItems.Observe(message)
+			if responsesStreamEventMayContributeToOutput(eventType) || eventType == "response.custom_tool_call_input.delta" {
+				var event apicompat.ResponsesStreamEvent
+				if err := json.Unmarshal(message, &event); err == nil {
+					unaryOutput.ProcessEvent(&event)
+				}
+			}
+			if normalized, changed := normalizeResponsesStreamingTerminalOutput(message, unaryOutput, unaryDoneItems, nil); changed {
+				message = normalized
+			}
+			// Re-read after normalization/model/tool correction: responseField
+			// was parsed from the original frame and would discard those changes.
+			responseField = gjson.GetBytes(message, "response")
 			if responseField.Exists() && responseField.Type == gjson.JSON {
 				finalResponse = []byte(responseField.Raw)
 			}
