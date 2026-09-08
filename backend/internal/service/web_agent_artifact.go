@@ -199,7 +199,7 @@ type WebAgentBlobStore interface {
 	Open(context.Context, string) (io.ReadCloser, int64, error)
 	Remove(context.Context, string) error
 }
-type WebAgentFileStore struct{ root string }
+type WebAgentFileStore struct{ root, storageID string }
 
 var webAgentBlobKey = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(pptx|xlsx|docx|pdf)$`)
 
@@ -215,23 +215,88 @@ func NewWebAgentFileStore(root string) (*WebAgentFileStore, error) {
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0077 != 0 {
 		return nil, ErrWebAgentInvalid
 	}
-	return &WebAgentFileStore{root: root}, nil
+	store := &WebAgentFileStore{root: root}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err = store.WithLock(ctx, true, func() error { return store.initializeIdentity() }); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+func (s *WebAgentFileStore) StorageID() string { return s.storageID }
+func (s *WebAgentFileStore) initializeIdentity() error {
+	path := filepath.Join(s.root, ".web-agent-store-id")
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		id := uuid.NewString()
+		tmp, e := os.CreateTemp(s.root, ".web-agent-identity-")
+		if e != nil {
+			return e
+		}
+		defer os.Remove(tmp.Name())
+		if _, e = tmp.WriteString(id); e == nil {
+			e = tmp.Sync()
+		}
+		closeErr := tmp.Close()
+		if e != nil {
+			return e
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if e = os.Rename(tmp.Name(), path); e != nil {
+			return e
+		}
+		dir, e := os.Open(s.root)
+		if e != nil {
+			return e
+		}
+		defer dir.Close()
+		if e = dir.Sync(); e != nil {
+			return e
+		}
+		s.storageID = id
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() != 36 || info.Mode().Perm()&0077 != 0 {
+		return ErrWebAgentInvalid
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	id, err := uuid.Parse(string(data))
+	if err != nil || id == uuid.Nil || id.String() != string(data) {
+		return ErrWebAgentInvalid
+	}
+	s.storageID = id.String()
+	return nil
 }
 func (s *WebAgentFileStore) Put(ctx context.Context, extension string, data []byte) (key string, err error) {
+	key = uuid.NewString() + "." + extension
+	err = s.PutKey(ctx, key, data)
+	if err != nil {
+		return "", err
+	}
+	return key, err
+}
+func (s *WebAgentFileStore) PutKey(ctx context.Context, key string, data []byte) (err error) {
 	if ctx.Err() != nil {
-		return "", ctx.Err()
+		return ctx.Err()
 	}
 	if len(data) == 0 || len(data) > webAgentArtifactMaxBytes {
-		return "", ErrWebAgentInvalid
+		return ErrWebAgentInvalid
 	}
-	key = uuid.NewString() + "." + extension
 	if !webAgentBlobKey.MatchString(key) {
-		return "", ErrWebAgentInvalid
+		return ErrWebAgentInvalid
 	}
 	path := filepath.Join(s.root, key)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer func() {
 		closeErr := f.Close()
@@ -243,15 +308,20 @@ func (s *WebAgentFileStore) Put(ctx context.Context, extension string, data []by
 		}
 	}()
 	if _, err = f.Write(data); err != nil {
-		return "", err
+		return err
 	}
 	if err = f.Sync(); err != nil {
-		return "", err
+		return err
 	}
 	if ctx.Err() != nil {
-		return "", ctx.Err()
+		return ctx.Err()
 	}
-	return key, nil
+	directory, err := os.Open(s.root)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 func (s *WebAgentFileStore) Open(ctx context.Context, key string) (io.ReadCloser, int64, error) {
 	if ctx.Err() != nil {

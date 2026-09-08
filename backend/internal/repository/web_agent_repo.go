@@ -39,7 +39,7 @@ func (r *webChatRepository) CreateTask(ctx context.Context, t *service.WebAgentT
 	if t == nil {
 		return nil, service.ErrWebAgentInvalid
 	}
-	tx, err := r.begin(ctx)
+	tx, err := r.beginAgentTransaction(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +182,7 @@ func (r *webChatRepository) ClaimTask(ctx context.Context, token string, ttl tim
 	if token == "" || ttl < time.Second {
 		return nil, service.ErrWebAgentInvalid
 	}
-	tx, err := r.begin(ctx)
+	tx, err := r.beginAgentTransaction(ctx)
 	if err != nil {
 		return nil, err
 	}

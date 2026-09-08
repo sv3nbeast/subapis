@@ -32,7 +32,7 @@ func (r *webChatRepository) PublishArtifact(ctx context.Context, task *service.W
 	if err := input.Validate(); err != nil {
 		return nil, err
 	}
-	tx, err := r.begin(ctx)
+	tx, err := r.beginAgentTransaction(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -42,10 +42,19 @@ func (r *webChatRepository) PublishArtifact(ctx context.Context, task *service.W
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('web-agent-artifact:' || $1::text,0))`, task.UserID); err != nil {
 		return nil, err
 	}
+	var stageID int64
+	err = tx.QueryRowContext(ctx, `SELECT id FROM web_agent_blob_stages WHERE task_id=$1 AND user_id=$2 AND lease_token=$3
+ AND state='ready' AND blob_key=$4 AND preview_key=$5 AND reserved_bytes=$6 FOR UPDATE`, task.ID, task.UserID, task.LeaseToken, input.BlobKey, input.PreviewKey, input.SizeBytes+input.PreviewBytes+int64(len(input.Spec))).Scan(&stageID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, service.ErrWebAgentLeaseLost
+	}
+	if err != nil {
+		return nil, err
+	}
 	var status string
 	var source *int64
 	err = tx.QueryRowContext(ctx, `SELECT status,source_artifact_id FROM web_agent_tasks t WHERE id=$1 AND user_id=$2
-	 AND session_id=$3 AND kind=$4 AND lease_token=$5 AND lease_expires_at>now() AND status IN ('running','cancel_requested') AND `+webAgentVisible+` FOR UPDATE`,
+	 AND session_id=$3 AND kind=$4 AND lease_token=$5 AND lease_expires_at>clock_timestamp() AND deadline_at>clock_timestamp() AND status IN ('running','cancel_requested') AND `+webAgentVisible+` FOR UPDATE`,
 		task.ID, task.UserID, task.SessionID, task.Kind, task.LeaseToken).Scan(&status, &source)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, service.ErrWebAgentLeaseLost
@@ -54,7 +63,12 @@ func (r *webChatRepository) PublishArtifact(ctx context.Context, task *service.W
 		return nil, err
 	}
 	if status == service.WebAgentCancelRequested {
-		if _, err = tx.ExecContext(ctx, `UPDATE web_agent_tasks SET status='cancelled',result=NULL,error_code='',lease_token=NULL,lease_expires_at=NULL,finished_at=now(),updated_at=now() WHERE id=$1`, task.ID); err != nil {
+		var generation any
+		if input.Generation != nil {
+			raw, _ := json.Marshal(map[string]any{"generation": input.Generation})
+			generation = string(raw)
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE web_agent_tasks SET status='cancelled',result=$2::jsonb,error_code='',lease_token=NULL,lease_expires_at=NULL,finished_at=now(),updated_at=now() WHERE id=$1`, task.ID, generation); err != nil {
 			return nil, err
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO web_agent_task_events(task_id,type)VALUES($1,'task.cancelled')`, task.ID); err != nil {
@@ -79,18 +93,14 @@ func (r *webChatRepository) PublishArtifact(ctx context.Context, task *service.W
 			return nil, err
 		}
 	}
-	var used int64
-	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(sum(size_bytes+preview_bytes+octet_length(spec::text)),0)+octet_length($2::jsonb::text) FROM web_agent_artifacts WHERE user_id=$1 AND deleted_at IS NULL`, task.UserID, string(input.Spec)).Scan(&used); err != nil {
-		return nil, err
-	}
-	if used+input.SizeBytes+input.PreviewBytes > 500<<20 {
-		return nil, service.ErrWebAgentStorageLimit
-	}
 	artifact, err := scanAgentArtifact(tx.QueryRowContext(ctx, `INSERT INTO web_agent_artifacts AS a
 	 (task_id,user_id,session_id,lineage_id,version,parent_id,kind,title,filename,mime,blob_key,preview_key,size_bytes,preview_bytes,sha256,spec)
-	 VALUES($1,$2,$3,$4::uuid,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb) RETURNING `+artifactColumns,
+	 VALUES($1,$2,$3,$4::uuid,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING `+artifactColumns,
 		task.ID, task.UserID, task.SessionID, lineage, version, source, task.Kind, input.Title, input.Filename, input.MIME, input.BlobKey, input.PreviewKey, input.SizeBytes, input.PreviewBytes, input.SHA256, string(input.Spec)))
 	if err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE web_agent_blob_stages SET state='published',updated_at=now() WHERE id=$1`, stageID); err != nil {
 		return nil, err
 	}
 	result, _ := json.Marshal(map[string]any{"artifact_id": artifact.ID, "kind": artifact.Kind, "title": artifact.Title, "version": artifact.Version, "generation": input.Generation})
@@ -125,7 +135,7 @@ func (r *webChatRepository) ArtifactVersions(ctx context.Context, userID, id, be
 func (r *webChatRepository) listAgentArtifacts(ctx context.Context, where string, args ...any) (out []service.WebAgentArtifact, err error) {
 	// Lists need metadata only; avoid loading up to 50 MiB of private revision
 	// specifications just to discard them during JSON serialization.
-	columns := strings.Replace(artifactColumns, "a.spec", "'{}'::jsonb", 1)
+	columns := strings.Replace(artifactColumns, "a.spec", "'{}'::text", 1)
 	rows, err := r.sql.QueryContext(ctx, `SELECT `+columns+` FROM web_agent_artifacts a WHERE `+where+` AND `+artifactVisible+` ORDER BY a.id DESC LIMIT 50`, args...)
 	if err != nil {
 		return nil, err

@@ -20,6 +20,18 @@ func artifactCandidate() *service.WebAgentArtifact {
 		BlobKey: uuid.NewString() + ".docx", PreviewKey: uuid.NewString() + ".pdf", SizeBytes: 100, PreviewBytes: 100,
 		SHA256: strings.Repeat("a", 64), Spec: json.RawMessage(`{"kind":"document","title":"Draft"}`)}
 }
+func readyArtifactCandidate(t *testing.T, repo service.WebAgentArtifactRepository, task *service.WebAgentTask) *service.WebAgentArtifact {
+	t.Helper()
+	storage := repo.(service.WebAgentStorageRepository)
+	stage, err := storage.ReserveArtifactStorage(context.Background(), task)
+	require.NoError(t, err)
+	a := artifactCandidate()
+	a.Stage = stage
+	a.BlobKey = stage.BlobKey
+	a.PreviewKey = stage.PreviewKey
+	require.NoError(t, storage.ReadyArtifactStorage(context.Background(), task, stage, a))
+	return a
+}
 func TestWebAgentArtifactPublicationAndVersions(t *testing.T) {
 	tasks, db := agentIntegrationRepo(t)
 	repo := NewWebChatRepository(db).(service.WebAgentArtifactRepository)
@@ -28,7 +40,7 @@ func TestWebAgentArtifactPublicationAndVersions(t *testing.T) {
 	require.NoError(t, err)
 	claimed, err := tasks.ClaimTask(ctx, "artifact-lease-one", 30*time.Second)
 	require.NoError(t, err)
-	a, err := repo.PublishArtifact(ctx, claimed, artifactCandidate())
+	a, err := repo.PublishArtifact(ctx, claimed, readyArtifactCandidate(t, repo, claimed))
 	require.NoError(t, err)
 	require.Equal(t, 1, a.Version)
 	finished, err := tasks.GetTask(ctx, 1, created.ID)
@@ -45,7 +57,7 @@ func TestWebAgentArtifactPublicationAndVersions(t *testing.T) {
 	require.NoError(t, err)
 	claimed, err = tasks.ClaimTask(ctx, "artifact-lease-two", 30*time.Second)
 	require.NoError(t, err)
-	b, err := repo.PublishArtifact(ctx, claimed, artifactCandidate())
+	b, err := repo.PublishArtifact(ctx, claimed, readyArtifactCandidate(t, repo, claimed))
 	require.NoError(t, err)
 	require.Equal(t, 2, b.Version)
 	require.Equal(t, a.LineageID, b.LineageID)
@@ -68,17 +80,21 @@ func TestWebAgentArtifactCancelAndStaleWorkerCannotPublish(t *testing.T) {
 	claimed, err := tasks.ClaimTask(ctx, "artifact-lease", 30*time.Second)
 	require.NoError(t, err)
 	stale := *claimed
+	candidate := readyArtifactCandidate(t, repo, claimed)
+	candidate.Generation = &service.WebAgentGeneration{RequestID: "cancelled-generation"}
 	stale.LeaseToken = "not-the-owner"
-	_, err = repo.PublishArtifact(ctx, &stale, artifactCandidate())
+	_, err = repo.PublishArtifact(ctx, &stale, candidate)
 	require.ErrorIs(t, err, service.ErrWebAgentLeaseLost)
 	_, err = tasks.CancelTask(ctx, 1, created.ID)
 	require.NoError(t, err)
-	a, err := repo.PublishArtifact(ctx, claimed, artifactCandidate())
+	a, err := repo.PublishArtifact(ctx, claimed, candidate)
 	require.NoError(t, err)
 	require.Nil(t, a)
 	finished, err := tasks.GetTask(ctx, 1, created.ID)
 	require.NoError(t, err)
 	require.Equal(t, service.WebAgentCancelled, finished.Status)
+	require.Contains(t, string(finished.Result), "cancelled-generation")
+	require.NotContains(t, string(finished.Result), "artifact_id")
 	list, err := repo.ListArtifacts(ctx, 1, 0, 0)
 	require.NoError(t, err)
 	require.Empty(t, list)
@@ -94,7 +110,7 @@ func TestWebAgentArtifactSourceCannotCrossUsersOrDisappearSilently(t *testing.T)
 	require.NoError(t, err)
 	claimed, err := tasks.ClaimTask(ctx, "source-lease", 30*time.Second)
 	require.NoError(t, err)
-	source, err := repo.PublishArtifact(ctx, claimed, artifactCandidate())
+	source, err := repo.PublishArtifact(ctx, claimed, readyArtifactCandidate(t, repo, claimed))
 	require.NoError(t, err)
 	wrong := agentTask("source-other-user")
 	wrong.UserID = 2
@@ -110,6 +126,6 @@ func TestWebAgentArtifactSourceCannotCrossUsersOrDisappearSilently(t *testing.T)
 	require.NoError(t, err)
 	_, err = db.Exec(`UPDATE web_agent_artifacts SET deleted_at=now() WHERE id=$1`, source.ID)
 	require.NoError(t, err)
-	_, err = repo.PublishArtifact(ctx, claimed, artifactCandidate())
+	_, err = repo.PublishArtifact(ctx, claimed, readyArtifactCandidate(t, repo, claimed))
 	require.ErrorIs(t, err, service.ErrWebAgentArtifactNotFound)
 }

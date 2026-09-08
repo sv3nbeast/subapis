@@ -74,6 +74,33 @@ func (h *WebChatHandler) ArtifactVersions(c *gin.Context) {
 }
 func (h *WebChatHandler) DownloadArtifact(c *gin.Context) { h.serveArtifact(c, false) }
 func (h *WebChatHandler) PreviewArtifact(c *gin.Context)  { h.serveArtifact(c, true) }
+func (h *WebChatHandler) DeleteArtifact(c *gin.Context) {
+	userID, ok := webAgentOwner(c)
+	if !ok {
+		return
+	}
+	id, ok := webAgentPositiveID(c, "artifact_id")
+	if !ok {
+		return
+	}
+	if err := h.webChatService.Artifacts().Delete(c.Request.Context(), userID, id); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"deleted": true, "cleanup_pending": true})
+}
+func (h *WebChatHandler) ArtifactStorageUsage(c *gin.Context) {
+	userID, ok := webAgentOwner(c)
+	if !ok {
+		return
+	}
+	usage, err := h.webChatService.Artifacts().StorageUsage(c.Request.Context(), userID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, usage)
+}
 func (h *WebChatHandler) serveArtifact(c *gin.Context, preview bool) {
 	userID, ok := webAgentOwner(c)
 	if !ok {

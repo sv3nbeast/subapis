@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,13 +28,54 @@ func (f agentRenderFunc) Render(ctx context.Context, k string, s json.RawMessage
 	return f(ctx, k, s)
 }
 
-type failingAgentPreviewStore struct{ WebAgentBlobStore }
+type failingAgentPreviewStore struct{ WebAgentStagedBlobStore }
 
-func (s failingAgentPreviewStore) Put(ctx context.Context, ext string, data []byte) (string, error) {
-	if ext == "pdf" {
-		return "", errors.New("synthetic storage failure")
+func (s failingAgentPreviewStore) PutKey(ctx context.Context, key string, data []byte) error {
+	if strings.HasSuffix(key, ".pdf") {
+		return errors.New("synthetic storage failure")
 	}
-	return s.WebAgentBlobStore.Put(ctx, ext, data)
+	return s.WebAgentStagedBlobStore.PutKey(ctx, key, data)
+}
+
+type stagedExecutorRepo struct {
+	artifactServiceRepoStub
+	WebAgentStorageRepository
+	stage *WebAgentBlobStage
+}
+
+func (r *stagedExecutorRepo) RegisterArtifactStore(context.Context, string) error { return nil }
+func (r *stagedExecutorRepo) ReserveArtifactStorage(_ context.Context, t *WebAgentTask) (*WebAgentBlobStage, error) {
+	r.stage = &WebAgentBlobStage{ID: 1, TaskID: t.ID, UserID: t.UserID, LeaseToken: t.LeaseToken, State: "allocated", BlobKey: "ffffffff-ffff-ffff-ffff-ffffffffffff.docx", PreviewKey: "ffffffff-ffff-ffff-ffff-ffffffffffff.pdf"}
+	return r.stage, nil
+}
+func (r *stagedExecutorRepo) CheckArtifactStorage(context.Context, *WebAgentTask, *WebAgentBlobStage) error {
+	if r.stage.State != "allocated" {
+		return ErrWebAgentLeaseLost
+	}
+	return nil
+}
+func (r *stagedExecutorRepo) ReadyArtifactStorage(_ context.Context, _ *WebAgentTask, _ *WebAgentBlobStage, a *WebAgentArtifact) error {
+	if err := a.Validate(); err != nil {
+		return err
+	}
+	r.stage.State = "ready"
+	return nil
+}
+func (r *stagedExecutorRepo) AbandonArtifactStorage(context.Context, int64, int64, string) error {
+	if r.stage != nil {
+		r.stage.State = "abandoned"
+	}
+	return nil
+}
+func (r *stagedExecutorRepo) CollectArtifactStorage(_ context.Context, remove func(*WebAgentBlobStage) error) (int, error) {
+	if r.stage == nil || r.stage.State != "abandoned" {
+		return 0, nil
+	}
+	if err := remove(r.stage); err != nil {
+		return 0, err
+	}
+	r.stage = nil
+	return 1, nil
 }
 
 func TestWebAgentExecutorCleansFailedPartialFileWithoutAnotherModelCall(t *testing.T) {
@@ -49,15 +91,22 @@ func TestWebAgentExecutorCleansFailedPartialFileWithoutAnotherModelCall(t *testi
 	renderer := agentRenderFunc(func(context.Context, string, json.RawMessage) (*WebAgentRenderedArtifact, error) {
 		return &WebAgentRenderedArtifact{Extension: "docx", MIME: webAgentArtifactTypes["document"].mime, File: []byte("file"), PreviewPDF: []byte("%PDF-preview"), SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("file")))}, nil
 	})
-	executor := NewWebAgentOfficeExecutor(planner, renderer, failingAgentPreviewStore{store}, artifactServiceRepoStub{})
-	a, err := executor.Execute(context.Background(), &WebAgentTask{Kind: "document"}, func(string, string) error { return nil })
+	repo := &stagedExecutorRepo{}
+	executor := NewWebAgentOfficeExecutor(planner, renderer, failingAgentPreviewStore{store}, repo)
+	a, err := executor.Execute(context.Background(), agentWorkerFixture().task, func(string, string) error { return nil })
 	require.ErrorContains(t, err, "synthetic storage failure")
 	require.Equal(t, 1, calls)
 	require.Equal(t, "one-generation", a.Generation.RequestID)
+	require.Equal(t, "abandoned", repo.stage.State)
+	require.NoError(t, executor.Discard(context.Background(), a), "repeated abandonment must be harmless")
+	n, err := CollectWebAgentStorage(context.Background(), repo, store)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
 	files, err := os.ReadDir(root)
 	require.NoError(t, err)
-	require.Empty(t, files)
-	require.NoError(t, executor.Discard(context.Background(), a), "repeated cleanup must be harmless")
+	for _, file := range files {
+		require.False(t, webAgentBlobKey.MatchString(file.Name()))
+	}
 }
 
 type trackingAgentExecutor struct {
@@ -172,4 +221,27 @@ func TestWebAgentKnownPublicationRejectionFailsAndCleansUp(t *testing.T) {
 	require.Equal(t, 1, executor.discards)
 	require.Equal(t, WebAgentFailed, recorded.finished)
 	require.Equal(t, "storage_limit", recorded.code)
+}
+
+type fullArtifactStorage struct{ stagedExecutorRepo }
+
+func (r *fullArtifactStorage) ReserveArtifactStorage(context.Context, *WebAgentTask) (*WebAgentBlobStage, error) {
+	return nil, ErrWebAgentStorageLimit
+}
+func TestWebAgentExecutorDoesNotCallModelWhenStorageReservationFails(t *testing.T) {
+	store, err := NewWebAgentFileStore(filepath.Join(t.TempDir(), "private-store"))
+	require.NoError(t, err)
+	calls := 0
+	planner := agentPlanFunc(func(context.Context, *WebAgentTask, *WebAgentArtifact) (*WebAgentPlan, error) {
+		calls++
+		return nil, nil
+	})
+	renderer := agentRenderFunc(func(context.Context, string, json.RawMessage) (*WebAgentRenderedArtifact, error) {
+		t.Error("renderer must not run")
+		return nil, nil
+	})
+	executor := NewWebAgentOfficeExecutor(planner, renderer, store, &fullArtifactStorage{})
+	_, err = executor.Execute(context.Background(), agentWorkerFixture().task, func(string, string) error { return nil })
+	require.ErrorIs(t, err, ErrWebAgentStorageLimit)
+	require.Zero(t, calls)
 }

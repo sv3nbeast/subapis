@@ -16,8 +16,10 @@ import (
 
 var ErrWebAgentArtifactNotFound = infraerrors.NotFound("WEB_AGENT_ARTIFACT_NOT_FOUND", "artifact not found")
 var ErrWebAgentStorageLimit = infraerrors.BadRequest("WEB_AGENT_STORAGE_LIMIT", "artifact storage limit reached")
+var ErrWebAgentStorageIdentity = infraerrors.ServiceUnavailable("WEB_AGENT_STORAGE_IDENTITY", "artifact storage identity mismatch or legacy storage requires verified adoption")
 
 type WebAgentArtifact struct {
+	Stage        *WebAgentBlobStage  `json:"-"`
 	Generation   *WebAgentGeneration `json:"-"`
 	ID           int64               `json:"id"`
 	TaskID       int64               `json:"task_id"`
@@ -121,6 +123,36 @@ func (s *WebAgentArtifactService) Versions(ctx context.Context, userID, id, befo
 	}
 	return s.repo.ArtifactVersions(ctx, userID, id, before)
 }
+func (s *WebAgentArtifactService) Delete(ctx context.Context, userID, id int64) error {
+	if err := s.readable(ctx); err != nil {
+		return err
+	}
+	if userID <= 0 || id <= 0 {
+		return ErrWebAgentInvalid
+	}
+	repo, ok := s.repo.(WebAgentStorageRepository)
+	if !ok {
+		return ErrWebAgentUnavailable
+	}
+	return repo.DeleteArtifact(ctx, userID, id)
+}
+func (s *WebAgentArtifactService) StorageUsage(ctx context.Context, userID int64) (*WebAgentStorageUsage, error) {
+	if err := s.readable(ctx); err != nil {
+		return nil, err
+	}
+	if userID <= 0 {
+		return nil, ErrWebAgentInvalid
+	}
+	repo, ok := s.repo.(WebAgentStorageRepository)
+	if !ok {
+		return nil, ErrWebAgentUnavailable
+	}
+	used, err := repo.ArtifactStorageUsage(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return &WebAgentStorageUsage{UsedBytes: used, LimitBytes: WebAgentUserStorageBytes, TaskReservationBytes: WebAgentStorageReservationBytes}, nil
+}
 func (s *WebAgentArtifactService) Download(ctx context.Context, userID, id int64, preview bool) (*WebAgentArtifact, io.ReadCloser, int64, error) {
 	artifact, err := s.Get(ctx, userID, id)
 	if err != nil {
@@ -128,6 +160,15 @@ func (s *WebAgentArtifactService) Download(ctx context.Context, userID, id int64
 	}
 	if s.store == nil {
 		return nil, nil, 0, ErrWebAgentUnavailable
+	}
+	if storage, ok := s.repo.(WebAgentStorageRepository); ok {
+		store, ok := s.store.(WebAgentStagedBlobStore)
+		if !ok {
+			return nil, nil, 0, ErrWebAgentUnavailable
+		}
+		if err = storage.RegisterArtifactStore(ctx, store.StorageID()); err != nil {
+			return nil, nil, 0, err
+		}
 	}
 	key, expected := artifact.BlobKey, artifact.SizeBytes
 	if preview {

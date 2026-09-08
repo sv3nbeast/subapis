@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { cancelTask, createTask, getTaskEvents, isTaskTerminal, getArtifactBlob, getArtifactVersions } from '../webAgent'
-const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }))
+import { cancelTask, createTask, getTaskEvents, isTaskTerminal, getArtifactBlob, getArtifactVersions, deleteArtifact, getArtifactStorageUsage } from '../webAgent'
+const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), delete: vi.fn() }))
 vi.mock('../client', () => ({ apiClient: api }))
 beforeEach(() => { vi.clearAllMocks(); api.get.mockResolvedValue({ data: { items: [], next_after: 9 } }); api.post.mockResolvedValue({ data: { id: 1 } }) })
 describe('durable task API', () => {
@@ -41,5 +41,14 @@ describe('durable task API', () => {
     expect(api.get).toHaveBeenLastCalledWith('/web-chat/artifacts/12/preview', { responseType: 'blob', signal })
     await getArtifactBlob(12, false, signal)
     expect(api.get).toHaveBeenLastCalledWith('/web-chat/artifacts/12/download', { responseType: 'blob', signal })
+  })
+  it('deletes only the selected version and leaves quota truth to the server', async () => {
+    api.delete.mockResolvedValue({ data: { deleted: true, cleanup_pending: true } })
+    expect(await deleteArtifact(12)).toEqual({ deleted: true, cleanup_pending: true })
+    expect(api.delete).toHaveBeenCalledWith('/web-chat/artifacts/12')
+    const signal = new AbortController().signal
+    await getArtifactStorageUsage(signal)
+    expect(api.get).toHaveBeenLastCalledWith('/web-chat/artifact-storage', { signal })
+    expect(api.post).not.toHaveBeenCalled()
   })
 })

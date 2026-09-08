@@ -34,6 +34,7 @@ func agentIntegrationRepo(t *testing.T) (service.WebAgentRepository, *sql.DB) {
 	require.NoError(t, err)
 	q := u.Query()
 	q.Set("search_path", schema)
+	q.Set("application_name", schema)
 	u.RawQuery = q.Encode()
 	db, err := sql.Open("postgres", u.String())
 	require.NoError(t, err)
@@ -55,6 +56,10 @@ func agentIntegrationRepo(t *testing.T) (service.WebAgentRepository, *sql.DB) {
 	artifactsMigration, err := os.ReadFile("../../migrations/235_web_agent_artifacts.sql")
 	require.NoError(t, err)
 	_, err = db.Exec(string(artifactsMigration))
+	require.NoError(t, err)
+	storageMigration, err := os.ReadFile("../../migrations/236_web_agent_blob_lifecycle.sql")
+	require.NoError(t, err)
+	_, err = db.Exec(string(storageMigration))
 	require.NoError(t, err)
 	return NewWebChatRepository(db).(service.WebAgentRepository), db
 }

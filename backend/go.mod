@@ -57,6 +57,7 @@ require (
 	golang.org/x/mod v0.37.0
 	golang.org/x/net v0.56.0
 	golang.org/x/sync v0.21.0
+	golang.org/x/sys v0.46.0
 	golang.org/x/term v0.44.0
 	golang.org/x/text v0.39.0
 	google.golang.org/grpc v1.75.1
@@ -206,7 +207,6 @@ require (
 	go.uber.org/multierr v1.9.0 // indirect
 	golang.org/x/arch v0.3.0 // indirect
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
-	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
 	golang.org/x/tools v0.47.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect

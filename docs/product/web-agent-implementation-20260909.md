@@ -336,3 +336,77 @@ Remaining release/goal gates (do not mark the goal complete):
    separately authorized live-provider validation. No production/domain action.
 5. Continue the remaining planned workspace/assistant/source relevance and
    product lifecycle requirements from the goal; this is not a reduced objective.
+
+## Registered file lifecycle (fifth slice)
+
+Base: 4b9538b33. The preceding turn was progress. This slice closes the physical
+artifact ownership/cleanup gap; it does not complete runtime/UI integration.
+
+Implemented:
+
+- Migration 236 adds a durable blob ownership journal that survives task/user
+  deletion, and a database-bound storage-volume identity. Artifact specifications
+  retain bounded original JSON text rather than JSONB numeric expansion.
+- Reserve 33 MiB before any model call (32 MiB file+preview plus 1 MiB spec), against
+  a 500 MiB per-user artifact-data quota. Record both server-generated file keys
+  first; after writing, reduce the reservation to actual data size. Outstanding
+  cleanup still occupies quota until removal is confirmed.
+- Cross-process shared/exclusive file locking coordinates writes and cleanup,
+  including filesystem I/O that outlives a cancelled database/request context.
+  Permanent lock/volume identity files are private and must not be replaced.
+- Different volume identities are rejected before writes, downloads or cleanup.
+  Legacy beta records cannot be silently adopted from an arbitrary directory.
+- Writing revalidates the stage and live execution lease while holding the shared
+  store lock. Publication locks the ready journal row, then rechecks the task
+  against the current database clock; artifact/task/journal commit together.
+- Cleanup uses the exclusive store lock, locks a registered journal candidate,
+  takes a fresh visibility snapshot, and only deletes its recorded keys. It never
+  scans filenames to infer ownership. Active published references are protected,
+  including when the caller lost a successful commit acknowledgement.
+- Task/storage transactions explicitly use READ COMMITTED so per-owner admission
+  and post-lock visibility checks do not depend on a server default snapshot.
+- Authenticated version deletion and occupied-quota APIs plus frontend clients.
+  Deletion hides the selected version immediately; physical cleanup is asynchronous.
+  Successful cleanup purges private spec/title, retaining an inaccessible version
+  tombstone so deleted version numbers are not reused.
+- Background task maintenance performs bounded expiry and file cleanup separately
+  from model execution. Known cancellation retains available generation tracing
+  but never exposes a partial artifact as a successful result.
+
+Verification:
+
+- Real PostgreSQL tests cover active-reference protection, owner deletion/cascade,
+  idempotent cleanup after disk failure, quota release only after physical removal,
+  wrong-volume refusal, pre-generation reservation limits, deleted version numbers,
+  and cleanup blocked by an in-flight write even after context/lease expiration.
+- Publication test observes a real PostgreSQL lock wait, expires the lease while
+  blocked, and verifies publication is refused after the lock is released.
+- A subprocess test proves filesystem locking works between separate processes,
+  not only through a Go mutex. Reopening the same store preserves its identity.
+- Full native Office pipeline (create + revision for all three kinds) and all
+  task/storage repository integration tests pass under `-race` (16.452s).
+- Service/handler task tests pass under `-race`, including no model/renderer call
+  when storage reservation fails. Frontend six-client-test suite, typecheck and
+  targeted ESLint pass. Full backend service/repository/handler/routes/migrations
+  pass (service 176.345s; handler 34.591s); `go build ./...` and diff whitespace
+  check pass.
+- Initial old executor mock did not implement the new staged-store contract and
+  failed as unavailable. Replaced it with a stage-aware mock and asserted actual
+  abandonment followed by registered cleanup; the updated test passes.
+- All deletion tests used unique disposable schemas/directories. Test containers
+  were removed by the harness; no production or user-owned business files deleted.
+
+Review: no attributable P0/P1 in the implemented, default-disabled artifact
+lifecycle. Existing model request builders, streaming adapters, scheduling,
+cache identity and charge accounting are unchanged. Direct tests cover task
+terminal/lease/cleanup races; new waits and sweeps are bounded and off ordinary
+chat's first-output path. This is not a production latency/cache canary verdict.
+
+Verdict: PASS for this lifecycle slice; BLOCKED for opening/releasing the complete
+Agent product. Goal remains active. The ordinary shared checkout remains untouched.
+
+Next: runtime configuration + readiness + shutdown wiring (do not claim jobs before
+the local gateway is accepting connections), then the MONO task/progress/artifact
+pane and full browser/local-gateway canary. Also retain the outstanding planned
+assistant/project/source-relevance and product lifecycle scope. Artifact quota is
+not a total database-history retention policy; history policy must be explicit.

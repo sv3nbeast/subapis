@@ -93,3 +93,17 @@ export async function getArtifactBlob(id: number, preview = false, signal?: Abor
   const { data } = await apiClient.get<Blob>(`/web-chat/artifacts/${id}/${preview ? 'preview' : 'download'}`, { responseType: 'blob', signal })
   return data
 }
+export interface WebAgentStorageUsage {
+  // Occupied quota includes running reservations and files pending cleanup.
+  used_bytes: number
+  limit_bytes: number
+  task_reservation_bytes: number
+}
+export async function getArtifactStorageUsage(signal?: AbortSignal) {
+  const { data } = await apiClient.get<WebAgentStorageUsage>('/web-chat/artifact-storage', { signal })
+  return data
+}
+export async function deleteArtifact(id: number) {
+  const { data } = await apiClient.delete<{ deleted: boolean; cleanup_pending: boolean }>(`/web-chat/artifacts/${id}`)
+  return data
+}

@@ -160,6 +160,14 @@ func (s *WebAgentService) Start() {
 					if err != nil && ctx.Err() == nil {
 						slog.Warn("web_agent.expiry_failed", "error", err)
 					}
+					if maintenance, ok := s.executor.(interface{ Maintain(context.Context) error }); ok && ctx.Err() == nil {
+						maintenanceCtx, maintenanceCancel := context.WithTimeout(ctx, 5*time.Second)
+						maintenanceErr := maintenance.Maintain(maintenanceCtx)
+						maintenanceCancel()
+						if maintenanceErr != nil && ctx.Err() == nil {
+							slog.Warn("web_agent.storage_cleanup_pending")
+						}
+					}
 				}
 			}
 		}()

@@ -35,6 +35,8 @@ func webAgentFailureCode(err error) string {
 		return "source_unavailable"
 	case errors.Is(err, ErrWebAgentStorageLimit):
 		return "storage_limit"
+	case errors.Is(err, ErrWebAgentStorageIdentity):
+		return "storage_unavailable"
 	case errors.Is(err, ErrWebAgentInvalid):
 		return "invalid_task"
 	default:

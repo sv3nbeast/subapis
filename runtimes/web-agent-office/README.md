@@ -109,3 +109,42 @@ ten minutes. Normal completion is required before a complete JSON specification
 is accepted. A truncated, refused, malformed or unrequested tool response cannot
 publish a file. Missing upstream usage remains unknown, not a fabricated zero.
 These limits must be shown by the task UI when execution is enabled.
+
+## Artifact storage lifecycle
+
+The gateway now journals both artifact keys **before** model generation or disk
+writes. A task reserves 33 MiB (up to 32 MiB file+preview and 1 MiB specification)
+against a 500 MiB per-user quota. After writing, the reservation becomes the
+actual data size. Occupied quota includes active reservations and pending
+deletions; it is not a physical-disk-usage or billing-dollar measurement.
+
+The task must still own its execution lease before writing and publishing.
+Publication atomically marks the journal entry published with the artifact and
+task terminal state. Abandonment and failed/deleted task cleanup only remove
+registered keys, never guessed files found by directory scanning. Cleanup keeps
+its journal record and quota until removal succeeds, so retries after a disk or
+database failure are idempotent. A successful artifact whose commit reply was
+lost remains protected by the committed database reference.
+
+The private store uses a permanent cross-process lock and a persisted identity:
+`.web-agent-store.lock` and `.web-agent-store-id`. Writers hold a shared filesystem
+lock; cleanup holds it exclusively. This also protects against filesystem work
+finishing after a database/request context expires. Supported locking runtimes
+are Linux/macOS and the listed BSD targets; unsupported platforms fail closed.
+
+All gateway instances serving the same database must use the same shared artifact
+volume with reliable advisory locking. A different volume identity is rejected
+before writes, downloads or cleanup. Back up/restore the whole artifact volume
+with its identity and database, not isolated metadata files. Never copy or replace
+the identity just to bypass a mismatch. Legacy beta artifacts without a registered
+store require a separately verified adoption; automatic guessing is blocked.
+
+Authenticated DELETE hides only the selected version immediately and reports
+`cleanup_pending`. The background task maintenance loop then removes the files
+and clears their private specification/title, retaining a version tombstone so
+deleted version numbers are not reused. The ownership journal intentionally
+outlives user/session/task deletion until the physical files have been removed.
+
+The main application still needs runtime configuration/readiness/shutdown wiring
+and the MONO task/preview UI binding. These storage mechanisms alone do not enable
+tasks in the default application factory.

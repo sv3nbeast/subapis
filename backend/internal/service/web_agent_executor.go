@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"time"
 )
 
@@ -25,13 +24,17 @@ type WebAgentOfficeExecutor struct {
 	renderer WebAgentRenderer
 	store    WebAgentBlobStore
 	repo     WebAgentArtifactRepository
+	storage  WebAgentStorageRepository
+	staged   WebAgentStagedBlobStore
 }
 
 func NewWebAgentOfficeExecutor(planner WebAgentPlanner, renderer WebAgentRenderer, store WebAgentBlobStore, repo WebAgentArtifactRepository) *WebAgentOfficeExecutor {
-	return &WebAgentOfficeExecutor{planner: planner, renderer: renderer, store: store, repo: repo}
+	storage, _ := repo.(WebAgentStorageRepository)
+	staged, _ := store.(WebAgentStagedBlobStore)
+	return &WebAgentOfficeExecutor{planner: planner, renderer: renderer, store: store, repo: repo, storage: storage, staged: staged}
 }
 func (e *WebAgentOfficeExecutor) Execute(ctx context.Context, task *WebAgentTask, progress func(string, string) error) (artifact *WebAgentArtifact, err error) {
-	if e == nil || e.planner == nil || e.renderer == nil || e.store == nil || e.repo == nil {
+	if e == nil || e.planner == nil || e.renderer == nil || e.store == nil || e.repo == nil || e.storage == nil || e.staged == nil {
 		return nil, ErrWebAgentUnavailable
 	}
 	if task == nil || progress == nil {
@@ -40,7 +43,7 @@ func (e *WebAgentOfficeExecutor) Execute(ctx context.Context, task *WebAgentTask
 	if _, ok := webAgentArtifactTypes[task.Kind]; !ok {
 		return nil, ErrWebAgentInvalid
 	}
-	artifact = &WebAgentArtifact{Kind: task.Kind}
+	artifact = &WebAgentArtifact{Kind: task.Kind, TaskID: task.ID, UserID: task.UserID, SessionID: task.SessionID}
 	ready := false
 	defer func() {
 		// Also runs on a panic before the result reaches the task worker.
@@ -60,6 +63,16 @@ func (e *WebAgentOfficeExecutor) Execute(ctx context.Context, task *WebAgentTask
 			return artifact, ErrWebAgentArtifactNotFound
 		}
 	}
+	// Reserve space and record both file keys before model billing or file I/O.
+	if err = e.storage.RegisterArtifactStore(ctx, e.staged.StorageID()); err != nil {
+		return artifact, err
+	}
+	stage, err := e.storage.ReserveArtifactStorage(ctx, task)
+	if err != nil {
+		return artifact, err
+	}
+	artifact.Stage = stage
+	artifact.BlobKey, artifact.PreviewKey = stage.BlobKey, stage.PreviewKey
 	if err = progress("started", "生成内容"); err != nil {
 		return artifact, err
 	}
@@ -101,10 +114,19 @@ func (e *WebAgentOfficeExecutor) Execute(ctx context.Context, task *WebAgentTask
 	if err = progress("started", "保存成果"); err != nil {
 		return artifact, err
 	}
-	if artifact.BlobKey, err = e.store.Put(ctx, rendered.Extension, rendered.File); err != nil {
-		return artifact, webAgentFailure("storage_failed", err)
-	}
-	if artifact.PreviewKey, err = e.store.Put(ctx, "pdf", rendered.PreviewPDF); err != nil {
+	err = e.staged.WithLock(ctx, false, func() error {
+		if err := e.storage.CheckArtifactStorage(ctx, task, stage); err != nil {
+			return err
+		}
+		if err := e.staged.PutKey(ctx, stage.BlobKey, rendered.File); err != nil {
+			return err
+		}
+		if err := e.staged.PutKey(ctx, stage.PreviewKey, rendered.PreviewPDF); err != nil {
+			return err
+		}
+		return e.storage.ReadyArtifactStorage(ctx, task, stage, artifact)
+	})
+	if err != nil {
 		return artifact, webAgentFailure("storage_failed", err)
 	}
 	if err = artifact.Validate(); err != nil {
@@ -117,14 +139,13 @@ func (e *WebAgentOfficeExecutor) Execute(ctx context.Context, task *WebAgentTask
 	return artifact, nil
 }
 func (e *WebAgentOfficeExecutor) Discard(ctx context.Context, a *WebAgentArtifact) error {
-	if a == nil {
+	if a == nil || a.Stage == nil {
 		return nil
 	}
-	var errs []error
-	for _, key := range []string{a.BlobKey, a.PreviewKey} {
-		if key != "" {
-			errs = append(errs, e.store.Remove(ctx, key))
-		}
-	}
-	return errors.Join(errs...)
+	return e.storage.AbandonArtifactStorage(ctx, a.Stage.ID, a.Stage.TaskID, a.Stage.LeaseToken)
+}
+
+func (e *WebAgentOfficeExecutor) Maintain(ctx context.Context) error {
+	_, err := CollectWebAgentStorage(ctx, e.storage, e.staged)
+	return err
 }
