@@ -1,5 +1,5 @@
 <template>
-  <form class="composer" @submit.prevent="emit('submit')" @dragover.prevent @drop.prevent="drop">
+  <form class="composer" @submit.prevent="submit" @dragover.prevent @drop.prevent="drop">
     <div v-if="documents.length || failedAttachments.length || attachmentState" class="attachment-strip">
       <span v-for="doc in documents" :key="doc.id">
         {{ doc.original_name }}
@@ -15,25 +15,26 @@
     <textarea
       :value="modelValue"
       rows="2"
+      :aria-label="t('workspace.inputLabel')"
       :placeholder="t('webChat.placeholder')"
       :disabled="disabled"
       class="composer-input"
       @input="emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
-      @keydown.enter.exact.prevent="emit('submit')"
+      @keydown="handleKeydown"
     />
     <div class="composer-bottom">
       <span>
         <label v-if="filesEnabled" class="template-trigger">
-          <input class="hidden" type="file" multiple accept=".pdf,.docx,.xlsx,.txt,.md,.csv" @change="pick" />
+          <input class="sr-only" type="file" :disabled="disabled || sending" multiple accept=".pdf,.docx,.xlsx,.txt,.md,.csv" @change="pick" />
           <Icon name="upload" size="xs" /> {{ t('webChat.attach') }}
         </label>
-        <button v-if="templatesEnabled" type="button" class="template-trigger" @click="emit('open-template')">
+        <button v-if="templatesEnabled" type="button" :disabled="disabled || sending" class="template-trigger" @click="emit('open-template')">
           <Icon name="sparkles" size="xs" /> {{ templateName || t('webChat.templates') }}
         </button>
-        {{ modelValue.length.toLocaleString() }} / 20,000 · {{ t('webChat.enterHint') }}
+        <small v-if="modelValue.length > 18000" class="char-count">{{ modelValue.length.toLocaleString() }} / 20,000</small>
       </span>
-      <button v-if="sending" type="button" class="btn-stop" @click="emit('stop')"><span class="stop-square" />{{ t('webChat.stop') }}</button>
-      <button v-else class="btn-send" :disabled="!canSend"><Icon name="arrowUp" size="sm" />{{ t('webChat.send') }}</button>
+      <button v-if="sending" type="button" class="btn-stop" :aria-label="t('webChat.stop')" :title="t('webChat.stop')" @click="emit('stop')"><span class="stop-square" /></button>
+      <button v-else class="btn-send" :disabled="!canSend || disabled || !modelValue.trim()" :aria-label="t('webChat.send')" :title="t('webChat.send')"><Icon name="arrowUp" size="sm" /></button>
     </div>
   </form>
 </template>
@@ -73,11 +74,25 @@ function pick(event: Event) {
   emit('files', Array.from(input.files || []))
   input.value = ''
 }
+function submit() {
+  if (!props.disabled && !props.sending && props.canSend && props.modelValue.trim()) emit('submit')
+}
+function handleKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.isComposing || event.keyCode === 229) return
+  event.preventDefault()
+  submit()
+}
 function drop(event: DragEvent) {
-  if (props.filesEnabled) emit('files', Array.from(event.dataTransfer?.files || []))
+  if (props.filesEnabled && !props.disabled && !props.sending) emit('files', Array.from(event.dataTransfer?.files || []))
 }
 </script>
 
 <style scoped>
-.composer{border-top:1px solid rgba(148,163,184,.25);padding:.75rem 1rem}.composer-input{width:100%;resize:none;border:1px solid #d1d5db;border-radius:1rem;background:transparent;padding:.65rem .8rem;outline:none}.composer-input:focus{border-color:#14b8a6;box-shadow:0 0 0 3px rgba(20,184,166,.12)}.composer-bottom{display:flex;align-items:center;justify-content:space-between;margin-top:.45rem;color:#94a3b8;font-size:.68rem}.btn-send,.btn-stop{display:flex;align-items:center;gap:.35rem;border-radius:.7rem;padding:.5rem .75rem;color:white;font-weight:700}.btn-send{background:#0d9488}.btn-send:disabled{opacity:.45}.btn-stop{background:#dc2626}.stop-square{width:.55rem;height:.55rem;background:white;border-radius:.1rem}.template-trigger{display:inline-flex;align-items:center;gap:.25rem;margin-right:.5rem;border-radius:.5rem;background:rgba(20,184,166,.1);padding:.25rem .4rem;color:#0f766e;font-weight:700;cursor:pointer}.attachment-strip{display:flex;flex-wrap:wrap;gap:.35rem;margin-bottom:.45rem}.attachment-strip span{border-radius:999px;background:rgba(20,184,166,.1);padding:.25rem .5rem;font-size:.68rem;color:#0f766e}.attachment-strip .attachment-failed{background:rgba(239,68,68,.1);color:#b91c1c}.attachment-failed button:first-of-type{margin-left:.35rem;font-weight:800;text-decoration:underline}@media(max-width:640px){.composer-bottom>span{max-width:70%}}
+.composer{border:1px solid var(--wa-line,#e4e4e7);border-radius:6px;padding:.65rem .8rem;background:var(--wa-bg,#fff)}
+.composer:focus-within{border-color:#a1a1aa}.composer-input{width:100%;resize:none;border:0;background:transparent;color:var(--wa-text,#18181b);min-height:3rem;padding:.3rem .15rem;font-size:1rem;line-height:1.6;outline:none}
+.composer-bottom{display:flex;align-items:center;justify-content:space-between;gap:.5rem;color:var(--wa-muted,#71717a);font-size:.875rem;margin-top:.3rem}.composer-bottom>span{display:flex;flex-wrap:wrap;align-items:center;gap:.65rem}
+.btn-send,.btn-stop{display:grid;place-items:center;flex-shrink:0;width:2rem;height:2rem;border-radius:6px;color:var(--wa-bg,#fff);background:var(--wa-text,#18181b)}.btn-send:disabled{opacity:.35;cursor:not-allowed}.stop-square{width:.6rem;height:.6rem;background:currentColor;border-radius:1px}
+.template-trigger{display:inline-flex;align-items:center;gap:.35rem;position:relative;cursor:pointer;font-size:.875rem;min-height:2rem}.template-trigger:focus-within{outline:2px solid var(--wa-accent,#2563eb);outline-offset:3px}.char-count{font-size:.75rem}
+.attachment-strip{display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.5rem}.attachment-strip>span{display:inline-flex;align-items:center;gap:.4rem;border:1px solid var(--wa-line,#e4e4e7);border-radius:5px;padding:.25rem .45rem;font-size:.8125rem;overflow-wrap:anywhere}.attachment-strip .attachment-failed{color:#b91c1c;background:#fef2f2}.attachment-failed button:first-of-type{text-decoration:underline}
+@media(max-width:767px){.btn-send,.btn-stop{width:44px;height:44px;background:transparent;position:relative;isolation:isolate}.btn-send:before,.btn-stop:before{content:"";position:absolute;inset:6px;z-index:-1;border-radius:6px;background:var(--wa-text,#18181b)}.template-trigger{min-height:44px}.attachment-strip button{min-width:32px;min-height:32px}}
 </style>

@@ -1,3 +1,34 @@
-<template><div v-if="sources.length" class="sources"><p>{{ t('webChat.knowledgeSources') }}</p><button v-for="source in sources" :key="`${source.index}-${source.document_id}`" @click="selected=source"><b>[{{ t('webChat.source') }}{{ source.index }}]</b><span>{{ source.document_name }}</span><small>{{ location(source) }}</small></button><BaseDialog :show="Boolean(selected)" :title="selected?.document_name||''" @close="selected=null"><p class="text-xs font-bold text-primary-600">{{ selected?location(selected):'' }}</p><pre class="excerpt">{{ selected?.excerpt }}</pre></BaseDialog></div></template>
-<script setup lang="ts">import{ref}from'vue';import{useI18n}from'vue-i18n';import BaseDialog from '@/components/common/BaseDialog.vue';import type{WebChatSource}from'@/api/webChat';defineProps<{sources:WebChatSource[]}>();const{t}=useI18n();const selected=ref<WebChatSource|null>(null);function location(s:WebChatSource){return s.page_number?`${t('webChat.page')} ${s.page_number}`:s.location_label||t('webChat.body')}</script>
-<style scoped>.sources{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.45rem}.sources>p{width:100%;font-size:.65rem;font-weight:800;color:#64748b}.sources>button{display:flex;align-items:center;gap:.3rem;border:1px solid rgba(20,184,166,.25);border-radius:999px;padding:.25rem .5rem;font-size:.65rem;color:#0f766e}.sources small{color:#94a3b8}.excerpt{margin-top:.7rem;max-height:24rem;overflow:auto;white-space:pre-wrap;border-radius:.7rem;background:rgba(148,163,184,.1);padding:.8rem;font-size:.78rem}</style>
+<template>
+  <details v-if="sources.length" class="source-files">
+    <summary>{{ t('workspace.sources', { files: grouped.length, citations: sources.length }) }}</summary>
+    <div v-for="group in grouped" :key="group.id" class="source-file">
+      <strong>{{ group.name }}</strong>
+      <div><button v-for="source in group.sources" :key="source.index" @click="selected=source">{{ location(source) }}</button></div>
+    </div>
+    <BaseDialog :show="Boolean(selected)" :title="selected?.document_name||''" @close="selected=null">
+      <p class="source-location">{{ selected ? location(selected) : '' }}</p>
+      <pre class="excerpt">{{ selected?.excerpt }}</pre>
+    </BaseDialog>
+  </details>
+</template>
+<script setup lang="ts">
+import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import BaseDialog from '@/components/common/BaseDialog.vue'
+import type { WebChatSource } from '@/api/webChat'
+const props=defineProps<{ sources:WebChatSource[] }>()
+const { t }=useI18n()
+const selected=ref<WebChatSource|null>(null)
+const grouped=computed(()=>{
+ const groups=new Map<number,{id:number;name:string;sources:WebChatSource[]}>()
+ for(const source of props.sources){
+  if(!groups.has(source.document_id))groups.set(source.document_id,{id:source.document_id,name:source.document_name,sources:[]})
+  groups.get(source.document_id)!.sources.push(source)
+ }
+ return [...groups.values()]
+})
+function location(s:WebChatSource){return s.page_number ? `${t('webChat.page')} ${s.page_number}` : s.location_label || `${t('webChat.source')} ${s.index}`}
+</script>
+<style scoped>
+.source-files{font-size:.8125rem;color:var(--wa-muted,#71717a);margin-top:.75rem}.source-files summary{cursor:pointer}.source-file{border-left:2px solid var(--wa-line,#e4e4e7);padding:.5rem .75rem;margin-top:.5rem}.source-file strong{font-weight:550;overflow-wrap:anywhere}.source-file>div{display:flex;gap:.6rem;flex-wrap:wrap}.source-file button{color:var(--wa-accent,#2563eb);padding:.3rem 0;text-decoration:underline;text-underline-offset:3px}.source-location{font-size:.875rem;font-weight:600}.excerpt{white-space:pre-wrap;overflow-wrap:anywhere;max-height:60vh;overflow:auto;margin-top:.75rem;font: .875rem/1.6 system-ui,sans-serif}
+</style>

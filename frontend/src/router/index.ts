@@ -250,6 +250,7 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/chat',
+    alias: '/workspace',
     name: 'WebChat',
     component: () => import('@/views/user/WebChatView.vue'),
     meta: {

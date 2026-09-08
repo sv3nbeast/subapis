@@ -1,0 +1,16 @@
+export default { workspace: {
+  home: '工作台', navigation: '工作台导航', skip: '跳到工作区', console: '管理控制台',
+  files: '我的文件', assistants: '助手', hello: '你好，{name}', startTitle: '今天想完成什么？',
+  startHint: '描述任务，或者从一份文件开始。', recent: '继续最近的工作',
+  slides: '制作演示文稿', analysis: '分析表格', document: '撰写文档',
+  slidesPrompt: '帮我规划一份演示文稿。请先和我确认主题、受众和页数。',
+  analysisPrompt: '帮我分析上传的表格，检查数据并总结关键发现。',
+  documentPrompt: '帮我撰写一份文档。请先确认文档的用途、受众和结构。',
+  modelSettings: '模型与设置', usageDetails: '用量详情', context: '本次上下文', waiting: '等待模型响应',
+  createProject: '新建项目', projectHint: '将会话和参考资料按项目整理。',
+  filesHint: '选择一个项目，管理其中的参考资料。', noProjects: '还没有项目',
+  noProjectsHint: '创建项目后，可以管理相关会话和资料。', openFiles: '管理资料', startProject: '在此项目中对话',
+  messageLoading: '正在加载会话…', sessionUnavailable: '会话不存在或当前账号无权访问。',
+  loadFailed: '无法加载工作台，请重试。', retry: '重试', sources: '{files} 份参考资料 · {citations} 处引用',
+  modeChat: '对话', inputLabel: '任务或消息', actions: '会话操作', projectSettings: '项目设置',
+} }

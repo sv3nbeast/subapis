@@ -10,6 +10,7 @@ import adminAuditMessages from './zh/admin/audit'
 import adminPromptAuditMessages from './zh/admin/promptAudit'
 import adminSettingsMessages from './zh/admin/settings'
 import batchImageMessages from './zh/batchImage'
+import workspaceMessages from './zh/workspace'
 
 const baseMessages = {
   // Home Page
@@ -9096,6 +9097,7 @@ export default mergeLocaleMessages(
   upstreamSupplement,
   baseMessages,
   batchImageMessages,
+  workspaceMessages,
   {
     admin: mergeLocaleMessages(
       baseMessages.admin,

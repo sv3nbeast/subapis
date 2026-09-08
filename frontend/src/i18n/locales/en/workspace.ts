@@ -1,0 +1,16 @@
+export default { workspace: {
+  home: 'Workspace', navigation: 'Workspace navigation', skip: 'Skip to workspace', console: 'Console',
+  files: 'My files', assistants: 'Assistants', hello: 'Hello, {name}', startTitle: 'What would you like to work on?',
+  startHint: 'Describe a task, or start with a file.', recent: 'Continue recent work',
+  slides: 'Create slides', analysis: 'Analyze a spreadsheet', document: 'Write a document',
+  slidesPrompt: 'Help me plan a presentation. First confirm the topic, audience and number of slides.',
+  analysisPrompt: 'Analyze my uploaded spreadsheet, check the data and summarize the key findings.',
+  documentPrompt: 'Help me write a document. First confirm its purpose, audience and structure.',
+  modelSettings: 'Model and settings', usageDetails: 'Usage details', context: 'Current context', waiting: 'Waiting for model response',
+  createProject: 'New project', projectHint: 'Organize conversations and source material by project.',
+  filesHint: 'Choose a project to manage its source material.', noProjects: 'No projects yet',
+  noProjectsHint: 'Create a project to organize conversations and files.', openFiles: 'Manage files', startProject: 'Chat in this project',
+  messageLoading: 'Loading conversation…', sessionUnavailable: 'Conversation not found or unavailable to this account.',
+  loadFailed: 'Unable to load the workspace. Please try again.', retry: 'Retry', sources: '{files} source files · {citations} citations',
+  modeChat: 'Chat', inputLabel: 'Task or message', actions: 'Conversation actions', projectSettings: 'Project settings',
+} }
