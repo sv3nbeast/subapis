@@ -177,6 +177,8 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 		return nil, fmt.Errorf("kiro forward: missing account or request")
 	}
 	ctx = ensureNianzsKiroHiddenThinkingProgress(ctx)
+	ctx, finishWireCapture := beginKiroWireCapture(ctx, c, parsed, account)
+	defer finishWireCapture()
 
 	originalModel := parsed.Model
 	mappedModel := originalModel
@@ -259,6 +261,9 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 			return nil, s.handleKiroHTTPErrorNianzs(ctx, resp, c, account, mappedModel, body)
 		}
 		upstreamModel := nianzsResolveKiroUpstreamModel(mappedModel)
+		if trace := kiroWireTraceFromContext(ctx); trace != nil {
+			captureKiroTranslatedBody(resp, trace)
+		}
 		ctx = withGatewayFirstSemanticTimeoutOverride(ctx, s.nianzsKiroFirstSemanticTimeoutForRequest(ctx, parsed.GroupID))
 		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, mappedModel, false, true)
 		err = s.finishNianzsKiroStreamResponse(ctx, resp, parsed.GroupID, err)
@@ -1078,7 +1083,17 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 				return nil, requestCtx, err
 			}
 
+			wireTrace := kiroWireTraceFromContext(ctx)
+			var wireAttempt int64
+			if wireTrace != nil {
+				wireAttempt = wireTrace.attempt.Add(1)
+				wireTrace.record("aws_request", wireAttempt, payload, endpoint.Name)
+			}
 			resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
+			if wireTrace != nil && resp != nil && resp.Body != nil {
+				wireTrace.record("aws_response", wireAttempt, nil, fmt.Sprintf("http_%d", resp.StatusCode))
+				resp.Body = &kiroWireReadCloser{ReadCloser: resp.Body, trace: wireTrace, stage: "aws_bytes", attempt: wireAttempt}
+			}
 			if err != nil {
 				if attempt < maxRetries {
 					if sleepErr := nianzsSleepKiroRetry(ctx, attempt); sleepErr != nil {
