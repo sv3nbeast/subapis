@@ -83,7 +83,8 @@ func (s *WebAgentService) Create(ctx context.Context, userID, sessionID int64, i
 	groupID := session.GroupID
 	return s.repo.CreateTask(ctx, &WebAgentTask{UserID: userID, SessionID: sessionID, GroupID: &groupID,
 		Model: session.Model, Kind: req.Kind, Prompt: req.Prompt, DocumentIDs: req.DocumentIDs,
-		SessionSnapshot: snapshot, IdempotencyKey: req.IdempotencyKey, RequestHash: webAgentRequestHash(sessionID, req),
+		SourceArtifactID: req.SourceArtifactID,
+		SessionSnapshot:  snapshot, IdempotencyKey: req.IdempotencyKey, RequestHash: webAgentRequestHash(sessionID, req),
 		Status: WebAgentQueued, DeadlineAt: s.now().Add(WebAgentTaskTimeout)})
 }
 func (s *WebAgentService) Get(ctx context.Context, userID, id int64) (*WebAgentTask, error) {

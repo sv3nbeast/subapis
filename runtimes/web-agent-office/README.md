@@ -1,0 +1,88 @@
+# Constrained Office renderer (protocol v1)
+
+This is a **private, data-only worker**, not a general code sandbox. It creates
+editable PPTX, DOCX and XLSX files and PDF previews from the structured contract
+in `schema.py`. It does not call models, fetch URLs, execute model-authored code,
+accept uploaded Office archives, access gateway credentials or write to the
+gateway's database. Native chart data remains editable.
+
+Status: renderer and artifact persistence slice only. The main application's
+task executor remains disabled until model planning, budgets, artifact-backed
+completion and storage lifecycle are wired. Do not advertise full Agent execution
+from this worker's health response alone.
+
+## Deployment boundary
+
+- Build the included Dockerfile. Runtime dependencies include LibreOffice and
+  Noto Sans CJK SC; missing CJK fonts make startup fail rather than return blank
+  Chinese previews. The renderer must not depend on a developer's desktop Office.
+- `compose.example.yml` shows a private internal network, one CPU, 1 GiB memory,
+  bounded temporary storage, read-only root, non-root UID 10001, dropped Linux
+  capabilities and no-new-privileges. No host port is exposed by default.
+- Set a separate random `WEB_AGENT_RENDERER_TOKEN` (at least 32 characters).
+  Never reuse the gateway JWT secret or a model/provider key. Keep it out of Git.
+- Attach the gateway to the worker's private network when integration is enabled;
+  do not mount production env files, a Docker socket, database volumes or the
+  artifact storage directory in the worker.
+- The gateway's separate artifact directory must be private (0700), files 0600.
+  Only authenticated user-owned metadata resolves a blob key; there is no public
+  object URL and storage paths are excluded from API responses.
+- Image base/OS packages are not release-pinned yet. Before a production rollout,
+  lock the tested image digest and run the normal release/security review. This
+  example is not authorization to deploy.
+
+## HTTP contract
+
+`GET /health` returns protocol version 1 and supported kinds. It describes this
+worker only. One render runs at a time, so a busy worker may delay health checks.
+
+`POST /render` requires `Authorization: Bearer <dedicated token>` and a bounded
+JSON Content-Length. The request root contains `kind`, `title`, optional `theme`
+(`mono`, `blue`, `warm`) and exactly one of:
+
+- `slides`: up to 40 slides, layouts `cover`, `bullets`, `table`, `chart`, native
+  notes. The layout budget rejects overly dense text instead of silently clipping.
+- `sections`: document headings, paragraphs, bullets and tables; at most 50,000
+  body/table characters. No arbitrary HTML, scripts or remote assets.
+- `sheets`: at most 8 sheets / 20,000 cells, typed values, number formats, bounded
+  allowlisted formulas, optional bar/line charts. Plain strings beginning with `=`
+  remain plain text. Formula functions, cell ranges and referenced sheet names
+  are validated; external books, DDE and network formulas are forbidden.
+
+See `test_office.py` for complete synthetic examples of all three kinds. The
+schema is the authoritative contract; unknown fields are rejected.
+
+Successful responses contain `protocol_version`, `extension`, `mime`,
+`file_base64`, `file_sha256`, `size_bytes` and `preview_pdf_base64`. The gateway
+checks the MIME/extension, SHA-256, size, ZIP CRCs, required Office parts,
+relationships and embedded chart workbooks before accepting a result.
+
+Limits: request 1 MiB; combined file+preview 32 MiB; each Office conversion 90 s
+with whole-child-process-group termination on timeout. XLSX is recalculated
+before download and formula error cells fail the render. Gateway disconnects
+prevent publication but do not immediately interrupt the private Office child;
+its own deadline and isolated temporary directory still bound that work.
+
+No response body, prompt, document content, authorization header or Office
+stderr is logged. Errors use a small stable classification. A failed render is
+not an invitation to replay a model request or switch accounts.
+
+## Verification
+
+Schema/protocol tests:
+
+```sh
+python -m unittest -v test_office test_server
+```
+
+Full integration additionally needs `OFFICE_BINARY`, the packaged Chinese fonts,
+`WEB_AGENT_OFFICE_INTEGRATION=1`, and a writable synthetic-only
+`WEB_AGENT_OFFICE_TEST_OUTPUT` directory. Run inside the isolated image with
+`--network none`, mounting the two test modules read-only. The integration tests
+reopen native files, assert chart/table editability, check cached formula results,
+verify literal formula-like strings and generate all PDF previews.
+
+Render every preview page to PNG and inspect it; file existence alone is not a
+visual acceptance test. Feed the same synthetic sample directory to the Go
+service tests with `WEB_AGENT_OFFICE_TEST_OUTPUT` to verify renderer-to-gateway
+compatibility. Never use production user documents as committed fixtures.

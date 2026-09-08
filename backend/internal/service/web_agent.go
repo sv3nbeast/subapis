@@ -35,26 +35,27 @@ var (
 )
 
 type WebAgentTask struct {
-	ID              int64           `json:"id"`
-	UserID          int64           `json:"-"`
-	SessionID       int64           `json:"session_id"`
-	GroupID         *int64          `json:"group_id"`
-	Model           string          `json:"model"`
-	Kind            string          `json:"kind"`
-	Prompt          string          `json:"prompt"`
-	DocumentIDs     []int64         `json:"document_ids"`
-	SessionSnapshot json.RawMessage `json:"-"`
-	IdempotencyKey  string          `json:"-"`
-	RequestHash     string          `json:"-"`
-	Status          string          `json:"status"`
-	Result          json.RawMessage `json:"result,omitempty"`
-	ErrorCode       string          `json:"error_code,omitempty"`
-	StepCount       int             `json:"step_count"`
-	LeaseToken      string          `json:"-"`
-	DeadlineAt      time.Time       `json:"deadline_at"`
-	CreatedAt       time.Time       `json:"created_at"`
-	UpdatedAt       time.Time       `json:"updated_at"`
-	FinishedAt      *time.Time      `json:"finished_at,omitempty"`
+	ID               int64           `json:"id"`
+	UserID           int64           `json:"-"`
+	SessionID        int64           `json:"session_id"`
+	GroupID          *int64          `json:"group_id"`
+	Model            string          `json:"model"`
+	Kind             string          `json:"kind"`
+	Prompt           string          `json:"prompt"`
+	DocumentIDs      []int64         `json:"document_ids"`
+	SourceArtifactID *int64          `json:"source_artifact_id,omitempty"`
+	SessionSnapshot  json.RawMessage `json:"-"`
+	IdempotencyKey   string          `json:"-"`
+	RequestHash      string          `json:"-"`
+	Status           string          `json:"status"`
+	Result           json.RawMessage `json:"result,omitempty"`
+	ErrorCode        string          `json:"error_code,omitempty"`
+	StepCount        int             `json:"step_count"`
+	LeaseToken       string          `json:"-"`
+	DeadlineAt       time.Time       `json:"deadline_at"`
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at"`
+	FinishedAt       *time.Time      `json:"finished_at,omitempty"`
 }
 type WebAgentTaskEvent struct {
 	ID        int64           `json:"id"`
@@ -64,10 +65,11 @@ type WebAgentTaskEvent struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 type WebAgentCreateRequest struct {
-	Kind           string  `json:"kind"`
-	Prompt         string  `json:"prompt"`
-	DocumentIDs    []int64 `json:"document_ids"`
-	IdempotencyKey string  `json:"idempotency_key"`
+	SourceArtifactID *int64  `json:"source_artifact_id,omitempty"`
+	Kind             string  `json:"kind"`
+	Prompt           string  `json:"prompt"`
+	DocumentIDs      []int64 `json:"document_ids"`
+	IdempotencyKey   string  `json:"idempotency_key"`
 }
 type WebAgentRepository interface {
 	CreateTask(context.Context, *WebAgentTask) (*WebAgentTask, error)
@@ -90,6 +92,9 @@ func (t WebAgentTask) Terminal() bool {
 	return false
 }
 func normalizeWebAgentRequest(req WebAgentCreateRequest) (WebAgentCreateRequest, error) {
+	if req.SourceArtifactID != nil && *req.SourceArtifactID <= 0 {
+		return req, ErrWebAgentInvalid
+	}
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	req.Kind = strings.TrimSpace(req.Kind)
 	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)

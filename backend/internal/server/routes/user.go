@@ -87,6 +87,11 @@ func RegisterUserRoutes(
 		{
 			webChat.GET("/options", h.WebChat.Options)
 			webChat.GET("/tasks", h.WebChat.ListTasks)
+			webChat.GET("/artifacts", h.WebChat.ListArtifacts)
+			webChat.GET("/artifacts/:artifact_id", h.WebChat.GetArtifact)
+			webChat.GET("/artifacts/:artifact_id/versions", h.WebChat.ArtifactVersions)
+			webChat.GET("/artifacts/:artifact_id/download", h.WebChat.DownloadArtifact)
+			webChat.GET("/artifacts/:artifact_id/preview", h.WebChat.PreviewArtifact)
 			webChat.GET("/tasks/:task_id", h.WebChat.GetTask)
 			webChat.GET("/tasks/:task_id/events", h.WebChat.TaskEvents)
 			webChat.POST("/tasks/:task_id/cancel", h.WebChat.CancelTask)

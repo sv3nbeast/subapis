@@ -52,6 +52,10 @@ func agentIntegrationRepo(t *testing.T) (service.WebAgentRepository, *sql.DB) {
 	require.NoError(t, err)
 	_, err = db.Exec(string(migration))
 	require.NoError(t, err)
+	artifactsMigration, err := os.ReadFile("../../migrations/235_web_agent_artifacts.sql")
+	require.NoError(t, err)
+	_, err = db.Exec(string(artifactsMigration))
+	require.NoError(t, err)
 	return NewWebChatRepository(db).(service.WebAgentRepository), db
 }
 func agentTask(key string) *service.WebAgentTask {

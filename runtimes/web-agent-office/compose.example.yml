@@ -1,0 +1,20 @@
+# Merge into a PRIVATE application network. No host port, data volume, production
+# environment file, Docker socket or gateway credential is exposed to this worker.
+services:
+  web-agent-office:
+    build: .
+    environment:
+      WEB_AGENT_RENDERER_TOKEN: ${WEB_AGENT_RENDERER_TOKEN:?set a dedicated renderer credential}
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+      - /home/renderer:size=16m,uid=10001,gid=10001,mode=700
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 128
+    networks: [office-private]
+networks:
+  office-private:
+    internal: true

@@ -150,3 +150,93 @@ Known remaining integration requirements:
 Next concrete step: implement the constrained Office artifact schema, renderer
 worker and artifact repository, then wire model planning through the existing
 user-owned gateway identity. Keep the full goal active.
+
+## Constrained Office artifacts (third slice)
+
+Implemented on top of 5314647d9; this does not enable the unfinished model loop:
+
+- Private data-only renderer in `runtimes/web-agent-office`: validated native
+  PPTX/DOCX/XLSX, editable text/tables/charts, bounded allowlisted formulas,
+  spreadsheet recalculation, actual PDF previews and native file reopen checks.
+- Separate non-root, read-only Docker worker with Noto CJK fonts, bounded memory,
+  CPU, processes and temporary storage. No production credentials, Docker socket,
+  arbitrary model code, uploaded Office archive parsing or URL fetching.
+- Gateway client with separate renderer authentication, no proxy inheritance or
+  redirects, response/expansion bounds, MIME/SHA-256/ZIP CRC checks, external
+  relationship rejection and recursive validation of embedded chart workbooks.
+- Private artifact blob store (0700 directory / 0600 files), immutable random
+  keys, owned metadata-first access, safe download headers and authenticated PDF
+  preview. Storage keys and revision specifications never appear in public DTOs.
+- Migration 235: task-associated artifacts, lineage/version/parent links and a
+  source-artifact task reference. Root and revision publication atomically write
+  the artifact, task success and terminal event under the current live lease.
+- Cancellation wins over later publication. Stale workers cannot publish, and a
+  missing/deleted/cross-user revision source cannot silently become a new file.
+  Quota admission includes PostgreSQL's actual JSON serialization size.
+- Metadata listing avoids loading private 1 MiB revision specifications for every
+  row. Typed frontend APIs cover artifacts, authenticated blob fetches, version
+  cursors and source-version revision requests; no bearer token in preview URLs.
+
+Evidence and issues found during validation:
+
+- Local bundled Office first produced unreadable Chinese glyphs despite valid
+  native files. That run FAILED visual acceptance. The independent image includes
+  the required font and fails startup without it. Its final 4 slide pages,
+  1 document page and 2 spreadsheet pages were rendered to PNG and inspected;
+  Chinese text, native tables/charts and cached totals are visible and unclipped.
+- Actual renderer-to-Go archive validation caught a library-default binary
+  printer setting in PPTX. Removed the unrelated template relationship/part;
+  retained the gateway binary-part rejection. Final real PPTX/DOCX/XLSX samples
+  all pass the same gateway validator, including the PPTX chart workbook.
+- Ten Python schema/native-render/protocol tests pass in the final isolated
+  image with network disabled. Formula cached values 22 / 11 / 5 verified;
+  formula-like input text remains literal. HTTP auth precedes rendering and
+  runtime errors do not disclose private paths/content.
+- Nine PostgreSQL task/artifact integration tests pass with `-race` in disposable
+  schemas. Metadata tests use synthetic entries, not real user documents.
+- Full Go service/repository/handler/routes/migration packages pass on the final
+  code (service 174.486s; handler 34.374s). Focused real-archive tests pass too.
+- Five frontend task/artifact-client tests, typecheck, targeted ESLint and the
+  production build pass. Existing mixed-import/chunk-size/Browserslist warnings
+  remain; no dependency upgrade was mixed into this slice.
+- Presentation/document/spreadsheet skills influenced native editability,
+  recalculation and render/visual validation. The private artifact-tool package
+  was unavailable for a standalone production runtime; public Office libraries
+  are the explicit fallback. No claim of artifact-tool-based generation.
+
+Synthetic QA output: `/private/tmp/sub2api-webagent-office-docker-samples`.
+Local-only image: `sub2api-webagent-office:local-test`, manifest-list digest
+`sha256:2ae3eb6934568c846add139e2193ffd8d3c2df3b28447b40e9b764f7d840344f`.
+Test containers exited and were automatically removed. No external model calls.
+
+Review gate for this slice:
+
+- Findings: no attributable P0/P1 in default-enabled paths. The incomplete
+  executor/storage lifecycle remains a BLOCKER to enabling Agent execution.
+- Range: 5314647d9 plus task-owned artifact/runtime/client changes.
+- Matrix: new authenticated metadata/download APIs and a private, currently
+  unconnected renderer; no existing upstream protocol/provider/cache/failover
+  implementation is changed.
+- Four invariants: existing conversation stream/cache-hit/cache-creation/TTFT
+  paths are unchanged; no new model request or response buffering is introduced
+  into those paths. Publication's one-terminal/ownership/lease boundaries have
+  direct repository tests. This is not a live-provider performance verdict.
+- Verdict: PASS for the disabled artifact foundation; BLOCKED for enabling or
+  shipping the full Agent. No production/domain action was performed.
+
+Required next steps (goal remains active):
+
+1. Implement a real model planner using the existing user's group/model/billing
+   identity, revalidating selected documents and source versions before use.
+   Bound calls, token/cost budgets and structured output; no ambiguous replay.
+2. Wire an artifact-backed executor. Success must use `PublishArtifact` rather
+   than the generic `FinishTask` JSON path. Never publish a guessed file card.
+3. Configure/start/stop the worker and blob store only after readiness checks.
+   `tasks_enabled` remains false, the executor nil and artifact store unconfigured
+   in default application wiring. No new task can be submitted yet.
+4. Add staged/orphan reconciliation and deletion/retention before enabling file
+   execution. On an uncertain DB commit, never delete blobs that may already be
+   referenced by a committed artifact. Session/user deletion needs blob cleanup.
+5. Bind actual task progress, cancel/reconnect, files/preview/versions and source
+   revisions to the MONO UI; verify browser/mobile/keyboard workflows. Current
+   API tests and sample previews are not end-to-end user-workflow acceptance.

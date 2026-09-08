@@ -95,6 +95,7 @@ type WebChatService struct {
 	settingService webChatRuntimeReader
 	documents      *WebChatDocumentService
 	agent          *WebAgentService
+	artifacts      *WebAgentArtifactService
 }
 
 func (s *WebChatService) SetDocumentService(documents *WebChatDocumentService) {
@@ -120,6 +121,9 @@ func NewWebChatService(
 		// reviewed executor is attached. Do not queue jobs with no worker.
 		svc.agent = NewWebAgentService(taskRepo, svc, nil)
 	}
+	if artifactRepo, ok := repo.(WebAgentArtifactRepository); ok {
+		svc.artifacts = NewWebAgentArtifactService(artifactRepo, svc, nil)
+	}
 	return svc
 }
 
@@ -128,6 +132,12 @@ func (s *WebChatService) Agent() *WebAgentService {
 		return nil
 	}
 	return s.agent
+}
+func (s *WebChatService) Artifacts() *WebAgentArtifactService {
+	if s == nil {
+		return nil
+	}
+	return s.artifacts
 }
 
 func (s *WebChatService) runtime(ctx context.Context) WebChatRuntime {

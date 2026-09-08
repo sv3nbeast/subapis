@@ -14,7 +14,7 @@ import (
 
 var _ service.WebAgentRepository = (*webChatRepository)(nil)
 
-const webAgentColumns = `t.id,t.user_id,t.session_id,t.group_id,t.model,t.kind,t.prompt,t.document_ids,
+const webAgentColumns = `t.id,t.user_id,t.session_id,t.group_id,t.model,t.kind,t.prompt,t.document_ids,t.source_artifact_id,
  t.session_snapshot,t.idempotency_key,t.request_hash,t.status,t.result,t.error_code,t.step_count,
  COALESCE(t.lease_token,''),t.deadline_at,t.created_at,t.updated_at,t.finished_at`
 const webAgentVisible = `EXISTS (SELECT 1 FROM web_chat_sessions s WHERE s.id=t.session_id AND s.user_id=t.user_id AND s.deleted_at IS NULL)`
@@ -22,7 +22,7 @@ const webAgentVisible = `EXISTS (SELECT 1 FROM web_chat_sessions s WHERE s.id=t.
 func scanWebAgentTask(row interface{ Scan(...any) error }) (*service.WebAgentTask, error) {
 	var t service.WebAgentTask
 	var docs, snapshot, result []byte
-	err := row.Scan(&t.ID, &t.UserID, &t.SessionID, &t.GroupID, &t.Model, &t.Kind, &t.Prompt, &docs, &snapshot,
+	err := row.Scan(&t.ID, &t.UserID, &t.SessionID, &t.GroupID, &t.Model, &t.Kind, &t.Prompt, &docs, &t.SourceArtifactID, &snapshot,
 		&t.IdempotencyKey, &t.RequestHash, &t.Status, &result, &t.ErrorCode, &t.StepCount, &t.LeaseToken,
 		&t.DeadlineAt, &t.CreatedAt, &t.UpdatedAt, &t.FinishedAt)
 	if err != nil {
@@ -77,6 +77,17 @@ func (r *webChatRepository) CreateTask(ctx context.Context, t *service.WebAgentT
 	if count >= service.WebAgentMaxActiveTasks {
 		return nil, service.ErrWebAgentBusy
 	}
+	if t.SourceArtifactID != nil {
+		var sourceID int64
+		err = tx.QueryRowContext(ctx, `SELECT a.id FROM web_agent_artifacts a WHERE a.id=$1 AND a.user_id=$2 AND a.session_id=$3 AND a.kind=$4 AND `+artifactVisible,
+			*t.SourceArtifactID, t.UserID, t.SessionID, t.Kind).Scan(&sourceID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, service.ErrWebAgentArtifactNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 	if len(t.DocumentIDs) > 0 {
 		err = tx.QueryRowContext(ctx, `SELECT count(*) FROM web_chat_documents d JOIN web_chat_sessions s ON s.id=$2
 		 WHERE d.id=ANY($3::bigint[]) AND d.user_id=$1 AND d.deleted_at IS NULL AND d.enabled AND d.status='ready'
@@ -94,9 +105,9 @@ func (r *webChatRepository) CreateTask(ctx context.Context, t *service.WebAgentT
 		return nil, err
 	}
 	task, err := scanWebAgentTask(tx.QueryRowContext(ctx, `INSERT INTO web_agent_tasks AS t
-	 (user_id,session_id,group_id,model,kind,prompt,document_ids,session_snapshot,idempotency_key,request_hash,deadline_at)
-	 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING `+webAgentColumns,
-		t.UserID, t.SessionID, t.GroupID, t.Model, t.Kind, t.Prompt, string(docs), string(t.SessionSnapshot), t.IdempotencyKey, t.RequestHash, t.DeadlineAt))
+	 (user_id,session_id,group_id,model,kind,prompt,document_ids,session_snapshot,idempotency_key,request_hash,deadline_at,source_artifact_id)
+	 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING `+webAgentColumns,
+		t.UserID, t.SessionID, t.GroupID, t.Model, t.Kind, t.Prompt, string(docs), string(t.SessionSnapshot), t.IdempotencyKey, t.RequestHash, t.DeadlineAt, t.SourceArtifactID))
 	if err != nil {
 		return nil, err
 	}
