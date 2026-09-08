@@ -323,6 +323,8 @@ import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import { useChannelMonitorFormat } from '@/composables/useChannelMonitorFormat'
+import { useNow } from '@vueuse/core'
+import { monitorOverall } from '@/utils/monitorObservation'
 import type { PublicMonitorTimelinePoint, PublicMonitorView } from '@/api/publicChannelMonitor'
 import type { MonitorStatus } from '@/api/admin/channelMonitor'
 import type { GroupPlatform } from '@/types'
@@ -384,13 +386,13 @@ let revealObserver: IntersectionObserver | null = null
 const modelCountLabel = computed(() => props.modelCount === null ? '—' : String(props.modelCount))
 const coreChannels = computed(() => props.supportedChannels.filter((channel) => !channel.isCustom).slice(0, 4))
 const visibleMonitors = computed(() => props.publicMonitorItems.slice(0, 4))
-const hasMonitorIssue = computed(() => props.publicMonitorItems.some((item) => item.primary_status !== 'operational'))
+const observationNow = useNow({ interval: 30000 })
+const observationStatus = computed(() => monitorOverall(props.publicMonitorItems, observationNow.value.getTime()))
+const hasMonitorIssue = computed(() => observationStatus.value !== 'operational')
 const monitorSummary = computed(() => {
   if (props.publicMonitorLoading) return t('home.experience.status.loading')
   if (props.publicMonitorItems.length === 0) return t('home.experience.status.empty')
-  return hasMonitorIssue.value
-    ? t('home.experience.status.attention')
-    : t('home.experience.status.operational')
+  return t(`channelStatus.overall.${observationStatus.value}`)
 })
 
 function latencyLabel(latency: number | null): string {

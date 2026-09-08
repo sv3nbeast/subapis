@@ -52,6 +52,11 @@ func (h *ChannelMonitorUserHandler) quotaVisible(c *gin.Context) bool {
 // --- Response ---
 
 type channelMonitorUserListItem struct {
+	CheckMode            string                               `json:"check_mode"`
+	ProbePath            string                               `json:"probe_path"`
+	IntervalSeconds      int                                  `json:"interval_seconds"`
+	JitterSeconds        int                                  `json:"jitter_seconds"`
+	PrimaryCheckedAt     *time.Time                           `json:"primary_checked_at"`
 	ID                   int64                                `json:"id"`
 	Name                 string                               `json:"name"`
 	Provider             string                               `json:"provider"`
@@ -114,6 +119,11 @@ func userMonitorViewToItem(v *service.UserMonitorView, includeQuota bool) channe
 		})
 	}
 	item := channelMonitorUserListItem{
+		CheckMode:            v.CheckMode,
+		ProbePath:            v.ProbePath,
+		IntervalSeconds:      v.IntervalSeconds,
+		JitterSeconds:        v.JitterSeconds,
+		PrimaryCheckedAt:     v.PrimaryCheckedAt,
 		ID:                   v.ID,
 		Name:                 v.Name,
 		Provider:             v.Provider,

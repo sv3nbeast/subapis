@@ -72,7 +72,7 @@ import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import AutoRefreshButton from '@/components/common/AutoRefreshButton.vue'
 export type MonitorWindow = '7d' | '15d' | '30d'
-export type OverallStatus = 'operational' | 'degraded'
+export type OverallStatus = 'operational' | 'degraded' | 'slow' | 'unknown'
 
 const props = defineProps<{
   title: string

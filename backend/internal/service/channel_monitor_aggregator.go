@@ -203,6 +203,7 @@ func buildStatusSummary(
 	if primary != "" {
 		if l, ok := latestByModel[primary]; ok {
 			summary.PrimaryStatus = l.Status
+			summary.PrimaryCheckedAt = &l.CheckedAt
 			summary.PrimaryLatencyMs = l.LatencyMs
 			// 配额快照只挂主模型行（quota 模式唯一行 / quota_probe 的主行）。
 			summary.LatestQuota = l.Quota
@@ -231,6 +232,10 @@ func buildUserViewFromSummary(
 	timelineEntries []*ChannelMonitorHistoryEntry,
 ) *UserMonitorView {
 	view := &UserMonitorView{
+		CheckMode:        m.CheckMode,
+		ProbePath:        monitorProbePath(m),
+		IntervalSeconds:  m.IntervalSeconds,
+		JitterSeconds:    m.JitterSeconds,
 		ID:               m.ID,
 		Name:             m.Name,
 		Provider:         m.Provider,
@@ -243,10 +248,28 @@ func buildUserViewFromSummary(
 		Timeline:         buildTimelinePoints(timelineEntries),
 	}
 	if primaryLatest != nil {
+		view.PrimaryCheckedAt = &primaryLatest.CheckedAt
+		// Use one latest snapshot for status, timing and quota. A probe can finish
+		// between the summary query and this query.
+		view.PrimaryStatus = primaryLatest.Status
+		view.PrimaryLatencyMs = primaryLatest.LatencyMs
 		view.PrimaryPingLatencyMs = primaryLatest.PingLatencyMs
 		view.LatestQuota = primaryLatest.Quota
 	}
 	return view
+}
+
+func monitorProbePath(m *ChannelMonitor) string {
+	if m.CheckMode == MonitorCheckModeQuota {
+		return ""
+	}
+	if m.Provider == MonitorProviderOpenAI && m.APIMode == MonitorAPIModeResponses {
+		return providerOpenAIResponsesPath
+	}
+	if adapter, ok := providerAdapters[m.Provider]; ok {
+		return adapter.buildPath(m.PrimaryModel)
+	}
+	return ""
 }
 
 // buildTimelinePoints 把 history entry 裁剪为 timeline 点（去除 message/ID/Model，减小响应体）。

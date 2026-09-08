@@ -22,6 +22,11 @@ export interface MonitorTimelinePoint {
 }
 
 export interface UserMonitorView {
+  primary_checked_at?: string | null
+  interval_seconds?: number
+  jitter_seconds?: number
+  check_mode?: string
+  probe_path?: string
   id: number
   name: string
   provider: Provider

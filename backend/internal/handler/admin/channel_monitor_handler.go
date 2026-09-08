@@ -103,6 +103,7 @@ type channelMonitorResponse struct {
 	CreatedBy           int64                                `json:"created_by"`
 	CreatedAt           string                               `json:"created_at"`
 	UpdatedAt           string                               `json:"updated_at"`
+	PrimaryCheckedAt    *time.Time                           `json:"primary_checked_at"`
 	PrimaryStatus       string                               `json:"primary_status"`
 	PrimaryLatencyMs    *int                                 `json:"primary_latency_ms"`
 	Availability7d      float64                              `json:"availability_7d"`
@@ -292,6 +293,7 @@ func (h *ChannelMonitorHandler) batchSummaryFor(c *gin.Context, items []*service
 func buildListItemResponse(m *service.ChannelMonitor, summary service.MonitorStatusSummary) *channelMonitorResponse {
 	resp := channelMonitorToResponse(m)
 	resp.PrimaryStatus = summary.PrimaryStatus
+	resp.PrimaryCheckedAt = summary.PrimaryCheckedAt
 	resp.PrimaryLatencyMs = summary.PrimaryLatencyMs
 	resp.Availability7d = summary.Availability7d
 	resp.LatestQuota = summary.LatestQuota

@@ -35,14 +35,9 @@
           </span>
         </div>
       </div>
-      <span
-        class="px-2.5 py-1 rounded-full text-xs font-semibold flex-shrink-0"
-        :class="statusBadgeClass(item.primary_status)"
-      >
-        {{ statusLabel(item.primary_status) }}
-      </span>
     </div>
 
+    <MonitorObservation :item="item" class="mt-3" />
     <!-- Metrics -->
     <MonitorMetricPair
       primary-icon="bolt"
@@ -90,6 +85,7 @@ import MonitorMetricPair from './MonitorMetricPair.vue'
 import MonitorAvailabilityRow from './MonitorAvailabilityRow.vue'
 import MonitorTimeline from './MonitorTimeline.vue'
 import MonitorQuotaView from '@/components/common/MonitorQuotaView.vue'
+import MonitorObservation from '@/components/common/MonitorObservation.vue'
 
 // 图标配色与 utils/platformColors.ts 的平台色对齐（新 4 家）。
 const PROVIDER_TINT: Record<string, string> = {
@@ -116,8 +112,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const {
-  statusLabel,
-  statusBadgeClass,
   providerLabel,
   providerBadgeClass,
   formatLatency,

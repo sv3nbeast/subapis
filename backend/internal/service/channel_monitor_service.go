@@ -638,7 +638,9 @@ func (s *ChannelMonitorService) RunCheck(ctx context.Context, id int64) ([]*Chec
 	default:
 		results = s.runChecksConcurrent(ctx, m)
 	}
-	s.persistCheckResults(ctx, m, results)
+	if err := s.persistCheckResults(ctx, m, results); err != nil {
+		return results, err
+	}
 	return results, nil
 }
 
@@ -677,8 +679,9 @@ func attachQuotaSnapshot(results []*CheckResult, snapshot *domain.MonitorQuotaSn
 }
 
 // persistCheckResults 写入本次检测的历史记录并更新 last_checked_at。
-// 任一写库失败都只记日志，不影响调用方拿到 results（与 MVP 期望一致：宁可漏记历史也要先返回结果）。
-func (s *ChannelMonitorService) persistCheckResults(ctx context.Context, m *ChannelMonitor, results []*CheckResult) {
+// Do not report a successful refresh when history failed to persist. Otherwise
+// a newer last_checked_at can falsely make an older failure appear fresh.
+func (s *ChannelMonitorService) persistCheckResults(ctx context.Context, m *ChannelMonitor, results []*CheckResult) error {
 	rows := make([]*ChannelMonitorHistoryRow, 0, len(results))
 	for _, r := range results {
 		rows = append(rows, &ChannelMonitorHistoryRow{
@@ -695,11 +698,14 @@ func (s *ChannelMonitorService) persistCheckResults(ctx context.Context, m *Chan
 	if err := s.repo.InsertHistoryBatch(ctx, rows); err != nil {
 		slog.Error("channel_monitor: insert history failed",
 			"monitor_id", m.ID, "name", m.Name, "error", err)
+		return fmt.Errorf("persist monitor history: %w", err)
 	}
 	if err := s.repo.MarkChecked(ctx, m.ID, time.Now()); err != nil {
 		slog.Error("channel_monitor: mark checked failed",
 			"monitor_id", m.ID, "error", err)
+		return fmt.Errorf("update monitor check time: %w", err)
 	}
+	return nil
 }
 
 // runChecksConcurrent 对 primary + extra 模型并发执行检测。

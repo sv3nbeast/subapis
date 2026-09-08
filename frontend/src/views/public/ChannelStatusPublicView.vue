@@ -179,13 +179,11 @@
                   </div>
                 </div>
 
-                <span class="monitor-public-status-badge" :class="statusBadgeClass(item.primary_status)">
-                  {{ statusLabel(item.primary_status) }}
-                </span>
               </div>
             </div>
           </div>
 
+          <MonitorObservation :item="item" class="mt-3" />
           <div class="monitor-public-metrics">
             <div class="monitor-public-metric-card">
               <span class="monitor-public-metric-label">{{ t('monitorCommon.dialogLatency') }}</span>
@@ -253,21 +251,24 @@ import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProviderIcon from '@/components/user/monitor/ProviderIcon.vue'
 import MonitorDetailDialog from '@/components/user/MonitorDetailDialog.vue'
+import MonitorObservation from '@/components/common/MonitorObservation.vue'
 import PublicLayout from '@/components/public/PublicLayout.vue'
 import { listPublicChannelMonitors, getPublicChannelMonitorStatus, type PublicMonitorDetail, type PublicMonitorTimelinePoint, type PublicMonitorView } from '@/api/publicChannelMonitor'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { useNow } from '@vueuse/core'
+import { monitorOverall } from '@/utils/monitorObservation'
 import { useChannelMonitorFormat, providerGradient } from '@/composables/useChannelMonitorFormat'
 import { DEFAULT_INTERVAL_SECONDS, PROVIDER_ANTHROPIC, PROVIDER_GEMINI, PROVIDER_OPENAI, STATUS_DEGRADED, STATUS_ERROR, STATUS_FAILED, STATUS_OPERATIONAL } from '@/constants/channelMonitor'
 import { normalizeSiteName } from '@/utils/siteBrand'
 import { extractApiErrorMessage } from '@/utils/apiError'
 
 type MonitorWindow = '7d' | '15d' | '30d'
-type OverallStatus = 'operational' | 'degraded' | 'unavailable'
+type OverallStatus = 'operational' | 'degraded' | 'unavailable' | 'slow' | 'unknown'
 
 const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
-const { providerBadgeClass, providerLabel, statusBadgeClass, statusLabel, formatRelativeTime } = useChannelMonitorFormat()
+const { providerBadgeClass, providerLabel, formatRelativeTime } = useChannelMonitorFormat()
 
 const items = ref<PublicMonitorView[]>([])
 const loading = ref(false)
@@ -299,20 +300,16 @@ const windowOptions = computed(() => [
   { value: '30d' as const, label: t('channelStatus.windowTab.30d') },
 ])
 
+const observationNow = useNow({ interval: 30000 })
 const overallStatus = computed<OverallStatus>(() => {
   if (loadError.value && items.value.length === 0) return 'unavailable'
-  if (items.value.length === 0) return 'operational'
-  for (const it of items.value) {
-    if (it.primary_status === STATUS_FAILED || it.primary_status === STATUS_ERROR) return 'degraded'
-    if (it.primary_status !== STATUS_OPERATIONAL) return 'degraded'
-  }
-  return 'operational'
+  return monitorOverall(items.value, observationNow.value.getTime())
 })
 
 const overallLabel = computed(() => t(`channelStatus.overall.${overallStatus.value}`))
 const overallSummaryLabel = computed(() => {
   if (overallStatus.value === 'unavailable') return t('monitorCommon.status.error')
-  return t(`monitorCommon.status.${overallStatus.value}`)
+  return t(`channelStatus.overall.${overallStatus.value}`)
 })
 const activeWindowLabel = computed(() => windowOptions.value.find((opt) => opt.value === currentWindow.value)?.label || '7d')
 const availabilityShortLabel = computed(() => `${activeWindowLabel.value}${t('monitorCommon.availabilityPrefix') === 'Availability' ? ' Availability' : '可用率'}`)
@@ -320,7 +317,7 @@ const availabilityShortLabel = computed(() => `${activeWindowLabel.value}${t('mo
 const overallChipClass = computed(() =>
   overallStatus.value === 'operational'
     ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
-    : overallStatus.value === 'degraded'
+    : overallStatus.value !== 'unavailable'
       ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300'
       : 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300'
 )

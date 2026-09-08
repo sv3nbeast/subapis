@@ -450,6 +450,16 @@ export default {
 
   // Shared keys for channel monitor (admin + user views)
   monitorCommon: {
+    observation: {
+      passed: 'Last probe passed',
+      slow: 'Last probe passed · slow response',
+      failed: 'Last probe failed',
+      stale: 'Result expired · current status unknown',
+      unknown: 'No valid observation',
+      checked: 'Checked {time}',
+      interval: 'Regular check interval: {n}s',
+      scope: 'The latest check does not represent every account. Refreshing this page does not run a new check.'
+    },
     status: {
       operational: 'Operational',
       degraded: 'Degraded',
@@ -530,6 +540,8 @@ export default {
       '30d': '30 days'
     },
     overall: {
+      slow: 'Probes passed · some responses slow',
+      unknown: 'Insufficient or expired observations',
       operational: 'OPERATIONAL',
       degraded: 'DEGRADED',
       unavailable: 'UNAVAILABLE'

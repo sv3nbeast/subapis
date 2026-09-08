@@ -455,6 +455,16 @@ export default {
 
   // Shared keys for channel monitor (admin + user views)
   monitorCommon: {
+    observation: {
+      passed: '最近探测成功',
+      slow: '最近探测成功 · 响应较慢',
+      failed: '最近探测失败',
+      stale: '检测结果过期 · 当前状态未知',
+      unknown: '暂无有效检测',
+      checked: '检测于 {time}',
+      interval: '常规检测间隔 {n} 秒',
+      scope: '状态来自最近一次检测，不代表所有账户；页面刷新不触发新检测。'
+    },
     status: {
       operational: '正常',
       degraded: '降级',
@@ -535,8 +545,10 @@ export default {
       '30d': '30 天'
     },
     overall: {
-      operational: 'OPERATIONAL',
-      degraded: 'DEGRADED',
+      operational: '最近探测均成功',
+      degraded: '部分检测异常 · 查看单项结果',
+      slow: '探测成功 · 部分响应较慢',
+      unknown: '检测证据不足或已过期',
       unavailable: 'UNAVAILABLE'
     },
     columns: {

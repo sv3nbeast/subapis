@@ -48,7 +48,9 @@ import MonitorHero, {
 } from '@/components/user/monitor/MonitorHero.vue'
 import MonitorCardGrid from '@/components/user/monitor/MonitorCardGrid.vue'
 import MonitorDetailDialog from '@/components/user/MonitorDetailDialog.vue'
-import { DEFAULT_INTERVAL_SECONDS, STATUS_OPERATIONAL } from '@/constants/channelMonitor'
+import { DEFAULT_INTERVAL_SECONDS } from '@/constants/channelMonitor'
+import { useNow } from '@vueuse/core'
+import { monitorOverall } from '@/utils/monitorObservation'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 
 const { t } = useI18n()
@@ -74,14 +76,8 @@ const autoRefresh = useAutoRefresh({
 const countdown = autoRefresh.countdown
 
 // ── Computed ──
-const overallStatus = computed<OverallStatus>(() => {
-  if (items.value.length === 0) return 'operational'
-  for (const it of items.value) {
-    if (it.primary_status === 'failed' || it.primary_status === 'error') return 'degraded'
-    if (it.primary_status !== STATUS_OPERATIONAL) return 'degraded'
-  }
-  return 'operational'
-})
+const observationNow = useNow({ interval: 30000 })
+const overallStatus = computed<OverallStatus>(() => monitorOverall(items.value, observationNow.value.getTime()))
 
 const detailTitle = computed(() => {
   return detailTarget.value?.name || t('channelStatus.detailTitle')

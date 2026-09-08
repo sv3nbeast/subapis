@@ -65,11 +65,9 @@
                 </div>
               </div>
 
-              <span class="home-monitor-status-badge" :class="statusBadgeClass(item.primary_status)">
-                {{ statusLabel(item.primary_status) }}
-              </span>
             </div>
 
+            <MonitorObservation :item="item" class="mt-3" />
             <div class="home-monitor-metrics">
               <div class="home-monitor-metric-card">
                 <span class="home-monitor-metric-label">{{ t('monitorCommon.dialogLatency') }}</span>
@@ -115,6 +113,7 @@ import type { PublicMonitorTimelinePoint, PublicMonitorView } from '@/api/public
 import { useChannelMonitorFormat, providerGradient } from '@/composables/useChannelMonitorFormat'
 import ProviderIcon from '@/components/user/monitor/ProviderIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
+import MonitorObservation from '@/components/common/MonitorObservation.vue'
 import {
   PROVIDER_ANTHROPIC,
   PROVIDER_GEMINI,
@@ -131,7 +130,7 @@ const props = defineProps<{
 
 const router = useRouter()
 const { t } = useI18n()
-const { providerBadgeClass, providerLabel, statusBadgeClass, statusLabel, formatLatency, formatPercent } = useChannelMonitorFormat()
+const { providerBadgeClass, providerLabel, formatLatency, formatPercent } = useChannelMonitorFormat()
 
 const availabilityLabel = computed(() => `${t('monitorCommon.availabilityPrefix')} · 7d`)
 

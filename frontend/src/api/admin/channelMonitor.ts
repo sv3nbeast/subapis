@@ -83,6 +83,7 @@ export interface ChannelMonitor {
   updated_at: string
   /** Latest status of the primary model (empty when no history yet) */
   primary_status: MonitorStatus | ''
+  primary_checked_at?: string | null
   /** Latest latency of the primary model in ms (null when no history yet) */
   primary_latency_ms: number | null
   /** Primary model 7-day availability percentage (0-100) */

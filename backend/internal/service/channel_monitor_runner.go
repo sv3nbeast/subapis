@@ -66,12 +66,19 @@ type ChannelMonitorRunner struct {
 }
 
 // scheduledMonitor 单个监控的运行时上下文。
+type monitorProbeOutcome struct {
+	observed bool
+	failed   bool
+}
+
 type scheduledMonitor struct {
-	id       int64
-	name     string
-	interval time.Duration
-	jitter   time.Duration // 每轮 ± [0, jitter] 的均匀随机偏移；0 = 固定间隔
-	cancel   context.CancelFunc
+	completed         chan monitorProbeOutcome // persisted outcome, not a service/configuration error
+	recoveryCheckUsed bool                     // owned only by runScheduled
+	id                int64
+	name              string
+	interval          time.Duration
+	jitter            time.Duration // 每轮 ± [0, jitter] 的均匀随机偏移；0 = 固定间隔
+	cancel            context.CancelFunc
 }
 
 // nextDelay 计算下一次触发的等待时长：interval ± [0, jitter] 的均匀随机偏移。
@@ -184,11 +191,12 @@ func (r *ChannelMonitorRunner) Schedule(m *ChannelMonitor) {
 	}
 	ctx, cancel := context.WithCancel(r.parentCtx)
 	task := &scheduledMonitor{
-		id:       m.ID,
-		name:     m.Name,
-		interval: interval,
-		jitter:   jitter,
-		cancel:   cancel,
+		completed: make(chan monitorProbeOutcome, 1),
+		id:        m.ID,
+		name:      m.Name,
+		interval:  interval,
+		jitter:    jitter,
+		cancel:    cancel,
 	}
 	r.tasks[m.ID] = task
 	r.wg.Add(1)
@@ -241,7 +249,9 @@ func (r *ChannelMonitorRunner) runScheduled(ctx context.Context, task *scheduled
 
 	r.fire(ctx, task)
 
-	timer := time.NewTimer(task.nextDelay())
+	initialDelay := task.nextDelay()
+	nextAt := time.Now().Add(initialDelay)
+	timer := time.NewTimer(initialDelay)
 	defer timer.Stop()
 	for {
 		select {
@@ -249,7 +259,23 @@ func (r *ChannelMonitorRunner) runScheduled(ctx context.Context, task *scheduled
 			return
 		case <-timer.C:
 			r.fire(ctx, task)
-			timer.Reset(task.nextDelay())
+			delay := task.nextDelay()
+			nextAt = time.Now().Add(delay)
+			timer.Reset(delay)
+		case outcome := <-task.completed:
+			if !outcome.observed {
+				continue
+			}
+			if delay, expedite := task.recoveryDelay(outcome.failed); expedite && time.Now().Add(delay).Before(nextAt) {
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				nextAt = time.Now().Add(delay)
+				timer.Reset(delay)
+			}
 		}
 	}
 }
@@ -269,7 +295,11 @@ func (r *ChannelMonitorRunner) fire(ctx context.Context, task *scheduledMonitor)
 		return
 	}
 	if _, ok := r.pool.TrySubmit(func() {
-		r.runOne(task.id, task.name)
+		outcome := r.runOne(task.id, task.name)
+		select {
+		case task.completed <- outcome:
+		default:
+		}
 	}); !ok {
 		// 池满：丢弃本次检测，但必须释放已占用的 inFlight 槽，否则该 monitor 会被永久卡住。
 		r.releaseInFlight(task.id)
@@ -299,7 +329,7 @@ func (r *ChannelMonitorRunner) releaseInFlight(id int64) {
 
 // runOne 执行单个监控的检测。普通错误只记日志；API key 解密失败会撤销任务。
 // 任务结束时（含 panic recover）必须释放 in-flight 槽。
-func (r *ChannelMonitorRunner) runOne(id int64, name string) {
+func (r *ChannelMonitorRunner) runOne(id int64, name string) (outcome monitorProbeOutcome) {
 	ctx, cancel := context.WithTimeout(context.Background(), monitorRequestTimeout+monitorPingTimeout+monitorRunOneBuffer)
 	defer cancel()
 
@@ -312,11 +342,44 @@ func (r *ChannelMonitorRunner) runOne(id int64, name string) {
 		}
 	}()
 
-	if _, err := r.svc.RunCheck(ctx, id); err != nil {
+	results, err := r.svc.RunCheck(ctx, id)
+	if err != nil {
 		if errors.Is(err, ErrChannelMonitorAPIKeyDecryptFailed) {
 			r.Unschedule(id)
 		}
 		slog.Warn("channel_monitor: run check failed",
 			"monitor_id", id, "name", name, "error", err)
+		return monitorProbeOutcome{}
 	}
+	for _, result := range results {
+		if result == nil {
+			continue
+		}
+		switch result.Status {
+		case MonitorStatusFailed, MonitorStatusError:
+			outcome.observed = true
+			outcome.failed = true
+		case MonitorStatusOperational, MonitorStatusDegraded:
+			outcome.observed = true
+		}
+	}
+	return outcome
+}
+
+// One extra independently recorded probe per failure streak, never a hidden
+// retry of an in-flight request. Persistent outages retain the configured rate.
+// Successful-but-slow probes do not trigger extra paid traffic.
+func (t *scheduledMonitor) recoveryDelay(failed bool) (time.Duration, bool) {
+	if !failed {
+		t.recoveryCheckUsed = false
+		return 0, false
+	}
+	if t.recoveryCheckUsed {
+		return 0, false
+	}
+	t.recoveryCheckUsed = true
+	if t.interval-t.jitter <= time.Minute {
+		return 0, false
+	}
+	return time.Minute, true
 }
