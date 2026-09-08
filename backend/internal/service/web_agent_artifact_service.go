@@ -18,24 +18,30 @@ var ErrWebAgentArtifactNotFound = infraerrors.NotFound("WEB_AGENT_ARTIFACT_NOT_F
 var ErrWebAgentStorageLimit = infraerrors.BadRequest("WEB_AGENT_STORAGE_LIMIT", "artifact storage limit reached")
 
 type WebAgentArtifact struct {
-	ID           int64           `json:"id"`
-	TaskID       int64           `json:"task_id"`
-	UserID       int64           `json:"-"`
-	SessionID    int64           `json:"session_id"`
-	LineageID    string          `json:"lineage_id"`
-	Version      int             `json:"version"`
-	ParentID     *int64          `json:"parent_id,omitempty"`
-	Kind         string          `json:"kind"`
-	Title        string          `json:"title"`
-	Filename     string          `json:"filename"`
-	MIME         string          `json:"mime"`
-	BlobKey      string          `json:"-"`
-	PreviewKey   string          `json:"-"`
-	SizeBytes    int64           `json:"size_bytes"`
-	PreviewBytes int64           `json:"-"`
-	SHA256       string          `json:"sha256"`
-	Spec         json.RawMessage `json:"-"`
-	CreatedAt    time.Time       `json:"created_at"`
+	Generation   *WebAgentGeneration `json:"-"`
+	ID           int64               `json:"id"`
+	TaskID       int64               `json:"task_id"`
+	UserID       int64               `json:"-"`
+	SessionID    int64               `json:"session_id"`
+	LineageID    string              `json:"lineage_id"`
+	Version      int                 `json:"version"`
+	ParentID     *int64              `json:"parent_id,omitempty"`
+	Kind         string              `json:"kind"`
+	Title        string              `json:"title"`
+	Filename     string              `json:"filename"`
+	MIME         string              `json:"mime"`
+	BlobKey      string              `json:"-"`
+	PreviewKey   string              `json:"-"`
+	SizeBytes    int64               `json:"size_bytes"`
+	PreviewBytes int64               `json:"-"`
+	SHA256       string              `json:"sha256"`
+	Spec         json.RawMessage     `json:"-"`
+	CreatedAt    time.Time           `json:"created_at"`
+}
+
+type WebAgentGeneration struct {
+	RequestID string        `json:"request_id,omitempty"`
+	Usage     *WebChatUsage `json:"usage,omitempty"`
 }
 type WebAgentArtifactRepository interface {
 	// Publish atomically saves the artifact version and completes its live task.

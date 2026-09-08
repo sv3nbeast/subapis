@@ -45,19 +45,38 @@ func agentTestChat() *WebChatService {
 	return NewWebChatService(agentChatStub{}, nil, agentKeyStub{}, agentCatalogStub{}, agentRuntimeStub{})
 }
 
-type agentExecutorFunc func(context.Context, *WebAgentTask, func(string, string) error) (json.RawMessage, error)
+type agentExecutorFunc func(context.Context, *WebAgentTask, func(string, string) error) (*WebAgentArtifact, error)
 
-func (f agentExecutorFunc) Execute(ctx context.Context, t *WebAgentTask, p func(string, string) error) (json.RawMessage, error) {
+func (f agentExecutorFunc) Execute(ctx context.Context, t *WebAgentTask, p func(string, string) error) (*WebAgentArtifact, error) {
 	return f(ctx, t, p)
+}
+func (f agentExecutorFunc) Discard(context.Context, *WebAgentArtifact) error { return nil }
+
+func agentTestArtifact() *WebAgentArtifact {
+	return &WebAgentArtifact{Kind: "document", Title: "test", Filename: "test.docx", MIME: webAgentArtifactTypes["document"].mime,
+		BlobKey: "ffffffff-ffff-ffff-ffff-ffffffffffff.docx", PreviewKey: "ffffffff-ffff-ffff-ffff-ffffffffffff.pdf",
+		SizeBytes: 10, PreviewBytes: 10, SHA256: strings.Repeat("a", 64), Spec: json.RawMessage(`{"kind":"document","title":"test"}`)}
 }
 
 type agentTaskStub struct {
 	WebAgentRepository
+	WebAgentArtifactRepository
 	mu       sync.Mutex
 	task     *WebAgentTask
 	finished string
 	claimed  bool
 	events   []string
+}
+
+func (r *agentTaskStub) PublishArtifact(_ context.Context, _ *WebAgentTask, a *WebAgentArtifact) (*WebAgentArtifact, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.task.Status == WebAgentCancelRequested {
+		r.finished = WebAgentCancelled
+		return nil, nil
+	}
+	r.finished = WebAgentSucceeded
+	return a, nil
 }
 
 func (r *agentTaskStub) CreateTask(_ context.Context, t *WebAgentTask) (*WebAgentTask, error) {
@@ -131,8 +150,8 @@ func TestWebAgentCreateFailsClosedAndFreezesContext(t *testing.T) {
 	req := WebAgentCreateRequest{Kind: "document", Prompt: "Write a report", IdempotencyKey: "request-123"}
 	_, err := svc.Create(context.Background(), 1, 2, req)
 	require.ErrorIs(t, err, ErrWebAgentUnavailable)
-	svc.executor = agentExecutorFunc(func(context.Context, *WebAgentTask, func(string, string) error) (json.RawMessage, error) {
-		return json.RawMessage(`{}`), nil
+	svc.executor = agentExecutorFunc(func(context.Context, *WebAgentTask, func(string, string) error) (*WebAgentArtifact, error) {
+		return agentTestArtifact(), nil
 	})
 	_, err = svc.Create(context.Background(), 1, 2, req)
 	require.ErrorIs(t, err, ErrWebAgentUnavailable, "configured but stopped workers must not accept jobs")
@@ -150,13 +169,13 @@ func TestWebAgentCreateFailsClosedAndFreezesContext(t *testing.T) {
 }
 func TestWebAgentWorkerHasOneTerminalAndNoReplay(t *testing.T) {
 	group := int64(7)
-	repo := &agentTaskStub{task: &WebAgentTask{ID: 11, UserID: 1, SessionID: 2, GroupID: &group, Model: "test-model", DeadlineAt: time.Now().Add(time.Minute)}}
+	repo := &agentTaskStub{task: &WebAgentTask{ID: 11, UserID: 1, SessionID: 2, GroupID: &group, Model: "test-model", Kind: "document", DeadlineAt: time.Now().Add(time.Minute)}}
 	calls := 0
-	svc := NewWebAgentService(repo, agentTestChat(), agentExecutorFunc(func(ctx context.Context, _ *WebAgentTask, p func(string, string) error) (json.RawMessage, error) {
+	svc := NewWebAgentService(repo, agentTestChat(), agentExecutorFunc(func(ctx context.Context, _ *WebAgentTask, p func(string, string) error) (*WebAgentArtifact, error) {
 		calls++
 		require.NoError(t, p("started", "render"))
 		require.NoError(t, p("completed", "render"))
-		return json.RawMessage(`{"artifact_id":1}`), nil
+		return agentTestArtifact(), nil
 	}))
 	did, err := svc.RunOnce(context.Background())
 	require.True(t, did)
@@ -170,10 +189,10 @@ func TestWebAgentWorkerHasOneTerminalAndNoReplay(t *testing.T) {
 }
 func TestWebAgentWorkerCancelsWhenLeaseRevoked(t *testing.T) {
 	group := int64(7)
-	repo := &agentTaskStub{task: &WebAgentTask{ID: 11, UserID: 1, SessionID: 2, GroupID: &group, Model: "test-model", DeadlineAt: time.Now().Add(time.Minute)}}
+	repo := &agentTaskStub{task: &WebAgentTask{ID: 11, UserID: 1, SessionID: 2, GroupID: &group, Model: "test-model", Kind: "document", DeadlineAt: time.Now().Add(time.Minute)}}
 	entered := make(chan struct{})
 	done := make(chan error, 1)
-	svc := NewWebAgentService(repo, agentTestChat(), agentExecutorFunc(func(ctx context.Context, _ *WebAgentTask, _ func(string, string) error) (json.RawMessage, error) {
+	svc := NewWebAgentService(repo, agentTestChat(), agentExecutorFunc(func(ctx context.Context, _ *WebAgentTask, _ func(string, string) error) (*WebAgentArtifact, error) {
 		close(entered)
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -195,18 +214,18 @@ func TestWebAgentWorkerCancelsWhenLeaseRevoked(t *testing.T) {
 func TestWebAgentExecutorRejectsFakeOrIncompleteProgress(t *testing.T) {
 	repo := &agentTaskStub{}
 	for _, f := range []agentExecutorFunc{
-		func(context.Context, *WebAgentTask, func(string, string) error) (json.RawMessage, error) {
+		func(context.Context, *WebAgentTask, func(string, string) error) (*WebAgentArtifact, error) {
 			return nil, nil
 		},
-		func(_ context.Context, _ *WebAgentTask, p func(string, string) error) (json.RawMessage, error) {
+		func(_ context.Context, _ *WebAgentTask, p func(string, string) error) (*WebAgentArtifact, error) {
 			_ = p("completed", "never started")
-			return json.RawMessage(`{}`), nil
+			return agentTestArtifact(), nil
 		},
-		func(_ context.Context, _ *WebAgentTask, p func(string, string) error) (json.RawMessage, error) {
+		func(_ context.Context, _ *WebAgentTask, p func(string, string) error) (*WebAgentArtifact, error) {
 			_ = p("started", "unfinished")
-			return json.RawMessage(`{}`), nil
+			return agentTestArtifact(), nil
 		},
-		func(context.Context, *WebAgentTask, func(string, string) error) (json.RawMessage, error) {
+		func(context.Context, *WebAgentTask, func(string, string) error) (*WebAgentArtifact, error) {
 			panic("boom")
 		},
 	} {
@@ -218,9 +237,9 @@ func TestWebAgentExecutorRejectsFakeOrIncompleteProgress(t *testing.T) {
 
 func TestWebAgentStartedWorkerStopsWithoutReplaying(t *testing.T) {
 	group := int64(7)
-	repo := &agentTaskStub{task: &WebAgentTask{ID: 11, UserID: 1, SessionID: 2, GroupID: &group, Model: "test-model", DeadlineAt: time.Now().Add(time.Minute)}}
+	repo := &agentTaskStub{task: &WebAgentTask{ID: 11, UserID: 1, SessionID: 2, GroupID: &group, Model: "test-model", Kind: "document", DeadlineAt: time.Now().Add(time.Minute)}}
 	entered := make(chan struct{})
-	svc := NewWebAgentService(repo, agentTestChat(), agentExecutorFunc(func(ctx context.Context, _ *WebAgentTask, _ func(string, string) error) (json.RawMessage, error) {
+	svc := NewWebAgentService(repo, agentTestChat(), agentExecutorFunc(func(ctx context.Context, _ *WebAgentTask, _ func(string, string) error) (*WebAgentArtifact, error) {
 		close(entered)
 		<-ctx.Done()
 		return nil, ctx.Err()

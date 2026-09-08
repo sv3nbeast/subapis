@@ -86,3 +86,26 @@ Render every preview page to PNG and inspect it; file existence alone is not a
 visual acceptance test. Feed the same synthetic sample directory to the Go
 service tests with `WEB_AGENT_OFFICE_TEST_OUTPUT` to verify renderer-to-gateway
 compatibility. Never use production user documents as committed fixtures.
+
+For the complete Go task/planner/renderer/storage/version integration, run
+`bash scripts/test-web-agent-office.sh` from the repository root with
+`WEB_AGENT_TEST_DSN` pointing at a **disposable loopback PostgreSQL database**.
+The Go tests use unique temporary schemas and synthetic users; never point this
+at a production database or a tunnel to one. The script builds a test image,
+creates a dedicated random worker credential, publishes a random loopback-only
+port for host-side Go tests, and removes its test container on exit. Production's
+internal-only network topology is not changed. No external model is called.
+
+The integration covers all three Office kinds and one metadata-title revision
+each: persistent task creation, one synthetic model HTTP request per action,
+real rendering, native file/PDF download, unchanged old versions and owner
+isolation. This is not evidence of real-provider quality, production billing,
+browser UI acceptance or artifact retention/reconciliation.
+
+The Go planner has a one-generation-per-task policy (no automatic repair call),
+a 384 KiB serialized input ceiling, a four-minute model request deadline and the
+session's selected output-token limit (at most 32768). Overall task deadline is
+ten minutes. Normal completion is required before a complete JSON specification
+is accepted. A truncated, refused, malformed or unrequested tool response cannot
+publish a file. Missing upstream usage remains unknown, not a fabricated zero.
+These limits must be shown by the task UI when execution is enabled.

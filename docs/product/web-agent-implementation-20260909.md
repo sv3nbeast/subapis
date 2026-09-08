@@ -240,3 +240,99 @@ Required next steps (goal remains active):
 5. Bind actual task progress, cancel/reconnect, files/preview/versions and source
    revisions to the MONO UI; verify browser/mobile/keyboard workflows. Current
    API tests and sample previews are not end-to-end user-workflow acceptance.
+
+## Artifact-backed model execution (fourth slice)
+
+Base: 0bc04bda2. Previous goal turn was concrete progress, not a wait/blocker.
+This slice implements the actual backend execution chain, while leaving the
+application factory disabled until its remaining lifecycle gates are complete.
+
+Implemented:
+
+- Replaced generic executor JSON success with a typed artifact contract. A
+  successful task must atomically publish a validated artifact/version and its
+  terminal event; arbitrary `{}` or a claimed artifact ID is no longer success.
+- Model planner revalidates current session/group/model access and selected
+  document readiness/ownership/scope, uses the enqueue-time conversation
+  snapshot and an explicitly owned source version, and refuses missing sources.
+- Reuses the existing per-user/per-group managed Web Chat key. It verifies the
+  returned key identity before a request. No admin/provider key reaches the model
+  tool or browser. Existing gateway auth/subscription/billing middleware remains
+  on the actual application's `/v1/messages` or `/v1/chat/completions` path.
+- A loopback-only model caller sends a non-streaming request for one complete
+  structured artifact, without changing existing chat stream adapters. One model
+  request per task; no hidden schema-repair, retry, account or protocol replay.
+- Preserves selected model/output limit, stable system/schema prefix, historical
+  message ordering and Anthropic user-block `5m` cache controls. Limits: 384 KiB
+  serialized input, 32768 maximum selected output tokens, four-minute model
+  deadline, 4 MiB response and bounded headers, within the ten-minute task limit.
+- Requires normal terminal reasons, rejects incomplete/refused/tool responses,
+  excludes thinking from file content and accepts only complete JSON (or one
+  exact JSON fence). The renderer independently validates the data-only schema.
+- Real execution phases cover generation, rendering/preview and private storage.
+  Partial storage failure cleans up its own files, including panic/cancellation
+  paths. Known pre-commit publication rejection fails explicitly and cleans up;
+  an uncertain commit preserves files and never repeats model generation.
+- Persists stable non-sensitive failure codes and generation request ID/usage
+  when available, including rendering failures after a paid model generation.
+  It never publishes a partial artifact in a failure result. Missing usage is
+  absent/unknown, not invented zero consumption.
+
+Verification:
+
+- New planner/client/executor tests pass under `-race`: both protocol builders,
+  normal terminal text, reasoning separation, EOF/truncation/invalid responses,
+  cancellation, redirect-secret protection, one-call behavior, context/input
+  bounds, stable prefix, frozen revision data, wrong identity/source/document
+  access, partial-file cleanup and uncertain commit/cancel publication races.
+- Full service/repository/handler/routes/migration packages pass on the final
+  code (service 175.436s, handler 34.410s); focused race tests also pass, including
+  real transfer EOF and internal timeout distinct from caller cancellation.
+  The first internal-timeout test fixture blocked in httptest.Server.Close:
+  a stack dump showed its handler waiting without consuming the request body.
+  Fixed the fixture by draining the body and bounding teardown; retained the
+  cancellation/timeout assertions. No production timeout was relaxed to pass it.
+  `go build ./...` and `git diff --check` also pass. No frontend code changed in
+  this slice.
+- `scripts/test-web-agent-office.sh` is a reproducible local integration harness.
+  It builds a private Office test image, supplies only a fresh renderer token,
+  publishes a random loopback test port and removes its test container on exit.
+- Full real pipeline test passes under `-race` for document, slides and spreadsheet:
+  six durable tasks (create + metadata-title revision for each kind), six model
+  HTTP requests, actual Office/PDF rendering, actual private file reads, distinct
+  revision hashes, retained original versions and cross-user download denial.
+  All task/artifact PostgreSQL integration tests pass in the same harness (14.880s).
+- The model HTTP endpoint is explicitly synthetic. These tests prove backend
+  orchestration/identity propagation, not real-provider quality or production
+  billing. The existing full gateway ingress/usage ledger must be canaried later.
+- The first host-to-worker test failed before model generation because the
+  internal Docker test topology did not expose the renderer to host Go tests.
+  A loopback-published bridge test succeeded. Production's private internal
+  network example was not changed. No production server or external model used.
+
+Review gate:
+
+Verdict: BLOCKED for enabling/releasing the full Agent; artifact-backed execution
+code is safe to checkpoint behind the existing disabled application wiring.
+Reviewed range: 0bc04bda2 plus this slice's task-owned service/repository/tests.
+Affected matrix: new non-streaming OpenAI Chat and Anthropic Messages task caller;
+existing provider dispatch/auth/cache/billing/streaming implementations unchanged.
+Four invariants: terminal/lease/cancel/no-replay boundaries have direct tests;
+cache prefix/TTL stability has request-builder evidence, but live cache hit and
+creation accounting are not yet canaried; ordinary chat TTFT path is unchanged,
+new task I/O has explicit bounds, but no live-provider latency verdict is claimed.
+
+Remaining release/goal gates (do not mark the goal complete):
+
+1. Startup/shutdown and readiness wiring. Default `NewWebChatService` still uses
+   nil executor/store; `tasks_enabled=false`. A real worker must not claim old
+   queued tasks before the local gateway has started accepting connections.
+2. Durable staged blob ownership, quota admission and reconciliation/retention,
+   including user/session deletion. Coordinate publication and garbage collection
+   so a lost commit acknowledgement can never cause a referenced file deletion.
+3. Bind the MONO task controls, progress/error codes/budgets, artifact preview,
+   downloads, version selection and edits; verify desktop/mobile/keyboard flows.
+4. Full local gateway/auth/billing canary with a controlled upstream fixture, then
+   separately authorized live-provider validation. No production/domain action.
+5. Continue the remaining planned workspace/assistant/source relevance and
+   product lifecycle requirements from the goal; this is not a reduced objective.

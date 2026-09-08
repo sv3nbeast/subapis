@@ -16,12 +16,16 @@ import (
 // Executors are trusted, allowlisted runtime adapters, not arbitrary user code.
 // They must honor cancellation and report actual execution, never guessed progress.
 type WebAgentExecutor interface {
-	Execute(context.Context, *WebAgentTask, func(string, string) error) (json.RawMessage, error)
+	Execute(context.Context, *WebAgentTask, func(string, string) error) (*WebAgentArtifact, error)
+	// Discard is called only when publication was not attempted or cancellation
+	// definitely won. An uncertain database commit must never delete its files.
+	Discard(context.Context, *WebAgentArtifact) error
 }
 type WebAgentService struct {
 	repo      WebAgentRepository
 	chat      *WebChatService
 	executor  WebAgentExecutor
+	publisher WebAgentArtifactRepository
 	leaseTTL  time.Duration
 	heartbeat time.Duration
 	now       func() time.Time
@@ -32,7 +36,8 @@ type WebAgentService struct {
 }
 
 func NewWebAgentService(repo WebAgentRepository, chat *WebChatService, executor WebAgentExecutor) *WebAgentService {
-	return &WebAgentService{repo: repo, chat: chat, executor: executor, leaseTTL: 30 * time.Second, heartbeat: 5 * time.Second, now: time.Now}
+	publisher, _ := repo.(WebAgentArtifactRepository)
+	return &WebAgentService{repo: repo, chat: chat, executor: executor, publisher: publisher, leaseTTL: 30 * time.Second, heartbeat: 5 * time.Second, now: time.Now}
 }
 func (s *WebAgentService) Ready(ctx context.Context) bool {
 	return s.configured(ctx) && s.running.Load()
@@ -40,7 +45,7 @@ func (s *WebAgentService) Ready(ctx context.Context) bool {
 func (s *WebAgentService) configured(ctx context.Context) bool {
 	return s != nil && s.repo != nil && s.chat != nil && s.chat.repo != nil &&
 		s.chat.apiKeyService != nil && s.chat.channelService != nil &&
-		s.executor != nil && s.chat.FeatureEnabled(ctx)
+		s.executor != nil && s.publisher != nil && s.chat.FeatureEnabled(ctx)
 }
 func (s *WebAgentService) readable(ctx context.Context) error {
 	if s == nil || s.repo == nil || s.chat == nil {
@@ -240,7 +245,7 @@ func (s *WebAgentService) RunOnce(ctx context.Context) (bool, error) {
 			}
 		}
 	}()
-	var result json.RawMessage
+	var artifact *WebAgentArtifact
 	if task.GroupID == nil {
 		err = ErrWebChatInvalidGroup
 	} else if _, e := s.chat.GetSession(runCtx, task.UserID, task.SessionID); e != nil {
@@ -248,16 +253,15 @@ func (s *WebAgentService) RunOnce(ctx context.Context) (bool, error) {
 	} else if _, _, e := s.chat.validateGroupModel(runCtx, task.UserID, *task.GroupID, task.Model); e != nil {
 		err = e
 	} else {
-		result, err = s.execute(runCtx, task)
+		artifact, err = s.execute(runCtx, task)
 	}
 	contextErr := runCtx.Err()
 	cancel()
 	<-heartbeatDone
 	status, errorCode := WebAgentSucceeded, ""
 	if err != nil {
-		result = nil // Never publish an invalid or partially produced executor result.
 		status = WebAgentFailed
-		errorCode = "execution_failed"
+		errorCode = webAgentFailureCode(err)
 		if errors.Is(contextErr, context.DeadlineExceeded) {
 			errorCode = "execution_deadline"
 		} else if errors.Is(contextErr, context.Canceled) {
@@ -268,9 +272,30 @@ func (s *WebAgentService) RunOnce(ctx context.Context) (bool, error) {
 	// Final state must survive browser/process cancellation and is lease-fenced.
 	finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer finishCancel()
-	return true, s.repo.FinishTask(finishCtx, task.ID, task.LeaseToken, status, result, errorCode)
+	if err == nil {
+		published, publishErr := s.publisher.PublishArtifact(finishCtx, task, artifact)
+		if publishErr != nil {
+			if errors.Is(publishErr, ErrWebAgentStorageLimit) || errors.Is(publishErr, ErrWebAgentArtifactNotFound) || errors.Is(publishErr, ErrWebAgentInvalid) {
+				// These validation errors are returned before COMMIT, unlike a
+				// transport/timeout error whose outcome may be indeterminate.
+				_ = s.executor.Discard(finishCtx, artifact)
+				return true, s.repo.FinishTask(finishCtx, task.ID, task.LeaseToken, WebAgentFailed, webAgentGenerationResult(artifact), webAgentFailureCode(publishErr))
+			}
+			// May be a committed transaction whose acknowledgement was lost.
+			// Leave files for reconciliation and never replay model generation.
+			return true, publishErr
+		}
+		if published == nil {
+			return true, s.executor.Discard(finishCtx, artifact)
+		}
+		return true, nil
+	}
+	if discardErr := s.executor.Discard(finishCtx, artifact); discardErr != nil {
+		slog.Warn("web_agent.discard_pending", "task_id", task.ID)
+	}
+	return true, s.repo.FinishTask(finishCtx, task.ID, task.LeaseToken, status, webAgentGenerationResult(artifact), errorCode)
 }
-func (s *WebAgentService) execute(ctx context.Context, task *WebAgentTask) (result json.RawMessage, err error) {
+func (s *WebAgentService) execute(ctx context.Context, task *WebAgentTask) (result *WebAgentArtifact, err error) {
 	defer func() {
 		if recover() != nil {
 			err = errors.New("executor panic")
@@ -318,8 +343,19 @@ func (s *WebAgentService) execute(ctx context.Context, task *WebAgentTask) (resu
 	if err == nil && ctx.Err() != nil {
 		err = ctx.Err()
 	}
-	if err == nil && (!json.Valid(result) || string(result) == "null" || len(result) > 512*1024) {
-		err = ErrWebAgentInvalid
+	if err == nil {
+		err = result.Validate()
+		if err == nil && result.Kind != task.Kind {
+			err = ErrWebAgentInvalid
+		}
 	}
 	return result, err
+}
+
+func webAgentGenerationResult(artifact *WebAgentArtifact) json.RawMessage {
+	if artifact == nil || artifact.Generation == nil {
+		return nil
+	}
+	data, _ := json.Marshal(map[string]any{"generation": artifact.Generation})
+	return data
 }

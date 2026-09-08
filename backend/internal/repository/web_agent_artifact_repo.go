@@ -93,7 +93,7 @@ func (r *webChatRepository) PublishArtifact(ctx context.Context, task *service.W
 	if err != nil {
 		return nil, err
 	}
-	result, _ := json.Marshal(map[string]any{"artifact_id": artifact.ID, "kind": artifact.Kind, "title": artifact.Title, "version": artifact.Version})
+	result, _ := json.Marshal(map[string]any{"artifact_id": artifact.ID, "kind": artifact.Kind, "title": artifact.Title, "version": artifact.Version, "generation": input.Generation})
 	if _, err = tx.ExecContext(ctx, `UPDATE web_agent_tasks SET status='succeeded',result=$2::jsonb,error_code='',lease_token=NULL,lease_expires_at=NULL,finished_at=now(),updated_at=now() WHERE id=$1`, task.ID, string(result)); err != nil {
 		return nil, err
 	}
