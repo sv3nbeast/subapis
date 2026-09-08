@@ -51,7 +51,7 @@ These are development resources created for this goal, NOT production.
 
 - Frontend: http://127.0.0.1:3000/workspace
   retained terminal session 86845 (VITE_DEV_PROXY_TARGET=http://127.0.0.1:58080).
-- Backend: http://127.0.0.1:58080, go run ./cmd/server, session 82294.
+- Backend: http://127.0.0.1:58080, go run ./cmd/server, latest retained session 89556.
 - Loopback fixture provider: http://127.0.0.1:58081, session 22284.
   Its responses explicitly say they are local protocol tests; it never calls an
   external model and never executes returned tools.
@@ -93,5 +93,60 @@ Prefer structured allowlisted rendering tools before arbitrary model-authored
 code. Existing project/document APIs are reusable, but do not pretend a prompt
 template is an executing Agent.
 
-Next concrete step: implement and test the owned persistent task/artifact
-repository and service boundary, then wire a constrained artifact worker.
+## Durable task foundation (second slice)
+
+Implemented in migration 234 and web_agent service/repository/handler modules:
+
+- Task and event persistence, per-user idempotency keys with request-hash
+  conflicts, attachment-order preservation, session/document ownership checks.
+- Admission serialized per user, maximum three active tasks. Default task
+  deadline ten minutes and sixteen started execution steps.
+- PostgreSQL SKIP LOCKED claiming with unique per-claim lease tokens, heartbeats
+  and lease-fenced writes. Expired/uncertain executions become interrupted, never
+  implicitly requeued. Expiry sweeps are bounded to 100 rows.
+- Queued cancellation is immediate; running cancellation is cooperative and
+  wins over a later completion commit. Delete/expire invalidates publication.
+- A worker lifecycle independent of the HTTP request; browser observation abort
+  is distinct from explicit task cancellation. Runtime shutdown interrupts work.
+- Private session snapshots retain the enqueue-time context; keys/leases and
+  snapshots are excluded from public task DTOs.
+- Authenticated create/list/get/cancel/event-cursor APIs and typed frontend client.
+- Options include tasks_enabled. It remains FALSE until a real executor has
+  been configured and started. Default application wiring intentionally does not
+  enqueue jobs with no executable consumer.
+
+Validation:
+
+- Worker/admission/DTO/handler unit tests plus race detector pass.
+- Six real PostgreSQL integration tests pass in unique disposable schemas:
+  ownership/idempotency, concurrent admission, exclusive leases/terminals,
+  cancellation/expired execution, cancellation-vs-finish race, deleted-session
+  fencing and step limits.
+- Full service, repository, handler, routes and migration packages passed.
+- Three frontend task-client tests plus existing stream/workspace tests pass;
+  frontend typecheck passes.
+- Migration applied only to the isolated local dev database by normal startup.
+  HTTP smoke: options.tasks_enabled=false, list=200, unconfigured create=503,
+  zero tasks enqueued; existing local chat still receives done and saves messages.
+
+Regression review scope: workspace task foundation only. Existing model
+forwarding, conversation streaming and cache/billing implementations are unchanged.
+No user generation is replayed by this task state machine; attachment identity
+and ordering are retained. DB waits and maintenance are bounded, and there are no
+new model calls in the default-disabled runtime. No attributable P0/P1 found in
+enabled paths. This is NOT a PASS for the unfinished file executor/model loop.
+
+Known remaining integration requirements:
+
+- A real allowlisted executor/renderer, artifact metadata+blob persistence,
+  preview/download/version operations and confirmation that produced files open.
+- Revalidate file availability/ownership in the executor, budget actual model
+  calls and validate artifact-backed completion (not merely valid JSON).
+- Wire executor lifecycle into startup/shutdown and advertise capabilities only
+  after it is functional. Task UI is not yet bound to the new API.
+- Interrupt/restart recovery is safe but currently manual, not checkpoint resume.
+- No production deployment, domain configuration or live upstream replay occurred.
+
+Next concrete step: implement the constrained Office artifact schema, renderer
+worker and artifact repository, then wire model planning through the existing
+user-owned gateway identity. Keep the full goal active.

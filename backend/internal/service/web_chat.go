@@ -48,6 +48,7 @@ type WebChatGroupOption struct {
 }
 
 type WebChatOptions struct {
+	TasksEnabled     bool                  `json:"tasks_enabled"`
 	Enabled          bool                  `json:"enabled"`
 	Groups           []WebChatGroupOption  `json:"groups"`
 	DefaultGroupID   *int64                `json:"default_group_id,omitempty"`

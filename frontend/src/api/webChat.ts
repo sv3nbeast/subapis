@@ -42,6 +42,7 @@ export interface WebChatGroupOption {
 }
 
 export interface WebChatOptions {
+  tasks_enabled?: boolean
   enabled: boolean
   groups: WebChatGroupOption[]
   default_group_id?: number

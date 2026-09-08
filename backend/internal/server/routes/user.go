@@ -86,6 +86,11 @@ func RegisterUserRoutes(
 		webChat := authenticated.Group("/web-chat")
 		{
 			webChat.GET("/options", h.WebChat.Options)
+			webChat.GET("/tasks", h.WebChat.ListTasks)
+			webChat.GET("/tasks/:task_id", h.WebChat.GetTask)
+			webChat.GET("/tasks/:task_id/events", h.WebChat.TaskEvents)
+			webChat.POST("/tasks/:task_id/cancel", h.WebChat.CancelTask)
+			webChat.POST("/sessions/:id/tasks", h.WebChat.CreateTask)
 			webChat.GET("/sessions", h.WebChat.ListSessions)
 			webChat.POST("/sessions", h.WebChat.CreateSession)
 			webChat.GET("/projects", h.WebChat.ListProjects)

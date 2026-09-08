@@ -94,6 +94,7 @@ type WebChatService struct {
 	channelService webChatModelCatalog
 	settingService webChatRuntimeReader
 	documents      *WebChatDocumentService
+	agent          *WebAgentService
 }
 
 func (s *WebChatService) SetDocumentService(documents *WebChatDocumentService) {
@@ -107,13 +108,26 @@ func NewWebChatService(
 	channelService webChatModelCatalog,
 	settingService webChatRuntimeReader,
 ) *WebChatService {
-	return &WebChatService{
+	svc := &WebChatService{
 		repo:           repo,
 		webChatKeyRepo: webChatKeyRepo,
 		apiKeyService:  apiKeyService,
 		channelService: channelService,
 		settingService: settingService,
 	}
+	if taskRepo, ok := repo.(WebAgentRepository); ok {
+		// Read/history APIs are available, but task creation fails closed until a
+		// reviewed executor is attached. Do not queue jobs with no worker.
+		svc.agent = NewWebAgentService(taskRepo, svc, nil)
+	}
+	return svc
+}
+
+func (s *WebChatService) Agent() *WebAgentService {
+	if s == nil {
+		return nil
+	}
+	return s.agent
 }
 
 func (s *WebChatService) runtime(ctx context.Context) WebChatRuntime {
@@ -142,6 +156,7 @@ func (s *WebChatService) Options(ctx context.Context, userID int64) (*WebChatOpt
 	}
 	options := &WebChatOptions{
 		Enabled:          true,
+		TasksEnabled:     s.agent.Ready(ctx),
 		Groups:           groups,
 		ProjectsEnabled:  runtime.ProjectsEnabled,
 		TemplatesEnabled: runtime.TemplatesEnabled,
