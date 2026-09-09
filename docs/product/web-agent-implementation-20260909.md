@@ -626,6 +626,19 @@ Review verdict: PASS for this artifact-library slice; overall goal remains activ
 and release remains BLOCKED until browser/live-provider acceptance, history policy,
 assistant/product lifecycle completion, and final requirement audit are done.
 
+## Audit evidence: disabled-agent options
+
+Added an actual Options-entry regression test for a valid chat configuration
+without a task repository. Inspection and the test establish that the existing
+nil-receiver-safe Ready/Availability methods already return tasks_enabled=false
+and task_status=not_configured while preserving normal chat options. An initially
+proposed duplicate nil guard was removed: this was not a demonstrated bug.
+Only the regression test and audit record are needed; runtime behavior is unchanged.
+
+This evidence does not change the overall release verdict: browser visual interaction,
+live provider/cache/latency canary, assistant/team lifecycle and final full-goal
+audit remain outstanding. No production or domain operation was performed.
+
 ## Cross-conversation artifact library (eighth slice)
 
 Base: c25de7553. Previous turn was progress; this turn adds a missing product
