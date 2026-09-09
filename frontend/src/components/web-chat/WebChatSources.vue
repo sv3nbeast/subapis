@@ -7,18 +7,21 @@
     </div>
     <BaseDialog :show="Boolean(selected)" :title="selected?.document_name||''" @close="selected=null">
       <p class="source-location">{{ selected ? location(selected) : '' }}</p>
+      <p v-if="selected?.origin">{{ t(`workspace.sourceOrigin.${selected.origin}`) }}</p>
+      <p v-if="selected?.included_chars">{{ t('workspace.sourceIncluded',{count:selected.included_chars}) }} <span v-if="selected.truncated">{{ t('workspace.sourceTruncated') }}</span></p>
       <pre class="excerpt">{{ selected?.excerpt }}</pre>
     </BaseDialog>
   </details>
 </template>
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import type { WebChatSource } from '@/api/webChat'
 const props=defineProps<{ sources:WebChatSource[] }>()
 const { t }=useI18n()
 const selected=ref<WebChatSource|null>(null)
+watch(()=>props.sources,sources=>{if(selected.value){const old=selected.value;selected.value=sources.find(s=>s.document_id===old.document_id&&s.index===old.index&&s.content_sha256===old.content_sha256&&s.excerpt===old.excerpt)||null}})
 const grouped=computed(()=>{
  const groups=new Map<number,{id:number;name:string;sources:WebChatSource[]}>()
  for(const source of props.sources){

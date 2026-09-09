@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -254,7 +255,7 @@ func (r *webChatDocumentRepository) SearchDocumentChunks(ctx context.Context, us
 	if err != nil {
 		return nil, err
 	}
-	return mergeExplicitDocumentChunks(explicit, out, limit), nil
+	return mergeExplicitDocumentChunks(explicit, out, limit, ids), nil
 }
 
 func (r *webChatDocumentRepository) listExplicitDocumentChunks(ctx context.Context, userID int64, ids []int64, limit int) ([]service.WebChatDocumentChunk, error) {
@@ -271,7 +272,7 @@ func (r *webChatDocumentRepository) listExplicitDocumentChunks(ctx context.Conte
 		WHERE d.user_id=$1 AND d.deleted_at IS NULL AND d.status='ready' AND d.enabled AND d.id=ANY($2)
 	)
 	SELECT id,document_id,chunk_index,page_number,location_label,content,original_name
-	FROM ranked WHERE per_document<=$3 ORDER BY per_document,document_id,chunk_index LIMIT $3`, userID, pq.Array(ids), limit)
+	FROM ranked WHERE per_document<=$3 ORDER BY per_document,array_position($2::bigint[],document_id),chunk_index LIMIT $3`, userID, pq.Array(ids), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +288,7 @@ func (r *webChatDocumentRepository) listExplicitDocumentChunks(ctx context.Conte
 	return out, rows.Err()
 }
 
-func mergeExplicitDocumentChunks(explicit, ranked []service.WebChatDocumentChunk, limit int) []service.WebChatDocumentChunk {
+func mergeExplicitDocumentChunks(explicit, ranked []service.WebChatDocumentChunk, limit int, requested []int64) []service.WebChatDocumentChunk {
 	if limit <= 0 {
 		return nil
 	}
@@ -308,7 +309,17 @@ func mergeExplicitDocumentChunks(explicit, ranked []service.WebChatDocumentChunk
 
 	// Keep one leading chunk per attachment so headers and sheet metadata are
 	// available even when the query only asks for document structure.
-	for _, chunk := range explicit {
+	ordered := make([]service.WebChatDocumentChunk, 0, len(explicit))
+	for _, id := range requested {
+		for _, chunk := range explicit {
+			if chunk.DocumentID == id {
+				ordered = append(ordered, chunk)
+				break
+			}
+		}
+	}
+	ordered = append(ordered, explicit...)
+	for _, chunk := range ordered {
 		if _, ok := seenDocuments[chunk.DocumentID]; ok {
 			continue
 		}
@@ -362,21 +373,77 @@ func webChatDocumentSearchQuery(hasTrigram bool) string {
 }
 
 func (r *webChatDocumentRepository) LinkMessageDocuments(ctx context.Context, userID, messageID int64, ids []int64) error {
+	// No explicit attachments means no link rows. Retrieval snapshots are never
+	// used as explicit intent, so ordinary text turns need no additional write.
 	if len(ids) == 0 {
 		return nil
 	}
-	res, err := r.db.ExecContext(ctx, `INSERT INTO web_chat_message_documents(message_id,document_id) SELECT $1,d.id FROM web_chat_documents d JOIN web_chat_messages m ON m.id=$1 AND m.user_id=$2 WHERE d.id=ANY($3) AND d.user_id=$2 AND d.session_id=m.session_id AND d.deleted_at IS NULL AND d.status='ready' ON CONFLICT DO NOTHING`, messageID, userID, pq.Array(ids))
+	if len(ids) > 20 {
+		return service.ErrWebChatDocumentQuota
+	}
+	seen := map[int64]bool{}
+	ordered := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return service.ErrWebChatDocumentNotFound
+		}
+		if !seen[id] {
+			seen[id] = true
+			ordered = append(ordered, id)
+		}
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
-	if n != int64(len(ids)) {
-		return service.ErrWebChatDocumentNotReady
+	defer tx.Rollback()
+	var sessionID int64
+	var original []byte
+	err = tx.QueryRowContext(ctx, `SELECT m.session_id,m.explicit_document_ids FROM web_chat_messages m JOIN web_chat_sessions s ON s.id=m.session_id AND s.user_id=$2 AND s.deleted_at IS NULL
+ WHERE m.id=$1 AND m.user_id=$2 AND m.role='user' AND m.deleted_at IS NULL FOR UPDATE OF m`, messageID, userID).Scan(&sessionID, &original)
+	if errors.Is(err, sql.ErrNoRows) {
+		return service.ErrWebChatMessageNotFound
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	if original != nil {
+		var saved []int64
+		if json.Unmarshal(original, &saved) != nil || !slices.Equal(saved, ordered) {
+			return service.ErrWebChatDocumentNotReady
+		}
+	}
+	if len(ordered) > 0 {
+		var count int
+		err = tx.QueryRowContext(ctx, `SELECT count(*) FROM web_chat_documents d JOIN web_chat_sessions s ON s.id=$2 WHERE d.id=ANY($3::bigint[]) AND d.user_id=$1
+ AND d.deleted_at IS NULL AND d.enabled AND d.status='ready' AND (d.session_id=s.id OR (d.project_id=s.project_id AND EXISTS(SELECT 1 FROM web_chat_projects p WHERE p.id=d.project_id AND p.user_id=$1 AND p.deleted_at IS NULL)))`, userID, sessionID, pq.Array(ordered)).Scan(&count)
+		if err != nil {
+			return err
+		}
+		if count != len(ordered) {
+			return service.ErrWebChatDocumentNotReady
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO web_chat_message_documents(message_id,document_id) SELECT $1,unnest($2::bigint[]) ON CONFLICT DO NOTHING`, messageID, pq.Array(ordered))
+		if err != nil {
+			return err
+		}
+	}
+	raw, _ := json.Marshal(ordered)
+	if _, err = tx.ExecContext(ctx, `UPDATE web_chat_messages SET explicit_document_ids=$2::jsonb WHERE id=$1`, messageID, string(raw)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 func (r *webChatDocumentRepository) MessageDocumentIDs(ctx context.Context, userID, messageID int64) ([]int64, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT DISTINCT document_id FROM (SELECT md.document_id FROM web_chat_message_documents md JOIN web_chat_messages m ON m.id=md.message_id WHERE m.id=$1 AND m.user_id=$2 UNION ALL SELECT (source->>'document_id')::bigint FROM web_chat_messages m CROSS JOIN LATERAL jsonb_array_elements(m.sources) source WHERE m.id=$1 AND m.user_id=$2 AND source ? 'document_id') ids`, messageID, userID)
+	rows, err := r.db.QueryContext(ctx, `WITH origin AS (
+ SELECT u.id,u.explicit_document_ids FROM web_chat_messages m JOIN web_chat_sessions s ON s.id=m.session_id AND s.user_id=$2 AND s.deleted_at IS NULL
+ JOIN web_chat_messages u ON u.id=CASE WHEN m.role='assistant' THEN m.parent_message_id ELSE m.id END AND u.user_id=$2 AND u.session_id=m.session_id AND u.role='user' AND u.deleted_at IS NULL
+ WHERE m.id=$1 AND m.user_id=$2 AND m.deleted_at IS NULL
+ ), chosen AS (
+ SELECT value::bigint AS document_id,ordinality AS position FROM origin CROSS JOIN LATERAL jsonb_array_elements_text(origin.explicit_document_ids) WITH ORDINALITY
+ UNION ALL
+ SELECT md.document_id,row_number() OVER(ORDER BY md.created_at,md.document_id) FROM origin JOIN web_chat_message_documents md ON md.message_id=origin.id WHERE origin.explicit_document_ids IS NULL
+ ) SELECT document_id FROM chosen ORDER BY position`, messageID, userID)
 	if err != nil {
 		return nil, err
 	}

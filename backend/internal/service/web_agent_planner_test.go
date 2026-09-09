@@ -167,3 +167,31 @@ func TestWebAgentPlannerRevalidatesAttachmentReadinessAndScope(t *testing.T) {
 		})
 	}
 }
+
+type agentSourceSnapshotRepo struct{ agentPlannerDocs }
+
+func (r *agentSourceSnapshotRepo) SearchDocumentChunks(context.Context, int64, int64, []int64, string, int) ([]WebChatDocumentChunk, error) {
+	return []WebChatDocumentChunk{{ID: 1, DocumentID: 10, DocumentName: "selected.txt", Content: "selected source evidence"}}, nil
+}
+func TestWebAgentPlannerSnapshotsPreparedSourceEvidence(t *testing.T) {
+	sessionID := int64(2)
+	docs := &agentSourceSnapshotRepo{agentPlannerDocs: agentPlannerDocs{doc: &WebChatDocument{ID: 10, UserID: 1, SessionID: &sessionID, Enabled: true, Status: WebChatDocumentStatusReady}}}
+	settings := newWebChatDocumentSettingsTestDouble()
+	settings.values[SettingKeyWebChatFilesEnabled] = "true"
+	chat := NewWebChatService(agentChatStub{}, agentPlannerKeyRepo{}, &agentPlannerKeys{}, agentCatalogStub{}, agentRuntimeStub{})
+	chat.SetDocumentService(NewWebChatDocumentService(docs, settings, nil, nil))
+	planner := NewWebAgentModelPlanner(chat, agentCallerFunc(func(_ context.Context, _ *WebChatSession, _ *APIKey, messages []OpenAIChatMessage) (*WebAgentModelOutput, error) {
+		require.Contains(t, messages[len(messages)-1].Content, "selected source evidence")
+		return &WebAgentModelOutput{Content: `{"kind":"document","title":"report"}`, Generation: &WebAgentGeneration{RequestID: "source-aware-request"}}, nil
+	}))
+	task := agentPlannerTask(t)
+	task.DocumentIDs = []int64{10}
+	plan, err := planner.Plan(context.Background(), task, nil)
+	require.NoError(t, err)
+	require.Len(t, plan.Generation.Sources, 1)
+	source := plan.Generation.Sources[0]
+	require.Equal(t, int64(10), source.DocumentID)
+	require.Equal(t, "explicit", source.Origin)
+	require.Equal(t, "selected source evidence", source.Excerpt)
+	require.Len(t, source.ContentSHA256, 64)
+}

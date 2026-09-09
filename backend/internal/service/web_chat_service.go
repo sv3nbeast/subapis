@@ -447,7 +447,10 @@ func (s *WebChatService) prepareBranchGeneration(ctx context.Context, userID, se
 	var revisedUser *WebChatMessage
 	var requestedDocuments []int64
 	if s.documents != nil && s.documents.repo != nil {
-		requestedDocuments, _ = s.documents.repo.MessageDocumentIDs(ctx, userID, messageID)
+		requestedDocuments, err = s.documents.repo.MessageDocumentIDs(ctx, userID, messageID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if revise {
 		revisedUser, assistant, err = s.repo.ReviseTurn(ctx, userID, sessionID, messageID, content, buildWebChatTitle(content))
@@ -472,7 +475,7 @@ func (s *WebChatService) prepareBranchGeneration(ctx context.Context, userID, se
 		if revisedUser != nil {
 			userMessageID = revisedUser.ID
 		}
-		sources, knowledge, err = s.documents.PrepareKnowledge(ctx, userID, session, userMessageID, assistant.ID, query, requestedDocuments, true)
+		sources, knowledge, err = s.documents.PrepareKnowledge(ctx, userID, session, userMessageID, assistant.ID, query, requestedDocuments, session.KnowledgeEnabled)
 		if err != nil {
 			_, _ = s.FailAssistantMessage(context.WithoutCancel(ctx), userID, assistant.ID, "", err.Error(), "", WebChatUsage{})
 			return nil, err

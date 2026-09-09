@@ -93,6 +93,41 @@ func TestBuildWebChatKnowledgeContextOnlySnapshotsInjectedSources(t *testing.T) 
 	require.NotContains(t, knowledge, "second.txt")
 }
 
+func TestExplicitKnowledgePreservesOrderAndSharesTheContextBudget(t *testing.T) {
+	chunks := []WebChatDocumentChunk{
+		{ID: 1, DocumentID: 10, DocumentName: "ten.csv", Content: strings.Repeat("甲", 10000)},
+		{ID: 2, DocumentID: 20, DocumentName: "twenty.csv", Content: strings.Repeat("乙", 10000)},
+		{ID: 3, DocumentID: 30, DocumentName: "retrieved.txt", Content: "optional retrieved context"},
+	}
+	sources, knowledge := buildWebChatKnowledgeContextForRequest(chunks, 1000, []int64{20, 10})
+	require.LessOrEqual(t, len([]rune(knowledge)), 1000)
+	require.GreaterOrEqual(t, len(sources), 2)
+	require.Equal(t, int64(20), sources[0].DocumentID)
+	require.Equal(t, int64(10), sources[1].DocumentID)
+	for _, source := range sources[:2] {
+		require.Equal(t, "explicit", source.Origin)
+		require.True(t, source.Truncated)
+		require.Greater(t, source.IncludedChars, 200)
+		require.Len(t, source.ContentSHA256, 64)
+	}
+	require.Less(t, strings.Index(knowledge, "twenty.csv"), strings.Index(knowledge, "ten.csv"))
+	again, second := buildWebChatKnowledgeContextForRequest(chunks, 1000, []int64{20, 10})
+	require.Equal(t, knowledge, second)
+	require.Equal(t, sources, again, "same inputs preserve cacheable context exactly")
+}
+
+func TestPrepareKnowledgeRejectsMissingExplicitSourceInsteadOfDroppingIt(t *testing.T) {
+	repo := &webChatDocumentRepoTestDouble{searchChunks: []WebChatDocumentChunk{{ID: 1, DocumentID: 10, DocumentName: "one.txt", Content: "first attachment"}}}
+	settings := newWebChatDocumentSettingsTestDouble()
+	settings.values[SettingKeyWebChatFilesEnabled] = "true"
+	svc := NewWebChatDocumentService(repo, settings, nil, nil)
+	_, _, err := svc.PrepareKnowledge(context.Background(), 1, &WebChatSession{}, 0, 2, "compare files", []int64{10, 20}, false)
+	require.ErrorIs(t, err, ErrWebChatDocumentNotReady)
+	settings.values[SettingKeyWebChatFilesEnabled] = "false"
+	_, _, err = svc.PrepareKnowledge(context.Background(), 1, &WebChatSession{}, 0, 2, "compare files", []int64{10}, false)
+	require.ErrorIs(t, err, ErrWebChatFilesDisabled)
+}
+
 func TestPrepareKnowledgeExplicitAttachmentsIgnoreKnowledgeToggle(t *testing.T) {
 	projectID := int64(99)
 	repo := &webChatDocumentRepoTestDouble{

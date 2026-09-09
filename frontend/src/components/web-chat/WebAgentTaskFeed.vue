@@ -13,6 +13,7 @@
           <code v-if="generation(task)?.client_request_id">{{ generation(task)?.client_request_id }}</code>
           <small v-if="generation(task)?.usage">↑ {{ generation(task)?.usage?.input_tokens }} · ↓ {{ generation(task)?.usage?.output_tokens }}</small>
         </details>
+        <WebChatSources :sources="generation(task)?.sources || []" />
         <div class="task-actions">
           <button v-if="task.status === 'succeeded' && artifactID(task)" class="artifact-link" @click="emit('open', artifactID(task)!)">{{ t('webAgent.open') }} <span>↗</span></button>
           <button v-if="!isTaskTerminal(task.status)" :disabled="task.status === 'cancel_requested'" @click="emit('cancel', task.id)">{{ t('webAgent.cancel') }}</button>
@@ -25,10 +26,12 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { isTaskTerminal, type WebAgentTask, type WebAgentTaskEvent } from '@/api/webAgent'
+import WebChatSources from './WebChatSources.vue'
+import type { WebChatSource } from '@/api/webChat'
 const props = defineProps<{ tasks: WebAgentTask[]; events: Record<number, WebAgentTaskEvent[]>; hasMore: boolean; loading: boolean }>()
 const emit = defineEmits<{ open: [number]; cancel: [number]; details: [number]; older: [] }>()
 const { t, te } = useI18n()
-type Result = { artifact_id?: number; generation?: { request_id?: string; client_request_id?: string; usage?: { input_tokens: number; output_tokens: number } } }
+type Result = { artifact_id?: number; generation?: { request_id?: string; client_request_id?: string; sources?: WebChatSource[]; usage?: { input_tokens: number; output_tokens: number } } }
 const result = (task: WebAgentTask): Result => task.result && typeof task.result === 'object' ? task.result as Result : {}
 function artifactID(task: WebAgentTask) { const id = result(task).artifact_id; return Number.isSafeInteger(id) && Number(id) > 0 ? id : undefined }
 const generation = (task: WebAgentTask) => result(task).generation

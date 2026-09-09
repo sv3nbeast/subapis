@@ -35,9 +35,11 @@ func TestMergeExplicitDocumentChunksKeepsAttachmentHeaders(t *testing.T) {
 		{ID: 21, DocumentID: 2, ChunkIndex: 1, Content: "row 2"},
 	}
 
-	got := mergeExplicitDocumentChunks(explicit, ranked, 4)
+	got := mergeExplicitDocumentChunks(explicit, ranked, 4, []int64{1, 2})
 
 	require.Equal(t, []int64{10, 20, 11, 21}, []int64{got[0].ID, got[1].ID, got[2].ID, got[3].ID})
+	reversed := mergeExplicitDocumentChunks(explicit, ranked, 4, []int64{2, 1})
+	require.Equal(t, []int64{20, 10, 11, 21}, []int64{reversed[0].ID, reversed[1].ID, reversed[2].ID, reversed[3].ID})
 }
 
 func TestTruncateDocumentSearchQuery(t *testing.T) {
@@ -45,6 +47,12 @@ func TestTruncateDocumentSearchQuery(t *testing.T) {
 	truncated := truncateDocumentSearchQuery(value, 512)
 	require.Len(t, []rune(truncated), 512)
 	require.Equal(t, "", truncateDocumentSearchQuery(value, 0))
+}
+func TestEmptyExplicitAttachmentsDoNotAddDatabaseRoundTrips(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := NewWebChatDocumentRepository(db)
+	require.NoError(t, repo.LinkMessageDocuments(context.Background(), 1, 2, nil))
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestDeleteWebChatSessionQueuesDocumentCleanupAtomically(t *testing.T) {

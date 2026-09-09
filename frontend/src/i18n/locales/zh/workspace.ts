@@ -11,7 +11,8 @@ export default { workspace: {
   filesHint: '选择一个项目，管理其中的参考资料。', noProjects: '还没有项目',
   noProjectsHint: '创建项目后，可以管理相关会话和资料。', openFiles: '管理资料', startProject: '在此项目中对话',
   messageLoading: '正在加载会话…', sessionUnavailable: '会话不存在或当前账号无权访问。',
-  loadFailed: '无法加载工作台，请重试。', retry: '重试', sources: '{files} 份参考资料 · {citations} 处引用',
+  loadFailed: '无法加载工作台，请重试。', retry: '重试', sources: '{files} 份参考资料 · {citations} 处摘录',
+  sourceOrigin: {explicit:'用户选择的附件',retrieved:'自动检索的参考资料'}, sourceIncluded:'本次提供 {count} 字。', sourceTruncated:'此片段因上下文预算被截取。',
   modeChat: '对话', inputLabel: '任务或消息', actions: '会话操作', projectSettings: '项目设置',
 }, webAgent: {
   chat: '聊天', slides: 'PPT', spreadsheet: '表格', document: '文档', mode: '任务类型',

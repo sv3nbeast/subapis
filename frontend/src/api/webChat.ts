@@ -145,7 +145,7 @@ export interface WebChatSessionPatch {
 
 export interface WebChatDocumentLimits { max_file_bytes: number; max_files_per_project: number; max_bytes_per_user: number }
 export interface WebChatDocument { id:number;user_id:number;project_id?:number|null;session_id?:number|null;original_name:string;content_type:string;extension:string;size_bytes:number;sha256:string;status:'uploaded'|'processing'|'ready'|'failed'|'deleting';enabled:boolean;error_message?:string;extracted_chars:number;chunk_count:number;attempt_count:number;created_at:string;updated_at:string }
-export interface WebChatSource { index:number;document_id:number;document_name:string;page_number?:number|null;location_label?:string;excerpt:string }
+export interface WebChatSource { index:number;document_id:number;document_name:string;page_number?:number|null;location_label?:string;excerpt:string;origin?:'explicit'|'retrieved';included_chars?:number;content_sha256?:string;truncated?:boolean }
 export interface WebChatDocumentS3Config { endpoint:string;region:string;bucket:string;access_key_id:string;secret_access_key?:string;prefix:string;force_path_style:boolean }
 export interface WebChatDocumentAdminConfig { enabled:boolean;limits:WebChatDocumentLimits;s3:WebChatDocumentS3Config }
 

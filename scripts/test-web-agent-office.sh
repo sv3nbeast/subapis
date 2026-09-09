@@ -31,4 +31,4 @@ task_address="$(docker port "$task_container" 8090/tcp)"
 [[ "$task_address" =~ ^127\.0\.0\.1:[0-9]+$ ]] || exit 1
 export WEB_AGENT_OFFICE_ENDPOINT="http://$task_address"
 go -C "$task_repo_root/backend" test -race -tags integration ./internal/repository \
-  -run '^TestWebAgent' -count=1
+  -run '^TestWebAgent|^TestWebChatExplicitIntent' -count=1

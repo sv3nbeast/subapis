@@ -11,7 +11,8 @@ export default { workspace: {
   filesHint: 'Choose a project to manage its source material.', noProjects: 'No projects yet',
   noProjectsHint: 'Create a project to organize conversations and files.', openFiles: 'Manage files', startProject: 'Chat in this project',
   messageLoading: 'Loading conversation…', sessionUnavailable: 'Conversation not found or unavailable to this account.',
-  loadFailed: 'Unable to load the workspace. Please try again.', retry: 'Retry', sources: '{files} source files · {citations} citations',
+  loadFailed: 'Unable to load the workspace. Please try again.', retry: 'Retry', sources: '{files} source files · {citations} excerpts',
+  sourceOrigin: {explicit:'User-selected attachment',retrieved:'Automatically retrieved reference'}, sourceIncluded:'{count} characters provided for this request.', sourceTruncated:'This excerpt was truncated to fit the context budget.',
   modeChat: 'Chat', inputLabel: 'Task or message', actions: 'Conversation actions', projectSettings: 'Project settings',
 }, webAgent: {
   chat: 'Chat', slides: 'Slides', spreadsheet: 'Spreadsheet', document: 'Document', mode: 'Task type',

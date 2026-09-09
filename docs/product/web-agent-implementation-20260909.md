@@ -504,3 +504,75 @@ browser visual/interaction acceptance remain unproven. Ordinary gateway streamin
 cache prefix and charge implementation were not changed. Remaining scope includes
 project source relevance, assistant/product lifecycle requirements, task-history
 policy and final requirement-by-requirement audit. Keep the complete goal active.
+
+## Explicit attachments and reference provenance (seventh slice)
+
+Base: 6fbcb9817. The previous goal turn was progress. This slice fixes evidence-
+backed reference semantics, not provider scheduling or similarity thresholds.
+
+Root causes verified in source:
+
+- `MessageDocumentIDs` combined explicit attachment links with all prior retrieved
+  sources. Regeneration therefore promoted automatic retrieval into explicit
+  attachment intent. `prepareBranchGeneration` additionally passed `true` for
+  project retrieval even when the current session toggle was off.
+- Leading attachment chunks were sorted by document ID, not selection order.
+  Context assembly let a large first attachment consume the whole budget.
+- Attachment lookup errors were ignored during replay, and missing/disabled
+  explicit files could silently disappear from context.
+
+Changes:
+
+- Migration 237 stores ordered explicit attachment IDs on the user message.
+  Assistant replay resolves its actual parent user turn. Legacy fallback uses
+  only link rows; retrieved-source snapshots never become explicit selection.
+  The ordered intent survives document-FK deletion so a retry reports missing
+  files rather than pretending the user never selected them.
+- Attachment linking is owned, scoped, enabled/ready checked, atomic and
+  idempotent for the same selection; a saved turn's order cannot be overwritten.
+  Session and active same-project files are supported. No-attachment turns retain
+  the existing zero-extra-write fast path.
+- Replay honors the current project-knowledge toggle and propagates lookup
+  failures before creating a replacement turn. Missing explicit content is an
+  error, not partial unannounced context.
+- Retrieval and context preserve explicit selection order; each selected file
+  gets a bounded excerpt before optional candidates. Repeated identical inputs
+  produce identical context. Added origin, provided-character count, content
+  fingerprint and truncation metadata; the model is told these are excerpts.
+- File-task generation retains prepared reference snapshots for later inspection.
+  Task UI reuses grouped sources; labels distinguish user-selected and retrieved
+  references. UI calls them excerpts, not evidence that the model cited them.
+  Stale source detail is cleared when its content changes.
+
+Evidence:
+
+- Service/repository/handler focused tests pass under race detection, including
+  edited/regenerated turns with explicit files and project retrieval off,
+  attachment lookup failure, deterministic ordering and fair budget allocation.
+- Real PostgreSQL explicit-intent integration covers parent-user resolution,
+  automatic-source exclusion, idempotence/order immutability, deleted-file intent,
+  project/user boundaries and disabled files. Updated Office integration harness
+  includes it; all repository and six native-file create/revision actions pass
+  (19.307s).
+- 24 frontend tests pass, including grouped-source provenance and stale-detail
+  handling; typecheck, targeted lint and production build pass.
+- The preexisting SQL already filters candidate relevance. A local synthetic
+  PPT-vs-usage-text check returned similarity zero. No fuzzy threshold was tuned,
+  and no claim of universal semantic relevance is made from this narrow example.
+- Full repository/handler/routes/migration packages and `go build ./...` pass.
+  Full service execution still reports exactly the two previously verified
+  midnight-dependent subscription-model-quota baseline failures; a filtered JSON
+  test run confirmed their names. No new Web Chat/Agent test fails. This is not
+  an all-green full-suite claim. Migration 237 was exercised only in disposable
+  integration schemas; the retained local gateway binary is still the prior
+  runtime-v2 build and must be refreshed for a live reference-flow canary.
+
+Review scope: web-chat/file-task knowledge preparation and source snapshots.
+No provider transport, retry/account choice, billing or cache implementation was
+changed. Prompt/reference content changes intentionally only to correct selection
+and budgeting; cache identity remains stable for repeated equivalent inputs.
+Live provider latency/cache and browser acceptance are still not established.
+The full goal remains active; production/domain configuration is not authorized.
+
+Verdict: PASS for the exercised reference-intent correction; BLOCKED for release
+and overall goal completion pending remaining product and browser/live-flow gates.

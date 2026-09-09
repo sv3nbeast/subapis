@@ -51,7 +51,7 @@ func (p *WebAgentModelPlanner) Plan(ctx context.Context, task *WebAgentTask, sou
 	if source != nil && (source.ID != *task.SourceArtifactID || source.UserID != task.UserID || source.SessionID != task.SessionID || source.Kind != task.Kind) {
 		return nil, ErrWebAgentArtifactNotFound
 	}
-	knowledge, err := p.knowledge(ctx, task, session)
+	sources, knowledge, err := p.knowledge(ctx, task, session)
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +94,10 @@ func (p *WebAgentModelPlanner) Plan(ctx context.Context, task *WebAgentTask, sou
 	plan := &WebAgentPlan{}
 	if output != nil {
 		plan.Generation = output.Generation
+		if plan.Generation == nil {
+			plan.Generation = &WebAgentGeneration{}
+		}
+		plan.Generation.Sources = sources
 	}
 	if err != nil {
 		return plan, err
@@ -118,29 +122,29 @@ func (p *WebAgentModelPlanner) Plan(ctx context.Context, task *WebAgentTask, sou
 	return plan, nil
 }
 
-func (p *WebAgentModelPlanner) knowledge(ctx context.Context, task *WebAgentTask, session *WebChatSession) (string, error) {
+func (p *WebAgentModelPlanner) knowledge(ctx context.Context, task *WebAgentTask, session *WebChatSession) ([]WebChatSource, string, error) {
 	if len(task.DocumentIDs) == 0 && (!session.KnowledgeEnabled || session.ProjectID == nil) {
-		return "", nil
+		return nil, "", nil
 	}
 	documents := p.chat.documents
 	if documents == nil || !documents.FeatureEnabled(ctx) {
 		if len(task.DocumentIDs) > 0 {
-			return "", ErrWebChatFilesDisabled
+			return nil, "", ErrWebChatFilesDisabled
 		}
-		return "", nil
+		return nil, "", nil
 	}
 	for _, id := range task.DocumentIDs {
 		doc, err := documents.Get(ctx, task.UserID, id)
 		if err != nil {
-			return "", err
+			return nil, "", err
 		}
 		if doc.UserID != task.UserID || !doc.Enabled || doc.Status != WebChatDocumentStatusReady || doc.DeletedAt != nil {
-			return "", ErrWebChatDocumentNotReady
+			return nil, "", ErrWebChatDocumentNotReady
 		}
 		inSession := doc.SessionID != nil && *doc.SessionID == task.SessionID
 		inProject := doc.ProjectID != nil && session.ProjectID != nil && *doc.ProjectID == *session.ProjectID
 		if !inSession && !inProject {
-			return "", ErrWebChatDocumentNotFound
+			return nil, "", ErrWebChatDocumentNotFound
 		}
 	}
 	projectID := int64(0)
@@ -149,7 +153,7 @@ func (p *WebAgentModelPlanner) knowledge(ctx context.Context, task *WebAgentTask
 	}
 	chunks, err := documents.repo.SearchDocumentChunks(ctx, task.UserID, projectID, task.DocumentIDs, task.Prompt, 40)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	sources, knowledge := buildWebChatKnowledgeContextForRequest(chunks, 32000, task.DocumentIDs)
 	seen := make(map[int64]bool)
@@ -158,10 +162,10 @@ func (p *WebAgentModelPlanner) knowledge(ctx context.Context, task *WebAgentTask
 	}
 	for _, id := range task.DocumentIDs {
 		if !seen[id] {
-			return "", ErrWebChatDocumentNotReady
+			return nil, "", ErrWebChatDocumentNotReady
 		}
 	}
-	return knowledge, nil
+	return sources, knowledge, nil
 }
 
 // Protocol v1 of runtimes/web-agent-office/schema.py. The renderer independently
