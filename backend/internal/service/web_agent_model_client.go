@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -80,7 +81,16 @@ func (c *WebAgentModelClient) Generate(ctx context.Context, session *WebChatSess
 		return nil, webAgentFailure("model_response_invalid", errors.New("invalid task request identifier"))
 	}
 	if resp.StatusCode != http.StatusOK {
-		return result, webAgentFailure(fmt.Sprintf("model_http_%d", resp.StatusCode), fmt.Errorf("task model returned HTTP %d", resp.StatusCode))
+		// Preserve a bounded provider diagnostic. The request body is never logged;
+		// only its one-way fingerprint is included so identical failures correlate
+		// without exposing prompts, credentials, or tool arguments.
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+		fingerprint := fmt.Sprintf("%x", sha256.Sum256(payload))[:16]
+		detail := sanitizeWebAgentProviderError(string(errBody))
+		if detail == "" {
+			detail = "provider returned no diagnostic body"
+		}
+		return result, webAgentFailure(fmt.Sprintf("model_http_%d", resp.StatusCode), fmt.Errorf("task model returned HTTP %d (request_fingerprint=%s): %s", resp.StatusCode, fingerprint, detail))
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, webAgentModelMaxResponseBytes+1))
 	if err != nil {
@@ -96,6 +106,25 @@ func (c *WebAgentModelClient) Generate(ctx context.Context, session *WebChatSess
 		return result, ctx.Err()
 	}
 	return result, nil
+}
+
+func sanitizeWebAgentProviderError(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	// Keep diagnostics useful while preventing accidental propagation of large
+	// HTML pages or echoed authorization/prompt material into task records.
+	raw = strings.Join(strings.Fields(raw), " ")
+	for _, marker := range []string{"authorization", "api_key", "access_token", "prompt", "messages"} {
+		if strings.Contains(strings.ToLower(raw), marker) {
+			return "provider diagnostic redacted"
+		}
+	}
+	if len(raw) > 512 {
+		raw = raw[:512]
+	}
+	return raw
 }
 
 func webAgentModelTransportFailure(fallback string, err error) error {
