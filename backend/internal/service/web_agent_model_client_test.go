@@ -41,8 +41,12 @@ func TestWebAgentModelUsesOwnedGatewayProtocolAndNormalTerminal(t *testing.T) {
 				require.Equal(t, "Bearer owned-test-key", r.Header.Get("Authorization"))
 				var body map[string]any
 				require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
-				// Anthropic's shared request DTO omits false; its default is non-streaming.
-				require.NotEqual(t, true, body["stream"])
+				if platform == PlatformAnthropic {
+					require.Equal(t, true, body["stream"])
+					require.Equal(t, "text/event-stream", r.Header.Get("Accept"))
+				} else {
+					require.Equal(t, false, body["stream"])
+				}
 				require.Equal(t, "test-model", body["model"])
 				require.Equal(t, float64(4096), body["max_tokens"])
 				w.Header().Set("X-Request-Id", "gateway-request-id")
@@ -50,7 +54,8 @@ func TestWebAgentModelUsesOwnedGatewayProtocolAndNormalTerminal(t *testing.T) {
 				if platform == PlatformAnthropic {
 					require.Equal(t, "/v1/messages", r.URL.Path)
 					require.Equal(t, "stable instructions", body["system"])
-					fmt.Fprint(w, `{"type":"message","stop_reason":"end_turn","content":[{"type":"thinking","thinking":"private reasoning"},{"type":"text","text":"{\"kind\":"},{"type":"text","text":"\"document\"}"}],"usage":{"input_tokens":12,"output_tokens":8,"cache_read_input_tokens":7}}`)
+					w.Header().Set("Content-Type", "text/event-stream")
+					fmt.Fprint(w, agentAnthropicSSEFixture())
 				} else {
 					require.Equal(t, "/v1/chat/completions", r.URL.Path)
 					fmt.Fprint(w, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"{\"kind\":\"document\"}"}}],"usage":{"prompt_tokens":12,"completion_tokens":8,"prompt_tokens_details":{"cached_tokens":7}}}`)

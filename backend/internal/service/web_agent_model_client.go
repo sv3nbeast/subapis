@@ -58,6 +58,9 @@ func (c *WebAgentModelClient) Generate(ctx context.Context, session *WebChatSess
 	req.Header.Set("Authorization", "Bearer "+key.Key)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	if anthropic {
+		req.Header.Set("Accept", "text/event-stream")
+	}
 	req.Header.Set("User-Agent", "SubAPIs-WebAgent/1.0")
 	result := &WebAgentModelOutput{Generation: &WebAgentGeneration{}}
 	if anthropic {
@@ -91,6 +94,15 @@ func (c *WebAgentModelClient) Generate(ctx context.Context, session *WebChatSess
 			detail = "provider returned no diagnostic body"
 		}
 		return result, webAgentFailure(fmt.Sprintf("model_http_%d", resp.StatusCode), fmt.Errorf("task model returned HTTP %d (request_fingerprint=%s): %s", resp.StatusCode, fingerprint, detail))
+	}
+	if anthropic {
+		if err := readWebAgentAnthropicStream(resp.Body, result); err != nil {
+			return result, webAgentModelTransportFailure("model_response_interrupted", err)
+		}
+		if ctx.Err() != nil {
+			return result, ctx.Err()
+		}
+		return result, nil
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, webAgentModelMaxResponseBytes+1))
 	if err != nil {
@@ -161,7 +173,7 @@ func buildWebAgentModelRequest(session *WebChatSession, messages []OpenAIChatMes
 			converted = append(converted, apicompat.AnthropicMessage{Role: message.Role, Content: content})
 		}
 		system, _ := json.Marshal(session.SystemPrompt)
-		payload, err = json.Marshal(apicompat.AnthropicRequest{Model: session.Model, MaxTokens: session.MaxOutputTokens, Messages: converted, System: system, Temperature: session.Temperature, Stream: false})
+		payload, err = json.Marshal(apicompat.AnthropicRequest{Model: session.Model, MaxTokens: session.MaxOutputTokens, Messages: converted, System: system, Temperature: session.Temperature, Stream: true})
 	} else {
 		withSystem := append([]OpenAIChatMessage{{Role: "system", Content: session.SystemPrompt}}, messages...)
 		body := map[string]any{"model": session.Model, "messages": withSystem, "stream": false, "max_tokens": session.MaxOutputTokens}
