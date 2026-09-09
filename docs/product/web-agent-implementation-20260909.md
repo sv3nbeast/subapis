@@ -677,3 +677,18 @@ Goal remains active. Remaining audit includes actual browser acceptance (explici
 browser-testing authorization is still needed under the selected Sites skill),
 local/live reference flows, assistant and product lifecycle scope, and history
 policy. Shared primary checkout, production and domain configuration are untouched.
+
+## Assistant/template execution boundary (eleventh slice)
+
+Audited the selected Assistant flow. Templates are prompt presets, not independent
+agents: the user edits the rendered text before sending, so a file task uses that
+approved prompt and does not silently prepend a second template body. New sessions
+and file tasks validate the selected template ID against the signed-in user, scope
+and enabled state. File tasks freeze only template metadata (ID/name/update time)
+in their private snapshot; the prompt remains the authoritative user text. Later
+template edits or deletion cannot rewrite an accepted task.
+
+Focused tests cover system/personal-owner acceptance, cross-user rejection,
+disabled-template rejection and metadata-only snapshots. Existing assistant
+library functionality is retained; this closes its permission/audit gap without
+pretending a template implements tool execution.
