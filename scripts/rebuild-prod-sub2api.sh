@@ -450,7 +450,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777
-      - /home/renderer:rw,noexec,nosuid,nodev,size=16m,mode=700
+      - /home/renderer:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=700
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
@@ -555,6 +555,11 @@ while true; do
   (( SECONDS >= renderer_deadline )) && { docker logs --tail 120 "${RENDERER_CONTAINER_ID}" >&2; exit 1; }
   sleep 2
 done
+if ! docker exec --user 10001 "${RENDERER_CONTAINER_ID}" sh -lc 'test -w /home/renderer && probe=/home/renderer/.web-agent-permission-probe && : >"${probe}" && rm -f "${probe}"'; then
+  echo "Web Agent renderer home is not writable by UID 10001" >&2
+  docker logs --tail 120 "${RENDERER_CONTAINER_ID}" >&2
+  exit 1
+fi
 docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" up -d --no-deps "${KIRO_CODE_EXECUTION_SERVICE_NAME}"
 
 WORKER_CONTAINER_ID="$(docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" ps -q "${KIRO_CODE_EXECUTION_SERVICE_NAME}")"
