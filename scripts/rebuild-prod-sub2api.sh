@@ -51,6 +51,9 @@ Environment variables:
   SERVICE_NAME                     Compose service name. Default: sub2api
   KIRO_CODE_EXECUTION_SERVICE_NAME Isolated Kiro code execution worker service.
                                    Default: kiro-code-exec
+  WEB_AGENT_ENABLED              Enable the file-task runtime. Default: true
+  WEB_AGENT_RENDERER_TOKEN       Internal renderer credential; generated when unset
+  WEB_AGENT_STORAGE_HOST_PATH    Host path for private artifacts. Default: DEPLOY_DIR/web-agent-artifacts
   HEALTH_TIMEOUT_SECONDS           Health wait timeout. Default: 180
   SKIP_BUILD                       Set to 1 to skip docker build and only switch image
 EOF
@@ -88,6 +91,9 @@ KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS="${GATEWAY_KIRO_RESILIENCE_FIRST_SEMANTIC_TI
 KIRO_FAILOVER_BUDGET_SECONDS="${GATEWAY_KIRO_RESILIENCE_FAILOVER_BUDGET_SECONDS:-}"
 FIRST_SEMANTIC_TIMEOUT_SECONDS="${GATEWAY_FIRST_SEMANTIC_TIMEOUT:-50}"
 KIRO_EVENT_DIAGNOSTICS_USER_IDS="${SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS:-}"
+WEB_AGENT_ENABLED="${WEB_AGENT_ENABLED:-true}"
+WEB_AGENT_RENDERER_TOKEN="${WEB_AGENT_RENDERER_TOKEN:-}"
+WEB_AGENT_STORAGE_HOST_PATH="${WEB_AGENT_STORAGE_HOST_PATH:-${DEPLOY_DIR}/web-agent-artifacts}"
 ANTHROPIC_STABLE_CANARY_ENV_FILE="${ANTHROPIC_STABLE_CANARY_ENV_FILE:-${DEPLOY_DIR}/anthropic-stable-canary.env}"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -103,6 +109,7 @@ fi
 
 require_cmd docker
 require_cmd sed
+require_cmd openssl
 
 file_mode() {
   if stat -c '%a' "$1" >/dev/null 2>&1; then
@@ -397,6 +404,7 @@ if [[ ! -f "${DEPLOY_DIR}/docker-compose.yml" ]]; then
 fi
 
 IMAGE_REF="${IMAGE_REPO}:${IMAGE_TAG}"
+WEB_AGENT_RENDERER_IMAGE="${IMAGE_REPO}-web-agent-office:${IMAGE_TAG}"
 OVERRIDE_FILE="${DEPLOY_DIR}/docker-compose.override.yml"
 COMPOSE_MAIN="${DEPLOY_DIR}/docker-compose.yml"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
@@ -410,7 +418,18 @@ if [[ "${SKIP_BUILD}" != "1" ]]; then
     --build-arg "VITE_PUBLIC_UI_V2_ROLLOUT_PERCENT=${PUBLIC_UI_V2_ROLLOUT_PERCENT}" \
     -t "${IMAGE_REF}" \
     "${REPO_ROOT}"
+  docker build -t "${WEB_AGENT_RENDERER_IMAGE}" "${REPO_ROOT}/runtimes/web-agent-office"
 fi
+
+if [[ -z "${WEB_AGENT_RENDERER_TOKEN}" ]]; then
+  WEB_AGENT_RENDERER_TOKEN="$(openssl rand -hex 32)"
+fi
+if [[ "${#WEB_AGENT_RENDERER_TOKEN}" -lt 32 ]]; then
+  echo "WEB_AGENT_RENDERER_TOKEN must contain at least 32 characters" >&2
+  exit 1
+fi
+mkdir -p "${WEB_AGENT_STORAGE_HOST_PATH}"
+chmod 700 "${WEB_AGENT_STORAGE_HOST_PATH}"
 
 if [[ -f "${OVERRIDE_FILE}" ]]; then
   cp "${OVERRIDE_FILE}" "${OVERRIDE_FILE}.bak-${TIMESTAMP}"
@@ -418,6 +437,31 @@ fi
 
 cat > "${OVERRIDE_FILE}" <<EOF
 services:
+  web-agent-office:
+    image: ${WEB_AGENT_RENDERER_IMAGE}
+    environment:
+      WEB_AGENT_RENDERER_TOKEN: ${WEB_AGENT_RENDERER_TOKEN}
+      HOST: 0.0.0.0
+      PORT: "8090"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777
+      - /home/renderer:rw,noexec,nosuid,nodev,size=16m,mode=700
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    cpus: 1.0
+    mem_limit: 1g
+    networks:
+      - web-agent-private
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health',headers={'Authorization':'Bearer '+os.environ['WEB_AGENT_RENDERER_TOKEN']},timeout=2)\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
   ${KIRO_CODE_EXECUTION_SERVICE_NAME}:
     image: ${IMAGE_REF}
     command:
@@ -466,6 +510,10 @@ services:
         condition: service_healthy
     volumes:
       - kiro_code_exec_socket:/app/kiro-code-exec
+      - ${WEB_AGENT_STORAGE_HOST_PATH}:/app/web-agent-artifacts
+    networks:
+      - sub2api-network
+      - web-agent-private
 ${STABLE_CANARY_ENV_FILE_YAML}
     environment:
       - ANTIGRAVITY_USER_AGENT_VERSION=${ANTIGRAVITY_VERSION}
@@ -473,14 +521,35 @@ ${STABLE_CANARY_ENV_FILE_YAML}
       - GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED=${OPENAI_KIRO_BRIDGE_ENABLED}
       - GATEWAY_FIRST_SEMANTIC_TIMEOUT=${FIRST_SEMANTIC_TIMEOUT_SECONDS}
       - KIRO_CODE_EXECUTION_SOCKET=${KIRO_CODE_EXECUTION_SOCKET}
+      - WEB_AGENT_ENABLED=${WEB_AGENT_ENABLED}
+      - WEB_AGENT_RENDERER_URL=http://web-agent-office:8090
+      - WEB_AGENT_RENDERER_TOKEN=${WEB_AGENT_RENDERER_TOKEN}
+      - WEB_AGENT_STORAGE_PATH=/app/web-agent-artifacts
 ${KIRO_RESILIENCE_ENV%$'\n'}
 ${KIRO_EVENT_DIAGNOSTICS_ENV%$'\n'}
 volumes:
   kiro_code_exec_socket:
     driver: local
+networks:
+  sub2api-network:
+    external: true
+  web-agent-private:
+    driver: bridge
+    internal: true
 EOF
 
 docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" config >/dev/null
+docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" up -d --no-deps web-agent-office
+RENDERER_CONTAINER_ID="$(docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" ps -q web-agent-office)"
+renderer_deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
+while true; do
+  renderer_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${RENDERER_CONTAINER_ID}")"
+  echo "web_agent_renderer_health=${renderer_health}"
+  if [[ "${renderer_health}" == "healthy" ]]; then break; fi
+  if [[ "${renderer_health}" == "unhealthy" || "${renderer_health}" == "exited" || "${renderer_health}" == "dead" ]]; then docker logs --tail 120 "${RENDERER_CONTAINER_ID}" >&2; exit 1; fi
+  (( SECONDS >= renderer_deadline )) && { docker logs --tail 120 "${RENDERER_CONTAINER_ID}" >&2; exit 1; }
+  sleep 2
+done
 docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" up -d --no-deps "${KIRO_CODE_EXECUTION_SERVICE_NAME}"
 
 WORKER_CONTAINER_ID="$(docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" ps -q "${KIRO_CODE_EXECUTION_SERVICE_NAME}")"
