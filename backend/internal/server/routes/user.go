@@ -112,6 +112,7 @@ func RegisterUserRoutes(
 			webChat.DELETE("/templates/:id", h.WebChat.DeleteTemplate)
 			webChat.POST("/templates/:id/copy", h.WebChat.CopyTemplate)
 			webChat.PATCH("/sessions/:id", h.WebChat.PatchSession)
+			webChat.GET("/sessions/:id", h.WebChat.GetSession)
 			webChat.GET("/sessions/:id/messages", h.WebChat.ListMessages)
 			webChat.POST("/sessions/:id/messages", h.WebChat.SendMessage)
 			webChat.POST("/sessions/:id/documents", h.WebChat.UploadSessionDocument)

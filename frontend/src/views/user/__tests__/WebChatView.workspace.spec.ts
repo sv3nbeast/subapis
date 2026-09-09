@@ -6,7 +6,7 @@ import WebChatHome from '@/components/web-chat/WebChatHome.vue'
 
 const mocks=vi.hoisted(()=>({
  query:{} as Record<string,string>,
- api:{getOptions:vi.fn(),listSessions:vi.fn(),listProjects:vi.fn(),listTemplates:vi.fn(),listMessages:vi.fn(),createSession:vi.fn(),streamMessage:vi.fn()},
+ api:{getOptions:vi.fn(),listSessions:vi.fn(),getSession:vi.fn(),listProjects:vi.fn(),listTemplates:vi.fn(),listMessages:vi.fn(),createSession:vi.fn(),streamMessage:vi.fn()},
  agent:{listTasks:vi.fn(),listArtifacts:vi.fn(),getTaskEvents:vi.fn(),createTask:vi.fn(),cancelTask:vi.fn(),getArtifact:vi.fn(),getArtifactVersions:vi.fn(),getArtifactBlob:vi.fn(),deleteArtifact:vi.fn()},
  replace:vi.fn().mockResolvedValue(undefined),
 }))
@@ -42,6 +42,7 @@ beforeEach(()=>{
  mocks.api.listTemplates.mockResolvedValue([])
  mocks.api.listMessages.mockResolvedValue([])
  mocks.api.createSession.mockResolvedValue(session(3))
+ mocks.api.getSession.mockImplementation((id:number)=>Promise.resolve(session(id)))
 })
 describe('MONO workspace real entry',()=>{
  it('opens a real home instead of auto-opening the last conversation',async()=>{
@@ -92,6 +93,27 @@ describe('MONO workspace real entry',()=>{
   expect(mocks.agent.createTask).toHaveBeenCalledWith(3,expect.objectContaining({kind:'document',prompt:'create my document',group_id:1,model:'test-model'}))
   expect((wrapper.find('.composer-input').element as HTMLTextAreaElement).value).toBe('')
   expect(wrapper.text()).toContain('webAgent.queued')
+  wrapper.unmount()
+ })
+ it('opens artifacts without reference storage and returns to their original conversation',async()=>{
+  const options=await mocks.api.getOptions();mocks.api.getOptions.mockResolvedValue({...options,tasks_enabled:true,projects_enabled:false,files_enabled:false})
+  const artifact={id:70,task_id:80,session_id:9,lineage_id:'one',version:1,kind:'document',title:'Saved report',filename:'report.docx',size_bytes:100,created_at:'2026-09-09T00:00:00Z'}
+  mocks.agent.listArtifacts.mockResolvedValue({items:[artifact],next_before:0})
+  const wrapper=render();await flushPromises()
+  const files=wrapper.findAll('.workbench-bar nav button').find(b=>b.text()==='workspace.files')!
+  await files.trigger('click');await flushPromises()
+  expect(wrapper.find('.artifact-library').text()).toContain('Saved report')
+  await wrapper.find('.file-session').trigger('click');await flushPromises()
+  expect(mocks.api.getSession).toHaveBeenCalledWith(9)
+  expect(mocks.api.listMessages).toHaveBeenLastCalledWith(9)
+  expect(wrapper.find('.task-feed').exists()).toBe(true)
+  expect(mocks.api.createSession).not.toHaveBeenCalled();wrapper.unmount()
+ })
+ it('restores an older session by owned lookup when it is outside the recent list',async()=>{
+  mocks.query={session:'99'}
+  const wrapper=render();await flushPromises()
+  expect(mocks.api.getSession).toHaveBeenCalledWith(99)
+  expect(mocks.api.listMessages).toHaveBeenLastCalledWith(99)
   wrapper.unmount()
  })
 })

@@ -15,6 +15,7 @@ export default { workspace: {
   sourceOrigin: {explicit:'User-selected attachment',retrieved:'Automatically retrieved reference'}, sourceIncluded:'{count} characters provided for this request.', sourceTruncated:'This excerpt was truncated to fit the context budget.',
   modeChat: 'Chat', inputLabel: 'Task or message', actions: 'Conversation actions', projectSettings: 'Project settings',
 }, webAgent: {
+  library:'Artifacts', libraryHint:'Browse across conversations. Each file shows its latest loaded version.', searchLoaded:'Search loaded artifacts', allKinds:'All types', loadedVersions:'{count} versions loaded', noLoadedMatch:'No match among loaded artifacts. You can load earlier files.', moreFiles:'Load earlier files', sessionFallback:'Conversation #{id}', referenceLibrary:'Project source material',
   chat: 'Chat', slides: 'Slides', spreadsheet: 'Spreadsheet', document: 'Document', mode: 'Task type',
   unavailable: 'File tasks are unavailable. Ordinary chat is still available.', refresh: 'Refresh status',
   budget: 'At most one model generation per task, up to {minutes} minutes. Selected model pricing applies.',

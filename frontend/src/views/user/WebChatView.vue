@@ -1,5 +1,5 @@
 <template>
-  <WebChatWorkbench :section="workspaceSection" :busy="sending || creatingSession || agent.creating.value" :projects-enabled="options.projects_enabled" :files-enabled="options.files_enabled" :templates-enabled="options.templates_enabled" @home="goHome" @navigate="workspaceSection=$event" @templates="templateDialogOpen=true">
+  <WebChatWorkbench :section="workspaceSection" :busy="sending || creatingSession || agent.creating.value" :projects-enabled="options.projects_enabled" :files-enabled="options.files_enabled" :artifacts-enabled="Boolean(options.task_limits||options.tasks_enabled)" :templates-enabled="options.templates_enabled" @home="goHome" @navigate="navigateWorkspace" @templates="templateDialogOpen=true">
     <div class="web-chat-shell">
       <aside class="session-panel" :class="{ 'session-panel-open': sessionsOpen }">
         <div class="sidebar-top"><button class="new-chat" :disabled="sending" @click="goHome"><Icon name="plus" size="sm" />{{ t('webChat.newChat') }}</button><button class="icon-button session-toggle" :aria-label="t('common.close')" @click="sessionsOpen=false"><Icon name="x" size="sm" /></button></div>
@@ -27,9 +27,9 @@
         <header class="chat-header">
           <button class="icon-button session-toggle" :aria-label="t('webChat.openSessions')" @click="sessionsOpen=true"><Icon name="menu" size="sm" /></button>
           <div class="chat-heading"><h1>{{ workspaceSection==='chat' ? activeSession?.title || selectedProject?.name || t('workspace.home') : workspaceSection==='files' ? t('workspace.files') : t('webChat.projects') }}</h1><p v-if="activeSession?.project_name">{{ activeSession.project_name }}</p></div>
-          <button class="model-trigger" :disabled="sending" @click="contextOpen=true"><Icon name="sparkles" size="sm" /><span>{{ selectedModelOption?.display_name || selectedModel || t('webChat.selectModel') }}</span><Icon name="chevronDown" size="xs" /></button>
-          <button v-if="agent.artifacts.value.length" class="new-chat" @click="inspectArtifact(agent.artifacts.value[0]!.id)">{{ t('webAgent.files') }} · {{ agent.artifacts.value.length }}</button>
-          <details v-if="activeSession" class="header-menu"><summary class="icon-button" :aria-label="t('workspace.actions')"><Icon name="more" size="sm" /></summary><div>
+          <button v-if="workspaceSection==='chat'" class="model-trigger" :disabled="sending" @click="contextOpen=true"><Icon name="sparkles" size="sm" /><span>{{ selectedModelOption?.display_name || selectedModel || t('webChat.selectModel') }}</span><Icon name="chevronDown" size="xs" /></button>
+          <button v-if="workspaceSection==='chat'&&agent.artifacts.value.length" class="new-chat" @click="inspectArtifact(agent.artifacts.value[0]!.id)">{{ t('webAgent.files') }} · {{ agent.artifacts.value.length }}</button>
+          <details v-if="activeSession&&workspaceSection==='chat'" class="header-menu"><summary class="icon-button" :aria-label="t('workspace.actions')"><Icon name="more" size="sm" /></summary><div>
             <button @click="exportConversation('markdown')">{{ t('webChat.exportMarkdown') }}</button>
             <button @click="exportConversation('json')">{{ t('webChat.exportJson') }}</button>
             <button class="danger" :disabled="sending" @click="removeCurrentSession">{{ t('common.delete') }}</button>
@@ -47,8 +47,11 @@
           <p v-if="agent.error.value" role="alert">{{ agent.error.value }}</p>
           <p v-if="agent.pending.value">{{ t('webAgent.pending') }} <button :disabled="agent.creating.value" @click="retryTaskSubmission">{{ t('webAgent.retrySubmission') }}</button></p>
         </div>
-        <section v-if="workspaceSection!=='chat'" class="projects-workspace">
-          <p>{{ t(workspaceSection==='files'?'workspace.filesHint':'workspace.projectHint') }}</p>
+        <WebAgentArtifactLibrary v-if="workspaceSection==='files'" ref="artifactLibrary" :enabled="Boolean(options.task_limits||options.tasks_enabled)" :user-id="authStore.user?.id" :sessions="sessions" @open="inspectArtifact" @conversation="openArtifactConversation" @loaded="libraryFiles=$event">
+          <template v-if="options.files_enabled&&options.projects_enabled" #references><details class="reference-library"><summary>{{ t('webAgent.referenceLibrary') }}</summary><p>{{ t('workspace.filesHint') }}</p><button v-for="project in projects" :key="project.id" @click="openKnowledgeLibrary(project)"><Icon name="folder" size="sm" />{{ project.name }}</button><p v-if="!projects.length">{{ t('workspace.noProjects') }}</p></details></template>
+        </WebAgentArtifactLibrary>
+        <section v-else-if="workspaceSection==='projects'" class="projects-workspace">
+          <p>{{ t('workspace.projectHint') }}</p>
           <button class="new-chat" :disabled="sending" @click="openProjectEditor(null)"><Icon name="plus" size="sm" />{{ t('workspace.createProject') }}</button>
           <div v-if="projects.length" class="project-grid"><article v-for="project in projects" :key="project.id">
             <Icon name="folder" size="md" /><h2>{{ project.name }}</h2><p>{{ project.description }}</p>
@@ -89,7 +92,7 @@
           <div v-if="canCompose" class="composer-dock"><WebChatComposer v-model="draft" :disabled="!canCompose||agent.creating.value" :can-send="canSend&&Boolean(draft.trim())" :sending="sending" :files-enabled="options.files_enabled" :templates-enabled="options.templates_enabled" :template-name="activeTemplateName" :documents="pendingDocuments" :failed-attachments="failedAttachments" :attachment-state="attachmentState" @submit="send" @stop="stopGeneration" @open-template="templateDialogOpen=true" @files="uploadTemporaryDocuments" @remove-document="removePendingDocument" @retry-attachment="retryFailedAttachment" @remove-failed-attachment="removeFailedAttachment"/></div>
         </template>
       </main>
-      <WebAgentArtifactPane v-if="selectedArtifact&&workspaceSection==='chat'" :artifact="selectedArtifact" :files="agent.artifacts.value" :can-revise="Boolean(options.tasks_enabled)" @close="selectedArtifact=null" @select="inspectArtifact" @revise="reviseArtifact" @deleted="artifactDeleted" />
+      <WebAgentArtifactPane v-if="selectedArtifact&&workspaceSection!=='projects'" :artifact="selectedArtifact" :files="workspaceSection==='files'?libraryFiles:agent.artifacts.value" :can-revise="Boolean(options.tasks_enabled)&&!sending&&!agent.creating.value" @close="selectedArtifact=null" @select="inspectArtifact" @revise="reviseArtifact" @deleted="artifactDeleted" />
     </div>
     <BaseDialog :show="contextOpen" :title="t('workspace.modelSettings')" @close="contextOpen=false">
       <div class="context-card">
@@ -123,6 +126,7 @@ import WebChatSources from '@/components/web-chat/WebChatSources.vue'
 import WebChatComposer from '@/components/web-chat/WebChatComposer.vue'
 import WebAgentTaskFeed from '@/components/web-chat/WebAgentTaskFeed.vue'
 import WebAgentArtifactPane from '@/components/web-chat/WebAgentArtifactPane.vue'
+import WebAgentArtifactLibrary from '@/components/web-chat/WebAgentArtifactLibrary.vue'
 import { useWebAgentTasks } from '@/composables/useWebAgentTasks'
 import { getArtifact, type WebAgentArtifact, type WebAgentTask } from '@/api/webAgent'
 import webChatAPI, { type WebChatMessage, type WebChatOptions, type WebChatProject, type WebChatSession, type WebChatSource, type WebChatStreamHandlers, type WebChatTemplate } from '@/api/webChat'
@@ -141,7 +145,7 @@ let pendingSession:Promise<WebChatSession|null>|null=null
 const followOutput=ref(true)
 const showHome=computed(()=>!activeSessionId.value&&enabled.value&&!loading.value&&hasUsableModel.value)
 function onMessageScroll(){const el=messageListRef.value;if(el)followOutput.value=el.scrollHeight-el.scrollTop-el.clientHeight<100}
-async function goHome(){if(sending.value||agent.creating.value)return;workspaceSection.value='chat';taskMode.value='chat';await startDraftSession()}
+async function goHome(){if(sending.value||agent.creating.value)return;artifactSelection++;workspaceSection.value='chat';taskMode.value='chat';await startDraftSession()}
 async function chooseProject(project:WebChatProject){if(sending.value||agent.creating.value)return;projectFilter.value=project.id;await goHome()}
 function chooseShortcut(kind:string){setTaskMode(kind==='analysis'?'spreadsheet':kind as TaskMode);void nextTick(()=>document.querySelector<HTMLTextAreaElement>('.composer-input')?.focus())}
 const loading=ref(true), creatingSession=ref(false), sending=ref(false), savingSettings=ref(false), enabled=ref(false), sessionsOpen=ref(false), contextOpen=ref(false)
@@ -153,6 +157,7 @@ const activeSessionId=ref<number|null>(null), selectedGroupId=ref<number|null>(n
 const taskModes=['chat','slides','spreadsheet','document'] as const
 type TaskMode=typeof taskModes[number]
 const taskMode=ref<TaskMode>('chat'),selectedArtifact=ref<WebAgentArtifact|null>(null),sourceArtifact=ref<WebAgentArtifact|null>(null)
+const artifactLibrary=ref<InstanceType<typeof WebAgentArtifactLibrary>>(),libraryFiles=ref<WebAgentArtifact[]>([])
 const agent=useWebAgentTasks(activeSessionId,computed(()=>authStore.user?.id),computed(()=>Boolean(options.value.task_limits||options.value.tasks_enabled)))
 let artifactSelection=0
 const systemPrompt=ref(''), temperatureInput=ref(''), maxOutputTokens=ref(8192), messageListRef=ref<HTMLElement|null>(null)
@@ -207,7 +212,24 @@ watch(projectFilter,()=>{if(!activeSession.value)startDraftSession()})
 onMounted(()=>{void loadInitial()})
 onBeforeUnmount(()=>{selectionVersion++;artifactSelection++;abortController.value?.abort();if(agent.pending.value)clearPendingDocuments();else void discardPendingDocuments()})
 
-async function loadInitial(){loading.value=true;try{const[opts,list]=await Promise.all([webChatAPI.getOptions(),webChatAPI.listSessions()]);options.value=opts;enabled.value=opts.enabled;sessions.value=list;selectedGroupId.value=opts.default_group_id??opts.groups[0]?.id??null;selectedModel.value=opts.default_model||opts.groups[0]?.models[0]?.name||'';await Promise.all([opts.projects_enabled?loadProjects():Promise.resolve(),opts.templates_enabled?loadTemplates():Promise.resolve()]);const requested=Number(route.query.session);if(requested>0){const target=list.find(s=>s.id===requested);if(target)await selectSession(target);else operationError.value=t('workspace.sessionUnavailable')}}catch(e){operationError.value=extractApiErrorMessage(e,t('workspace.loadFailed'))}finally{loading.value=false}}
+async function loadInitial(){
+ loading.value=true
+ const intent=selectionVersion
+ try{
+  const[opts,list]=await Promise.all([webChatAPI.getOptions(),webChatAPI.listSessions()])
+  options.value=opts;enabled.value=opts.enabled;sessions.value=list
+  selectedGroupId.value=opts.default_group_id??opts.groups[0]?.id??null;selectedModel.value=opts.default_model||opts.groups[0]?.models[0]?.name||''
+  await Promise.all([opts.projects_enabled?loadProjects():Promise.resolve(),opts.templates_enabled?loadTemplates():Promise.resolve()])
+  const requested=Number(route.query.session)
+  if(intent===selectionVersion&&Number.isSafeInteger(requested)&&requested>0){
+   const target=list.find(s=>s.id===requested)||await webChatAPI.getSession(requested)
+   if(intent!==selectionVersion)return
+   if(!sessions.value.some(s=>s.id===target.id))sessions.value.push(target)
+   await selectSession(target)
+  }
+ }catch(e){if(intent===selectionVersion)operationError.value=extractApiErrorMessage(e,t('workspace.loadFailed'))}
+ finally{loading.value=false}
+}
 async function refreshSessions(){sessions.value=await webChatAPI.listSessions().catch(()=>sessions.value)}
 async function loadProjects(){if(!options.value.projects_enabled)return;projects.value=await webChatAPI.listProjects().catch(()=>projects.value)}
 async function loadTemplates(){if(!options.value.templates_enabled)return;templates.value=await webChatAPI.listTemplates().catch(()=>templates.value)}
@@ -236,6 +258,7 @@ async function createSessionForCurrentSelection():Promise<WebChatSession|null>{
 }
 async function selectSession(session:WebChatSession){
  if(sending.value||agent.creating.value)return
+ artifactSelection++
  const version=++selectionVersion
  workspaceSection.value='chat';messagesLoading.value=true;operationError.value=''
  try{
@@ -278,8 +301,26 @@ async function send(){
 function setTaskMode(mode:TaskMode){taskMode.value=mode;if(sourceArtifact.value?.kind!==mode)sourceArtifact.value=null}
 async function refreshTaskOptions(){try{options.value=await webChatAPI.getOptions()}catch(e){operationError.value=extractApiErrorMessage(e)}}
 async function inspectArtifact(id:number){const version=++artifactSelection;try{const artifact=await getArtifact(id);if(version===artifactSelection)selectedArtifact.value=artifact}catch(e){if(version===artifactSelection)operationError.value=extractApiErrorMessage(e)}}
-function reviseArtifact(artifact:WebAgentArtifact){sourceArtifact.value=artifact;taskMode.value=artifact.kind;void nextTick(()=>document.querySelector<HTMLTextAreaElement>('.composer-input')?.focus())}
-function artifactDeleted(id:number){agent.markArtifactDeleted(id);if(selectedArtifact.value?.id===id)selectedArtifact.value=null;if(sourceArtifact.value?.id===id)sourceArtifact.value=null}
+function navigateWorkspace(section:'files'|'projects'){if(sending.value||agent.creating.value)return;artifactSelection++;selectedArtifact.value=null;workspaceSection.value=section;sessionsOpen.value=false}
+async function openArtifactConversation(artifact:WebAgentArtifact){
+ if(sending.value||agent.creating.value)return false
+ const version=++artifactSelection
+ try{
+  let session=sessions.value.find(s=>s.id===artifact.session_id)
+  if(!session){session=await webChatAPI.getSession(artifact.session_id);if(version!==artifactSelection)return false;sessions.value=[session,...sessions.value]}
+  const selection=selectSession(session),ticket=selectionVersion
+  await selection
+  const selected=ticket===selectionVersion&&activeSessionId.value===artifact.session_id&&workspaceSection.value==='chat'
+  if(selected)taskMode.value=artifact.kind
+  return selected
+ }catch(e){if(version===artifactSelection)operationError.value=extractApiErrorMessage(e);return false}
+}
+async function reviseArtifact(artifact:WebAgentArtifact){
+ if(workspaceSection.value!=='chat'||activeSessionId.value!==artifact.session_id){if(!await openArtifactConversation(artifact))return}
+ sourceArtifact.value=artifact;taskMode.value=artifact.kind;selectedArtifact.value=artifact
+ void nextTick(()=>document.querySelector<HTMLTextAreaElement>('.composer-input')?.focus())
+}
+function artifactDeleted(id:number){agent.markArtifactDeleted(id);artifactLibrary.value?.remove(id);libraryFiles.value=libraryFiles.value.filter(a=>a.id!==id);if(selectedArtifact.value?.id===id)selectedArtifact.value=null;if(sourceArtifact.value?.id===id)sourceArtifact.value=null}
 function acceptFileTask(task:WebAgentTask|null){if(!task)return;if(activeSessionId.value===task.session_id){if(draft.value.trim()===task.prompt)draft.value='';clearPendingDocuments();sourceArtifact.value=null}}
 async function createFileTask(content:string){
  const kind=taskMode.value,group=selectedGroupId.value,model=selectedModel.value,source=sourceArtifact.value,documents=pendingDocuments.value.map(d=>d.id)
@@ -338,6 +379,7 @@ async function scrollToBottom(){await nextTick();if(messageListRef.value&&follow
 
 <style scoped>
 .web-chat-shell{display:flex;flex:1;min-height:0;position:relative}
+.reference-library{border-top:1px solid var(--wa-line);padding-top:1rem;margin-top:2rem;font-size:.875rem}.reference-library summary{cursor:pointer;font-weight:600}.reference-library p{margin:.75rem 0;color:var(--wa-muted)}.reference-library button{display:inline-flex;gap:.5rem;align-items:center;padding:.4rem .7rem;margin:.25rem .5rem .25rem 0;border:1px solid var(--wa-line);border-radius:5px;min-height:2rem}
 .chat-capability-hint{font-size:.8125rem;color:var(--wa-muted);padding:.4rem 1.5rem}.task-context summary{cursor:pointer}
 .task-modebar{display:flex;flex-wrap:wrap;gap:.4rem;padding:.6rem 1.5rem;border-bottom:1px solid var(--wa-line)}.task-modebar button{font-size:.875rem;padding:.25rem .7rem;min-height:2rem;border-radius:5px;color:var(--wa-muted)}.task-modebar [aria-pressed=true]{background:var(--wa-soft);color:var(--wa-text);font-weight:600}.task-modebar button:active{background:var(--wa-active)}.task-context{padding:.5rem 1.5rem;font-size:.875rem;color:var(--wa-muted);border-bottom:1px solid var(--wa-line)}.task-context p+p{margin-top:.4rem}.task-context button{color:var(--wa-accent);margin-left:.5rem}.task-context [role=alert]{color:#b91c1c}
 .session-panel{width:15rem;flex-shrink:0;border-right:1px solid var(--wa-line);padding:1rem;display:flex;flex-direction:column;overflow-y:auto;gap:.5rem;background:var(--wa-bg)}

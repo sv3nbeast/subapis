@@ -216,6 +216,10 @@ export async function patchSession(sessionID: number, payload: WebChatSessionPat
   const { data } = await apiClient.patch<WebChatSession>(`/web-chat/sessions/${sessionID}`, payload)
   return data
 }
+export async function getSession(sessionID: number): Promise<WebChatSession> {
+  const { data } = await apiClient.get<WebChatSession>(`/web-chat/sessions/${sessionID}`)
+  return data
+}
 
 export async function createSession(payload: { group_id?: number; model?: string; project_id?: number | null; default_template_id?: number | null }): Promise<WebChatSession> {
   const { data } = await apiClient.post<WebChatSession>('/web-chat/sessions', payload)
@@ -362,6 +366,7 @@ export const webChatAPI = {
   listSessions,
   createSession,
   patchSession,
+  getSession,
   listMessages,
   deleteSession,
   streamMessage,

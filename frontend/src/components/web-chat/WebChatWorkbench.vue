@@ -6,7 +6,7 @@
       <nav :aria-label="t('workspace.navigation')">
         <button :class="{ active: section === 'chat' }" :disabled="busy" @click="$emit('home')">{{ t('workspace.home') }}</button>
         <button v-if="projectsEnabled" :class="{ active: section === 'projects' }" :disabled="busy" @click="$emit('navigate', 'projects')">{{ t('webChat.projects') }}</button>
-        <button v-if="filesEnabled && projectsEnabled" :class="{ active: section === 'files' }" :disabled="busy" @click="$emit('navigate', 'files')">{{ t('workspace.files') }}</button>
+        <button v-if="artifactsEnabled || (filesEnabled && projectsEnabled)" :class="{ active: section === 'files' }" :disabled="busy" @click="$emit('navigate', 'files')">{{ t('workspace.files') }}</button>
         <button v-if="templatesEnabled" :disabled="busy" @click="$emit('templates')">{{ t('workspace.assistants') }}</button>
       </nav>
       <RouterLink class="console-link" to="/dashboard">{{ t('workspace.console') }} <Icon name="arrowRight" size="sm" /></RouterLink>
@@ -18,7 +18,7 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
-defineProps<{ section: string; busy: boolean; projectsEnabled: boolean; filesEnabled: boolean; templatesEnabled: boolean }>()
+defineProps<{ section: string; busy: boolean; projectsEnabled: boolean; filesEnabled: boolean; templatesEnabled: boolean; artifactsEnabled?: boolean }>()
 defineEmits<{ home: []; navigate: [section: 'projects' | 'files']; templates: [] }>()
 const { t } = useI18n()
 </script>

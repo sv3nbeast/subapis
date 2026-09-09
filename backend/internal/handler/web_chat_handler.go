@@ -79,6 +79,19 @@ func (h *WebChatHandler) Options(c *gin.Context) {
 	response.Success(c, options)
 }
 
+func (h *WebChatHandler) GetSession(c *gin.Context) {
+	subject, id, ok := h.authSessionParam(c)
+	if !ok {
+		return
+	}
+	session, err := h.webChatService.GetSession(c.Request.Context(), subject.UserID, id)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, session)
+}
+
 func (h *WebChatHandler) ListSessions(c *gin.Context) {
 	subject, ok := middleware.GetAuthSubjectFromContext(c)
 	if !ok {

@@ -576,3 +576,42 @@ The full goal remains active; production/domain configuration is not authorized.
 
 Verdict: PASS for the exercised reference-intent correction; BLOCKED for release
 and overall goal completion pending remaining product and browser/live-flow gates.
+
+## Cross-conversation artifact library (eighth slice)
+
+Base: c25de7553. Previous turn was progress; this turn adds a missing product
+navigation flow rather than declaring the previous partial UI complete.
+
+- My files now shows owned artifacts across conversations, groups loaded versions
+  by lineage, supports type/loaded-result search and cursor-based earlier pages.
+  Search is explicitly labelled as searching loaded results, not the entire DB.
+- Generated artifacts are separate from project source documents. The artifact
+  entry no longer depends on reference-file/S3 storage being enabled.
+- Reuses the existing authenticated preview/download/version/delete pane from the
+  global library. Deletion updates both views; stale list responses cannot restore
+  a confirmed deletion. Errors preserve already loaded files for retry.
+- File-to-conversation navigation resolves the actual owned session, including
+  sessions outside the recent list. Added authenticated GET session endpoint and
+  API client; no client-supplied owner is trusted. Revision returns to that source
+  session before setting its source artifact, rather than submitting to whichever
+  conversation happened to be active.
+- Older direct session links also use owned lookup. Navigation freshness checks
+  prevent a delayed session lookup from overriding a newer session selection.
+
+Validation: 36 frontend tests pass, including cross-session listing, version
+grouping, paging failure/retry, user-switch stale-response exclusion, deletion
+staleness, file-to-session navigation and old-session lookup. Typecheck, targeted
+ESLint and production build pass. Full handler/routes packages pass (34.296s /
+1.780s), backend build and diff whitespace checks pass. No provider/gateway,
+scheduling, cache, charging or execution code changed in this slice.
+
+Apple Design informed compact controls and grouped working surfaces. Sites'
+existing-project/local-only path preserved Vue/Go and existing auth/persistence;
+no Site registration, external deployment or browser interaction was performed.
+The retained backend remains the earlier local runtime-v2 binary: the new session
+GET route and migration 237 require a refreshed local binary for a live canary.
+
+Goal remains active. Remaining audit includes actual browser acceptance (explicit
+browser-testing authorization is still needed under the selected Sites skill),
+local/live reference flows, assistant and product lifecycle scope, and history
+policy. Shared primary checkout, production and domain configuration are untouched.
