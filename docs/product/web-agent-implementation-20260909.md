@@ -410,3 +410,97 @@ the local gateway is accepting connections), then the MONO task/progress/artifac
 pane and full browser/local-gateway canary. Also retain the outstanding planned
 assistant/project/source-relevance and product lifecycle scope. Artifact quota is
 not a total database-history retention policy; history policy must be explicit.
+
+## Runtime wiring and task/artifact UI (sixth slice)
+
+Base: 0471156f6. Concrete progress, not a blocker/wait-only turn.
+
+- Added opt-in `web_agent` configuration (enabled, renderer URL/token, private
+  storage path). Wire provider attaches the real planner/executor/store and starts
+  the task service. Invalid optional configuration leaves ordinary chat/gateway
+  available. Generated Wire output was regenerated, not hand-maintained.
+- Startup readiness gates job claiming until local gateway and authenticated
+  renderer health succeed. Renderer health now checks its dedicated token and
+  protocol/kinds. A known active render is not marked unhealthy by a busy probe.
+  Shutdown stops Agent work/maintenance before shared resources close.
+- Options report availability and execution limits. File tasks accept an explicit
+  allowed group/model and freeze it without mutating another browser's conversation
+  target. Both gateway request ID and server-assigned client/billing correlation
+  ID are retained; gateway deduplication/auth behavior is not changed.
+- MONO workspace now has explicit Chat/Slides/Spreadsheet/Document modes, durable
+  task feed with actual execution events, cancel, model/usage/error details,
+  authenticated artifacts, version selection, revision requests and confirmed
+  single-version deletion. Desktop artifact pane is optional; mobile uses a
+  full-screen pane. Existing project/template/attachment APIs are preserved.
+- Session-scoped observation cancels on navigation without cancelling execution.
+  Local submission intents retain an operation key for an explicitly requested
+  retry after an ambiguous response/reload. Task state remains server-owned.
+  Guards cover stale fetches, deleted-file reappearance and history cursors.
+- Preview uses PDF.js 6.3.289 as a canvas/text renderer, no embedded document HTML,
+  PDF actions/forms or scripting layer. Page changes/closure cancel rendering and
+  destroy document resources. The PDF library is lazy-split from shared vendor
+  code (shared vendor restored to 337.93 kB; separate PDF chunk 483.12 kB).
+
+Verification and evidence:
+
+- 29 frontend tests pass across real workspace entry, explicit file submission,
+  intent recovery without automatic replay, user/session isolation, preview
+  cleanup and stale-page refusal, deletion confirmation, pagination, composer and
+  sources. Typecheck, targeted ESLint and production build pass. Existing build
+  warnings remain (large unrelated chunks, mixed imports, Browserslist age).
+- Agent service/handler tests pass under race detection, including readiness gate,
+  stop-before-ready, unavailable configuration isolation, authenticated health,
+  and task-only model override. Configuration/repository/handler/routes/migration
+  package tests pass; Wire generation and server build succeed.
+- Updated real-Office integration now uses `ConfigureAgent` rather than manually
+  assembling the executor. All six create/revision actions and repository/storage
+  integration tests pass under race detection (16.502s).
+- Full local application canary: authenticated disposable user, real gateway,
+  real usage accounting, private Office worker, native file/PDF bytes and SHA-256
+  download checks. Session 4, tasks/artifacts 7–12 all succeeded. Each task joins
+  to exactly one usage row via `client:` + generation.client_request_id, all for
+  local user 1 / group 2 / API key 1, 50 input / 30 output fixture tokens, test
+  actual cost 0.0000255000. Six file actions plus ordinary chat produced exactly
+  seven fixture requests; ordinary chat still delivered its done event.
+- The fixture is explicitly synthetic and loopback-only. These are not real
+  upstream model quality or production billing/latency samples.
+- Full service-package run is NOT all green: exactly two unchanged tests fail
+  after UTC midnight, both using `now.Add(-time.Hour)` as an assumed current daily
+  quota window. Same command and same failures were reproduced at clean base
+  0471156f6 in `/private/tmp/sub2api-webagent-baseline.MeyEvG`:
+  `TestCheckSubscriptionModelQuotaRejectsOnlyConfiguredModelAtLimit` and
+  `TestSubscriptionModelQuotaSurvivesAuthSnapshotForPreflightAndBilling`.
+  Calendar-day reset correctly sees that timestamp as yesterday. No subscription
+  billing source or those tests was changed to mask the failure. Classification:
+  strictly reproduced baseline failures, not a passing full-suite claim.
+
+Skills affected this work: gateway regression review added lifecycle/identity
+tests; Apple Design guided compact controls and on-demand panels; Sites existing-
+project/local-only workflow preserved Vue/Go/auth/storage rather than scaffolding
+or hosting elsewhere. Browser screenshot/DOM/click QA was not performed, per the
+Sites explicit-browser-testing boundary. Local preview request returned HTTP 200;
+`open_in_codex` was queued, not proof that the user saw an authenticated workspace.
+
+PDF references: [Mozilla examples](https://mozilla.github.io/pdf.js/examples/)
+and [Mozilla removal of the eval compiler/API option](https://bugzilla.mozilla.org/show_bug.cgi?id=2029536).
+The removed `isEvalSupported` option was not bypassed with a type cast.
+
+Local runtime now running:
+
+- Backend binary `/private/tmp/sub2api-webagent-dev.KY9nYY/server-agent-runtime-v2`,
+  retained session 65857, loopback 58080. Log `env=production` is its default label,
+  not a production deployment; it uses the isolated local database/Redis.
+- Authenticated Office container `sub2api-webagent-office-dev-20260909`, loopback
+  58082, private token held only in its owning local process environment.
+- Synthetic provider `scripts/web-agent-fixture.cjs`, session 41203, loopback 58081.
+- Frontend retained at loopback 3000/workspace. Local runtime artifacts live in
+  `/private/tmp/sub2api-webagent-dev.KY9nYY/artifacts` with the volume identity.
+- Original local backend/provider were stopped only after confirming their owned
+  processes. Shared primary checkout and production remained untouched.
+
+Review verdict: BLOCKED for production release/full-goal completion. No attributable
+P0/P1 was found in exercised paths, but live-provider/cache/latency validation and
+browser visual/interaction acceptance remain unproven. Ordinary gateway streaming,
+cache prefix and charge implementation were not changed. Remaining scope includes
+project source relevance, assistant/product lifecycle requirements, task-history
+policy and final requirement-by-requirement audit. Keep the complete goal active.

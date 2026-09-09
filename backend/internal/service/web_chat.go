@@ -48,6 +48,8 @@ type WebChatGroupOption struct {
 }
 
 type WebChatOptions struct {
+	TaskStatus       string                `json:"task_status,omitempty"`
+	TaskLimits       *WebAgentLimits       `json:"task_limits,omitempty"`
 	TasksEnabled     bool                  `json:"tasks_enabled"`
 	Enabled          bool                  `json:"enabled"`
 	Groups           []WebChatGroupOption  `json:"groups"`

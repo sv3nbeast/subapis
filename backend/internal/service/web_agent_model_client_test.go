@@ -46,6 +46,7 @@ func TestWebAgentModelUsesOwnedGatewayProtocolAndNormalTerminal(t *testing.T) {
 				require.Equal(t, "test-model", body["model"])
 				require.Equal(t, float64(4096), body["max_tokens"])
 				w.Header().Set("X-Request-Id", "gateway-request-id")
+				w.Header().Set("X-Client-Request-Id", "gateway-client-id")
 				if platform == PlatformAnthropic {
 					require.Equal(t, "/v1/messages", r.URL.Path)
 					require.Equal(t, "stable instructions", body["system"])
@@ -60,6 +61,7 @@ func TestWebAgentModelUsesOwnedGatewayProtocolAndNormalTerminal(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, `{"kind":"document"}`, out.Content)
 			require.Equal(t, "gateway-request-id", out.Generation.RequestID)
+			require.Equal(t, "gateway-client-id", out.Generation.ClientRequestID)
 			require.Equal(t, int64(7), out.Generation.Usage.CacheReadTokens)
 			require.Equal(t, int32(1), calls.Load())
 		})

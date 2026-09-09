@@ -42,8 +42,9 @@ type WebAgentArtifact struct {
 }
 
 type WebAgentGeneration struct {
-	RequestID string        `json:"request_id,omitempty"`
-	Usage     *WebChatUsage `json:"usage,omitempty"`
+	ClientRequestID string        `json:"client_request_id,omitempty"`
+	RequestID       string        `json:"request_id,omitempty"`
+	Usage           *WebChatUsage `json:"usage,omitempty"`
 }
 type WebAgentArtifactRepository interface {
 	// Publish atomically saves the artifact version and completes its live task.

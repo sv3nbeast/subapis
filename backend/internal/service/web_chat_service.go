@@ -167,6 +167,8 @@ func (s *WebChatService) Options(ctx context.Context, userID int64) (*WebChatOpt
 	options := &WebChatOptions{
 		Enabled:          true,
 		TasksEnabled:     s.agent.Ready(ctx),
+		TaskStatus:       s.agent.Availability(ctx),
+		TaskLimits:       WebAgentDefaultLimits(),
 		Groups:           groups,
 		ProjectsEnabled:  runtime.ProjectsEnabled,
 		TemplatesEnabled: runtime.TemplatesEnabled,

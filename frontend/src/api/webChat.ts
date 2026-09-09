@@ -43,6 +43,8 @@ export interface WebChatGroupOption {
 
 export interface WebChatOptions {
   tasks_enabled?: boolean
+  task_status?: 'ready' | 'starting' | 'unavailable' | 'disabled' | 'not_configured'
+  task_limits?: { max_active_tasks: number; max_model_calls: number; max_input_bytes: number; max_output_tokens: number; max_artifact_bytes: number; deadline_seconds: number }
   enabled: boolean
   groups: WebChatGroupOption[]
   default_group_id?: number

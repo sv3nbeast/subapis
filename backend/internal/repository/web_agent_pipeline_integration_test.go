@@ -20,11 +20,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
 
 type pipelineChatRepo struct{ service.WebChatRepository }
+type pipelineApplicationRepo struct {
+	pipelineChatRepo
+	service.WebAgentRepository
+	service.WebAgentArtifactRepository
+	service.WebAgentStorageRepository
+}
 
 func (pipelineChatRepo) GetSession(_ context.Context, user, id int64) (*service.WebChatSession, error) {
 	if user != 1 || id != 2 {
@@ -73,6 +80,7 @@ func TestWebAgentRealOfficePipelineAndRevision(t *testing.T) {
 	defer readyCancel()
 	for {
 		request, _ := http.NewRequestWithContext(readyCtx, http.MethodGet, endpoint+"/health", nil)
+		request.Header.Set("Authorization", "Bearer "+token)
 		response, e := (&http.Client{Timeout: time.Second}).Do(request)
 		if e == nil {
 			response.Body.Close()
@@ -90,6 +98,10 @@ func TestWebAgentRealOfficePipelineAndRevision(t *testing.T) {
 	artifacts := NewWebChatRepository(db).(service.WebAgentArtifactRepository)
 	var calls atomic.Int32
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/health" {
+			w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
 		n := calls.Add(1)
 		if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer local-owned-key" {
 			http.Error(w, "wrong fixture identity", 400)
@@ -140,18 +152,13 @@ func TestWebAgentRealOfficePipelineAndRevision(t *testing.T) {
 	require.NoError(t, err)
 	port, err := strconv.Atoi(u.Port())
 	require.NoError(t, err)
-	model, err := service.NewWebAgentModelClient(port)
-	require.NoError(t, err)
-	chat := service.NewWebChatService(pipelineChatRepo{}, pipelineKeys{}, pipelineKeys{}, pipelineCatalog{}, pipelineSettings{})
-	renderer, err := service.NewWebAgentOfficeClient(endpoint, token)
-	require.NoError(t, err)
-	store, err := service.NewWebAgentFileStore(filepath.Join(t.TempDir(), "private-artifacts"))
-	require.NoError(t, err)
-	executor := service.NewWebAgentOfficeExecutor(service.NewWebAgentModelPlanner(chat, model), renderer, store, artifacts)
-	worker := service.NewWebAgentService(tasks, chat, executor)
-	worker.Start()
-	t.Cleanup(worker.Stop)
-	readerService := service.NewWebAgentArtifactService(artifacts, chat, store)
+	repo := &pipelineApplicationRepo{WebAgentRepository: tasks, WebAgentArtifactRepository: artifacts, WebAgentStorageRepository: NewWebChatRepository(db).(service.WebAgentStorageRepository)}
+	chat := service.NewWebChatService(repo, pipelineKeys{}, pipelineKeys{}, pipelineCatalog{}, pipelineSettings{})
+	require.NoError(t, chat.ConfigureAgent(config.WebAgentConfig{Enabled: true, RendererURL: endpoint, RendererToken: token, StoragePath: filepath.Join(t.TempDir(), "private-artifacts")}, port))
+	t.Cleanup(chat.StopAgent)
+	worker := chat.Agent()
+	require.Eventually(t, func() bool { return worker.Ready(context.Background()) }, 5*time.Second, 10*time.Millisecond)
+	readerService := chat.Artifacts()
 	for kindIndex, kind := range []string{"document", "slides", "spreadsheet"} {
 		var previous *service.WebAgentArtifact
 		for i := 0; i < 2; i++ {

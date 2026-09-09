@@ -125,6 +125,7 @@ func provideCleanup(
 	statusProbeService *service.StatusProbeService,
 	channelMonitorRunner *service.ChannelMonitorRunner,
 	webChatDocuments *service.WebChatDocumentService,
+	webChat *service.WebChatService,
 	quotaFlusher *service.UserPlatformQuotaUsageFlusher,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
@@ -187,6 +188,9 @@ func provideCleanup(
 				return nil
 			}},
 			{"WebChatDocumentService", func() error {
+				if webChat != nil {
+					webChat.StopAgent()
+				}
 				if webChatDocuments != nil {
 					webChatDocuments.Stop()
 				}

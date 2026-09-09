@@ -42,7 +42,9 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(status, 413)
         status, _ = self.request("POST", "/render", '{"kind":"shell","code":"do not execute"}', headers)
         self.assertEqual(status, 422)
-        status, value = self.request("GET", "/health")
+        status, _ = self.request("GET", "/health")
+        self.assertEqual(status, 401)
+        status, value = self.request("GET", "/health", headers=headers)
         self.assertEqual(status, 200)
         self.assertEqual(value["protocol_version"], 1)
 

@@ -106,7 +106,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	webChatDocumentRepository := repository.NewWebChatDocumentRepository(db)
 	webChatDocumentStoreFactory := repository.NewWebChatDocumentStoreFactory()
 	webChatDocumentService := service.ProvideWebChatDocumentService(webChatDocumentRepository, settingRepository, secretEncryptor, webChatDocumentStoreFactory)
-	webChatService := service.ProvideWebChatService(webChatRepository, webChatAPIKeyRepository, apiKeyService, channelService, settingService, webChatDocumentService)
+	webChatService := service.ProvideWebChatService(webChatRepository, webChatAPIKeyRepository, apiKeyService, channelService, settingService, webChatDocumentService, configConfig)
 	webChatHandler := handler.NewWebChatHandler(webChatService, webChatDocumentService, configConfig)
 	usageLogRepository := repository.NewUsageLogRepository(client, db)
 	usageService := service.NewUsageService(usageLogRepository, userRepository, client, apiKeyAuthCacheInvalidator)
@@ -361,7 +361,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	channelMonitorQuotaFetcher := service.NewChannelMonitorQuotaFetcher(accountUsageService, cnProviderQuotaService, cnProviderBalanceService, accountRepository, configConfig)
 	channelMonitorRunner := service.ProvideChannelMonitorRunner(channelMonitorService, settingService, channelMonitorQuotaFetcher)
 	userPlatformQuotaUsageFlusher := service.ProvideUserPlatformQuotaUsageFlusher(configConfig, billingCache, serviceUserPlatformQuotaRepository, timingWheelService)
-	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, cnProviderBalanceCheckService, openAICodexVersionSyncService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, kiroOAuthService, antigravityGatewayService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, backupService, paymentOrderExpiryService, invoiceService, statusProbeService, channelMonitorRunner, webChatDocumentService, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, ollamaCloudUsageService, auditLogService, openAIQuotaAutoResetService, promptService, pluginManager)
+	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, cnProviderBalanceCheckService, openAICodexVersionSyncService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, kiroOAuthService, antigravityGatewayService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, backupService, paymentOrderExpiryService, invoiceService, statusProbeService, channelMonitorRunner, webChatDocumentService, webChatService, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, ollamaCloudUsageService, auditLogService, openAIQuotaAutoResetService, promptService, pluginManager)
 	application := &Application{
 		Server:        httpServer,
 		PromptAudit:   promptService,
@@ -442,6 +442,7 @@ func provideCleanup(
 	statusProbeService *service.StatusProbeService,
 	channelMonitorRunner *service.ChannelMonitorRunner,
 	webChatDocuments *service.WebChatDocumentService,
+	webChat *service.WebChatService,
 	quotaFlusher *service.UserPlatformQuotaUsageFlusher,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
@@ -503,6 +504,9 @@ func provideCleanup(
 				return nil
 			}},
 			{"WebChatDocumentService", func() error {
+				if webChat != nil {
+					webChat.StopAgent()
+				}
 				if webChatDocuments != nil {
 					webChatDocuments.Stop()
 				}

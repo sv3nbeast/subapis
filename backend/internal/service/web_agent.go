@@ -65,6 +65,8 @@ type WebAgentTaskEvent struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 type WebAgentCreateRequest struct {
+	GroupID          *int64  `json:"group_id,omitempty"`
+	Model            string  `json:"model,omitempty"`
 	SourceArtifactID *int64  `json:"source_artifact_id,omitempty"`
 	Kind             string  `json:"kind"`
 	Prompt           string  `json:"prompt"`
@@ -92,6 +94,13 @@ func (t WebAgentTask) Terminal() bool {
 	return false
 }
 func normalizeWebAgentRequest(req WebAgentCreateRequest) (WebAgentCreateRequest, error) {
+	if req.GroupID != nil && *req.GroupID <= 0 {
+		return req, ErrWebAgentInvalid
+	}
+	req.Model = strings.TrimSpace(req.Model)
+	if len(req.Model) > 200 {
+		return req, ErrWebAgentInvalid
+	}
 	if req.SourceArtifactID != nil && *req.SourceArtifactID <= 0 {
 		return req, ErrWebAgentInvalid
 	}

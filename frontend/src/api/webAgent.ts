@@ -28,6 +28,8 @@ export interface WebAgentTaskEvent {
   created_at: string
 }
 export interface WebAgentCreateRequest {
+  group_id?: number
+  model?: string
   kind: WebAgentTaskKind
   prompt: string
   document_ids?: number[]

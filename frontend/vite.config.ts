@@ -114,6 +114,8 @@ export default defineConfig(({ mode }) => {
          */
         manualChunks(id: string) {
           if (id.includes('node_modules')) {
+            // Private file previews load this only when an artifact is opened.
+            if (id.includes('/pdfjs-dist/')) return 'vendor-pdf-preview'
             // Vue 核心库
             if (
               id.includes('/vue/') ||

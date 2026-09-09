@@ -30,6 +30,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if not secrets.compare_digest(self.headers.get("Authorization", "").encode(), ("Bearer " + self.server.token).encode()):
+            self.respond(401, {"code": "unauthorized"})
+            return
         if self.path != "/health":
             self.respond(404, {"code": "not_found"})
             return

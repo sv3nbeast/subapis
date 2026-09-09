@@ -58,15 +58,21 @@ func (c *WebAgentModelClient) Generate(ctx context.Context, session *WebChatSess
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "SubAPIs-WebAgent/1.0")
+	result := &WebAgentModelOutput{Generation: &WebAgentGeneration{}}
 	if anthropic {
 		req.Header.Set("Anthropic-Version", "2023-06-01")
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, webAgentModelTransportFailure("model_request_failed", fmt.Errorf("task model request failed: %w", err))
+		return result, webAgentModelTransportFailure("model_request_failed", fmt.Errorf("task model request failed: %w", err))
 	}
 	defer resp.Body.Close()
-	result := &WebAgentModelOutput{Generation: &WebAgentGeneration{RequestID: resp.Header.Get("X-Request-Id")}}
+	result.Generation.RequestID = resp.Header.Get("X-Request-Id")
+	// The gateway assigns its own correlation ID for billing. Do not substitute
+	// an incoming caller-selected ID or change gateway deduplication semantics.
+	if id := resp.Header.Get("X-Client-Request-Id"); len(id) <= 256 {
+		result.Generation.ClientRequestID = id
+	}
 	if result.Generation.RequestID == "" {
 		result.Generation.RequestID = resp.Header.Get("Request-Id")
 	}

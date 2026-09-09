@@ -7,12 +7,14 @@ import WebChatHome from '@/components/web-chat/WebChatHome.vue'
 const mocks=vi.hoisted(()=>({
  query:{} as Record<string,string>,
  api:{getOptions:vi.fn(),listSessions:vi.fn(),listProjects:vi.fn(),listTemplates:vi.fn(),listMessages:vi.fn(),createSession:vi.fn(),streamMessage:vi.fn()},
+ agent:{listTasks:vi.fn(),listArtifacts:vi.fn(),getTaskEvents:vi.fn(),createTask:vi.fn(),cancelTask:vi.fn(),getArtifact:vi.fn(),getArtifactVersions:vi.fn(),getArtifactBlob:vi.fn(),deleteArtifact:vi.fn()},
  replace:vi.fn().mockResolvedValue(undefined),
 }))
 vi.mock('@/api/webChat',()=>({default:mocks.api}))
+vi.mock('@/api/webAgent',()=>({...mocks.agent,isTaskTerminal:(status:string)=>['succeeded','failed','cancelled','interrupted'].includes(status)}))
 vi.mock('@/stores/auth',()=>({useAuthStore:()=>({user:{id:3,username:'Local test'}})}))
 vi.mock('vue-router',()=>({useRoute:()=>({query:mocks.query}),useRouter:()=>({replace:mocks.replace})}))
-vi.mock('vue-i18n',()=>({useI18n:()=>({t:(key:string)=>key,locale:ref('zh')})}))
+vi.mock('vue-i18n',()=>({useI18n:()=>({t:(key:string)=>key,te:()=>false,locale:ref('zh')})}))
 vi.mock('@/composables/useWebChatDocuments',()=>({useWebChatDocuments:()=>({
  pendingDocuments:ref([]),failedAttachments:ref([]),attachmentState:ref(''),
  uploadTemporaryDocuments:vi.fn(),retryFailedAttachment:vi.fn(),removePendingDocument:vi.fn(),
@@ -23,11 +25,16 @@ const message=(id:number,sessionID:number,content:string)=>({id,session_id:sessi
 function render(){return mount(WebChatView,{global:{stubs:{
  RouterLink:{template:'<a><slot /></a>'},
  WebChatProjectDialog:true,WebChatTemplateDialog:true,WebChatKnowledgeLibrary:true,
+ WebAgentPdfPreview:true,
  BaseDialog:{props:['show'],template:'<div v-if="show"><slot /></div>'},
 }}})}
 beforeEach(()=>{
  vi.clearAllMocks()
  localStorage.clear()
+ sessionStorage.clear()
+ mocks.agent.listTasks.mockResolvedValue({items:[],next_before:0})
+ mocks.agent.listArtifacts.mockResolvedValue({items:[],next_before:0})
+ mocks.agent.getTaskEvents.mockResolvedValue({items:[],next_after:0})
  mocks.query={}
  mocks.api.getOptions.mockResolvedValue({enabled:true,groups:[{id:1,name:'test',platform:'openai',models:[{name:'test-model'}]}],projects_enabled:true,files_enabled:true,templates_enabled:true,history_enabled:true,file_limits:{}})
  mocks.api.listSessions.mockResolvedValue([session(1),session(2)])
@@ -72,6 +79,19 @@ describe('MONO workspace real entry',()=>{
   expect(mocks.api.streamMessage).toHaveBeenCalledTimes(1)
   expect((wrapper.find('.composer-input').element as HTMLTextAreaElement).value).toBe('preserve my task')
   expect(wrapper.find('[role="alert"]').text()).toContain('wire failed')
+  wrapper.unmount()
+ })
+ it('submits an explicit file task instead of sending a text-only chat request',async()=>{
+  const options=await mocks.api.getOptions();mocks.api.getOptions.mockResolvedValue({...options,tasks_enabled:true})
+  mocks.agent.createTask.mockResolvedValue({id:20,session_id:3,kind:'document',prompt:'create my document',model:'test-model',status:'queued'})
+  const wrapper=render();await flushPromises()
+  await wrapper.findAll('.task-modebar button')[3]!.trigger('click')
+  await wrapper.find('.composer-input').setValue('create my document')
+  await wrapper.find('.composer').trigger('submit');await flushPromises()
+  expect(mocks.api.streamMessage).not.toHaveBeenCalled()
+  expect(mocks.agent.createTask).toHaveBeenCalledWith(3,expect.objectContaining({kind:'document',prompt:'create my document',group_id:1,model:'test-model'}))
+  expect((wrapper.find('.composer-input').element as HTMLTextAreaElement).value).toBe('')
+  expect(wrapper.text()).toContain('webAgent.queued')
   wrapper.unmount()
  })
 })

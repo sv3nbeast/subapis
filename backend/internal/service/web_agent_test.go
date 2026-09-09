@@ -258,3 +258,25 @@ func TestWebAgentStartedWorkerStopsWithoutReplaying(t *testing.T) {
 	svc.Start()
 	require.False(t, svc.Ready(context.Background()), "a stopped runtime must be explicitly rebuilt, not replay old work")
 }
+
+type agentAlternateCatalog struct{}
+
+func (agentAlternateCatalog) ListDisplayModelsForGroup(context.Context, int64, string) []SupportedModel {
+	return []SupportedModel{{Name: "test-model"}, {Name: "alternate-model"}}
+}
+func TestWebAgentTaskFreezesExplicitModelWithoutChangingConversation(t *testing.T) {
+	repo := &agentTaskStub{}
+	chat := NewWebChatService(agentChatStub{}, nil, agentKeyStub{}, agentAlternateCatalog{}, agentRuntimeStub{})
+	svc := NewWebAgentService(repo, chat, agentExecutorFunc(func(context.Context, *WebAgentTask, func(string, string) error) (*WebAgentArtifact, error) {
+		return agentTestArtifact(), nil
+	}))
+	svc.running.Store(true)
+	group := int64(7)
+	task, err := svc.Create(context.Background(), 1, 2, WebAgentCreateRequest{Kind: "document", Prompt: "report", Model: "alternate-model", GroupID: &group, IdempotencyKey: "explicit-model-selection"})
+	require.NoError(t, err)
+	require.Equal(t, "alternate-model", task.Model)
+	require.Contains(t, string(task.SessionSnapshot), `"model":"alternate-model"`)
+	session, err := chat.GetSession(context.Background(), 1, 2)
+	require.NoError(t, err)
+	require.Equal(t, "test-model", session.Model)
+}

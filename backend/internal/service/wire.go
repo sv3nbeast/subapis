@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"log/slog"
 	"os"
 	"time"
 
@@ -57,9 +58,14 @@ func ProvideWebChatDocumentService(repo WebChatDocumentRepository, settings Sett
 	return svc
 }
 
-func ProvideWebChatService(repo WebChatRepository, keyRepo WebChatAPIKeyRepository, keys webChatAPIKeyManager, catalog webChatModelCatalog, settings webChatRuntimeReader, documents *WebChatDocumentService) *WebChatService {
+func ProvideWebChatService(repo WebChatRepository, keyRepo WebChatAPIKeyRepository, keys webChatAPIKeyManager, catalog webChatModelCatalog, settings webChatRuntimeReader, documents *WebChatDocumentService, cfg *config.Config) *WebChatService {
 	svc := NewWebChatService(repo, keyRepo, keys, catalog, settings)
 	svc.SetDocumentService(documents)
+	if cfg != nil {
+		if err := svc.ConfigureAgent(cfg.WebAgent, cfg.Server.Port); err != nil {
+			slog.Warn("web_agent.configuration_unavailable")
+		}
+	}
 	return svc
 }
 

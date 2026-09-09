@@ -42,7 +42,48 @@ func NewWebAgentService(repo WebAgentRepository, chat *WebChatService, executor 
 func (s *WebAgentService) Ready(ctx context.Context) bool {
 	return s.configured(ctx) && s.running.Load()
 }
+
+type WebAgentLimits struct {
+	MaxActiveTasks   int `json:"max_active_tasks"`
+	MaxModelCalls    int `json:"max_model_calls"`
+	MaxInputBytes    int `json:"max_input_bytes"`
+	MaxOutputTokens  int `json:"max_output_tokens"`
+	MaxArtifactBytes int `json:"max_artifact_bytes"`
+	DeadlineSeconds  int `json:"deadline_seconds"`
+}
+
+func WebAgentDefaultLimits() *WebAgentLimits {
+	return &WebAgentLimits{WebAgentMaxActiveTasks, 1, webAgentModelMaxInputBytes, 32768, webAgentArtifactMaxBytes, int(WebAgentTaskTimeout / time.Second)}
+}
+func (s *WebAgentService) Availability(ctx context.Context) string {
+	if s == nil || s.executor == nil || s.chat == nil {
+		return "not_configured"
+	}
+	if !s.chat.FeatureEnabled(ctx) {
+		return "disabled"
+	}
+	if !s.running.Load() {
+		s.mu.Lock()
+		done := s.done
+		s.mu.Unlock()
+		select {
+		case <-done:
+			return "unavailable"
+		default:
+			return "starting"
+		}
+	}
+	if !s.Ready(ctx) {
+		return "unavailable"
+	}
+	return "ready"
+}
 func (s *WebAgentService) configured(ctx context.Context) bool {
+	if s != nil && s.executor != nil {
+		if health, ok := s.executor.(interface{ Available() bool }); ok && !health.Available() {
+			return false
+		}
+	}
 	return s != nil && s.repo != nil && s.chat != nil && s.chat.repo != nil &&
 		s.chat.apiKeyService != nil && s.chat.channelService != nil &&
 		s.executor != nil && s.publisher != nil && s.chat.FeatureEnabled(ctx)
@@ -71,9 +112,22 @@ func (s *WebAgentService) Create(ctx context.Context, userID, sessionID int64, i
 	if err != nil {
 		return nil, err
 	}
-	if _, _, err = s.chat.validateGroupModel(ctx, userID, session.GroupID, session.Model); err != nil {
+	groupID, modelName := session.GroupID, session.Model
+	if req.GroupID != nil {
+		groupID = *req.GroupID
+	}
+	if req.Model != "" {
+		modelName = req.Model
+	}
+	group, model, err := s.chat.validateGroupModel(ctx, userID, groupID, modelName)
+	if err != nil {
 		return nil, err
 	}
+	// File jobs can use a different model without racing another browser's
+	// conversation target. Freeze the explicit selection in this task only.
+	copySession := *session
+	session = &copySession
+	session.GroupID, session.Model, session.Platform = group.ID, model.Name, group.Platform
 	messages, err := s.chat.buildContextMessages(ctx, userID, sessionID)
 	if err != nil {
 		return nil, err
@@ -85,7 +139,7 @@ func (s *WebAgentService) Create(ctx context.Context, userID, sessionID int64, i
 	if err != nil {
 		return nil, err
 	}
-	groupID := session.GroupID
+	groupID = session.GroupID
 	return s.repo.CreateTask(ctx, &WebAgentTask{UserID: userID, SessionID: sessionID, GroupID: &groupID,
 		Model: session.Model, Kind: req.Kind, Prompt: req.Prompt, DocumentIDs: req.DocumentIDs,
 		SourceArtifactID: req.SourceArtifactID,
@@ -140,7 +194,6 @@ func (s *WebAgentService) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
 	s.done = make(chan struct{})
-	s.running.Store(true)
 	go func() {
 		// Expiry must not wait behind a long-running task. It never requeues
 		// interrupted execution and every sweep is bounded in the repository.
@@ -172,6 +225,15 @@ func (s *WebAgentService) Start() {
 			}
 		}()
 		defer func() { cancel(); <-cleanupDone; s.running.Store(false); close(s.done) }()
+		if gate, ok := s.executor.(interface{ WaitReady(context.Context) error }); ok {
+			if err := gate.WaitReady(ctx); err != nil {
+				return
+			}
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		s.running.Store(true)
 		for {
 			if ctx.Err() != nil {
 				return

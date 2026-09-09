@@ -66,6 +66,7 @@ const DefaultUpstreamResponseReadMaxBytes int64 = 128 * 1024 * 1024
 const DefaultModelsListReadMaxBytes int64 = 8 * 1024 * 1024
 
 type Config struct {
+	WebAgent                WebAgentConfig                `mapstructure:"web_agent"`
 	Server                  ServerConfig                  `mapstructure:"server"`
 	Log                     LogConfig                     `mapstructure:"log"`
 	CORS                    CORSConfig                    `mapstructure:"cors"`
@@ -2105,6 +2106,10 @@ func setDefaults() {
 	_ = viper.BindEnv("security.forwarded_client_ip_headers", "SECURITY_FORWARDED_CLIENT_IP_HEADERS")
 	// H2C 默认配置
 	viper.SetDefault("server.h2c.enabled", false)
+	viper.SetDefault("web_agent.enabled", false)
+	viper.SetDefault("web_agent.renderer_url", "")
+	viper.SetDefault("web_agent.renderer_token", "")
+	viper.SetDefault("web_agent.storage_path", "")
 	viper.SetDefault("server.h2c.max_concurrent_streams", uint32(50))      // 50 个并发流
 	viper.SetDefault("server.h2c.idle_timeout", 75)                        // 75 秒
 	viper.SetDefault("server.h2c.max_read_frame_size", 1<<20)              // 1MB（够用）

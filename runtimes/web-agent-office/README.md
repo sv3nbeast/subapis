@@ -6,10 +6,9 @@ in `schema.py`. It does not call models, fetch URLs, execute model-authored code
 accept uploaded Office archives, access gateway credentials or write to the
 gateway's database. Native chart data remains editable.
 
-Status: renderer and artifact persistence slice only. The main application's
-task executor remains disabled until model planning, budgets, artifact-backed
-completion and storage lifecycle are wired. Do not advertise full Agent execution
-from this worker's health response alone.
+Status: model planning, artifact-backed execution, storage lifecycle and startup
+wiring are implemented. The main application's Agent runtime is opt-in and
+defaults off. Do not advertise full Agent execution from worker health alone.
 
 ## Deployment boundary
 
@@ -33,7 +32,8 @@ from this worker's health response alone.
 
 ## HTTP contract
 
-`GET /health` returns protocol version 1 and supported kinds. It describes this
+`GET /health` requires the renderer Bearer token and returns protocol version 1
+and supported kinds. It describes this
 worker only. One render runs at a time, so a busy worker may delay health checks.
 
 `POST /render` requires `Authorization: Bearer <dedicated token>` and a bounded
@@ -145,6 +145,30 @@ and clears their private specification/title, retaining a version tombstone so
 deleted version numbers are not reused. The ownership journal intentionally
 outlives user/session/task deletion until the physical files have been removed.
 
-The main application still needs runtime configuration/readiness/shutdown wiring
-and the MONO task/preview UI binding. These storage mechanisms alone do not enable
-tasks in the default application factory.
+## Application configuration
+
+The optional runtime uses these configuration keys / environment variables:
+
+- `web_agent.enabled` / `WEB_AGENT_ENABLED` (default false).
+- `web_agent.renderer_url` / `WEB_AGENT_RENDERER_URL`: private renderer origin.
+- `web_agent.renderer_token` / `WEB_AGENT_RENDERER_TOKEN`: dedicated credential.
+- `web_agent.storage_path` / `WEB_AGENT_STORAGE_PATH`: private shared artifact volume.
+
+The ordinary web-chat feature flag and existing user/group/model permissions
+still apply. Invalid Agent configuration disables this feature without stopping
+ordinary gateway startup. The worker waits for local gateway and authenticated
+renderer readiness before claiming persisted work. Stop cancels the worker and
+maintenance before shared application resources close. A known active render is
+not classified as a health failure just because its single-slot server is busy.
+
+The MONO workspace now exposes explicit chat/file modes, durable execution state,
+version actions and a PDF.js canvas/text preview. No model-authored iframe or HTML
+preview is embedded. PDF assets are split from the shared initial application
+bundle. Local submission intent keeps the same operation key across an explicitly
+requested retry, while the server remains the task authority.
+
+For a complete local gateway canary, `scripts/web-agent-fixture.cjs` serves only
+synthetic loopback model responses. `scripts/web-agent-gateway-smoke.cjs` requires
+the disposable `webagent@localhost.test` identity, a marked local group, and tests
+the actual authenticated application endpoints. It does not authorize production
+deployment, external model charges, DNS changes or acceptance of legal terms.
