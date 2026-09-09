@@ -429,6 +429,10 @@ if [[ "${#WEB_AGENT_RENDERER_TOKEN}" -lt 32 ]]; then
   exit 1
 fi
 mkdir -p "${WEB_AGENT_STORAGE_HOST_PATH}"
+# The application image runs as UID/GID 1000.  A root-owned 0700 bind mount
+# passes Docker/renderer health checks but prevents the main process from
+# creating the store identity and artifact files, leaving Web Agent disabled.
+chown 1000:1000 "${WEB_AGENT_STORAGE_HOST_PATH}"
 chmod 700 "${WEB_AGENT_STORAGE_HOST_PATH}"
 
 if [[ -f "${OVERRIDE_FILE}" ]]; then
@@ -686,3 +690,10 @@ fi
 assert_container_env KIRO_CODE_EXECUTION_SOCKET "${KIRO_CODE_EXECUTION_SOCKET}"
 echo "--- container health endpoint ---"
 docker exec "${CONTAINER_ID}" wget -q -T 5 -S -O /dev/null http://localhost:8080/health
+if [[ "${WEB_AGENT_ENABLED}" == "true" ]]; then
+  echo "--- web agent storage access ---"
+  if ! docker exec "${CONTAINER_ID}" sh -lc 'test -d /app/web-agent-artifacts && test -w /app/web-agent-artifacts'; then
+    echo "Web Agent storage is not writable by the application user" >&2
+    exit 1
+  fi
+fi
