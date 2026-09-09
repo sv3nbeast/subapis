@@ -323,9 +323,9 @@ async function reviseArtifact(artifact:WebAgentArtifact){
 function artifactDeleted(id:number){agent.markArtifactDeleted(id);artifactLibrary.value?.remove(id);libraryFiles.value=libraryFiles.value.filter(a=>a.id!==id);if(selectedArtifact.value?.id===id)selectedArtifact.value=null;if(sourceArtifact.value?.id===id)sourceArtifact.value=null}
 function acceptFileTask(task:WebAgentTask|null){if(!task)return;if(activeSessionId.value===task.session_id){if(draft.value.trim()===task.prompt)draft.value='';clearPendingDocuments();sourceArtifact.value=null}}
 async function createFileTask(content:string){
- const kind=taskMode.value,group=selectedGroupId.value,model=selectedModel.value,source=sourceArtifact.value,documents=pendingDocuments.value.map(d=>d.id)
+ const kind=taskMode.value,group=selectedGroupId.value,model=selectedModel.value,source=sourceArtifact.value,template=activeTemplateId.value,documents=pendingDocuments.value.map(d=>d.id)
  if(kind==='chat'||!group)return
- try{const session=activeSession.value||await createSessionForCurrentSelection();if(!session)return;acceptFileTask(await agent.create({kind,prompt:content,group_id:group,model,document_ids:documents,...(source?{source_artifact_id:source.id}:{})}))}catch(e){operationError.value=extractApiErrorMessage(e)}
+ try{const session=activeSession.value||await createSessionForCurrentSelection();if(!session)return;acceptFileTask(await agent.create({kind,prompt:content,group_id:group,model,document_ids:documents,...(template?{template_id:template}:{}),...(source?{source_artifact_id:source.id}:{})}))}catch(e){operationError.value=extractApiErrorMessage(e)}
 }
 async function retryTaskSubmission(){try{acceptFileTask(await agent.retryPending())}catch(e){operationError.value=extractApiErrorMessage(e)}}
 async function cancelFileTask(id:number){try{await agent.cancel(id)}catch(e){operationError.value=extractApiErrorMessage(e)}}

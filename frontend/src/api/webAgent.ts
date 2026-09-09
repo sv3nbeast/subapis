@@ -28,6 +28,7 @@ export interface WebAgentTaskEvent {
   created_at: string
 }
 export interface WebAgentCreateRequest {
+  template_id?: number
   group_id?: number
   model?: string
   kind: WebAgentTaskKind

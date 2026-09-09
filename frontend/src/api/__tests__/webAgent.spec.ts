@@ -33,6 +33,11 @@ describe('durable task API', () => {
     await getArtifactVersions(12, 8)
     expect(api.get).toHaveBeenCalledWith('/web-chat/artifacts/12/versions', { params: { before: 8 }, signal: undefined })
   })
+  it('carries the selected prompt template as task metadata', async () => {
+    const request = { kind: 'document' as const, prompt: 'Create a report', template_id: 7, idempotency_key: 'template-action' }
+    await createTask(2, request)
+    expect(api.post).toHaveBeenCalledWith('/web-chat/sessions/2/tasks', request)
+  })
   it('fetches preview and downloads through the authenticated client and forwards aborts', async () => {
     const signal = new AbortController().signal
     const blob = new Blob(['%PDF-test'], { type: 'application/pdf' })
