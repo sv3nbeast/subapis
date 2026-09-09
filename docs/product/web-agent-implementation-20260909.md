@@ -692,3 +692,7 @@ Focused tests cover system/personal-owner acceptance, cross-user rejection,
 disabled-template rejection and metadata-only snapshots. Existing assistant
 library functionality is retained; this closes its permission/audit gap without
 pretending a template implements tool execution.
+
+The UI now also passes the selected template ID when submitting a file task, so
+the server-side ownership check and metadata snapshot are exercised by the same
+user action. The prompt body remains the user-edited text.
