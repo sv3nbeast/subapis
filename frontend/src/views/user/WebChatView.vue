@@ -1,5 +1,5 @@
 <template>
-  <WebChatWorkbench :section="workspaceSection" :busy="sending || creatingSession || agent.creating.value" :projects-enabled="options.projects_enabled" :files-enabled="options.files_enabled" :artifacts-enabled="Boolean(options.task_limits||options.tasks_enabled)" :templates-enabled="options.templates_enabled" @home="goHome" @navigate="navigateWorkspace" @templates="templateDialogOpen=true">
+  <WebChatWorkbench :section="workspaceSection" :busy="sending || creatingSession || agent.creating.value" :projects-enabled="options.projects_enabled" :files-enabled="options.files_enabled" :artifacts-enabled="artifactsEnabled" :templates-enabled="options.templates_enabled" @home="goHome" @navigate="navigateWorkspace" @templates="templateDialogOpen=true">
     <div class="web-chat-shell">
       <aside class="session-panel" :class="{ 'session-panel-open': sessionsOpen }">
         <div class="sidebar-top"><button class="new-chat" :disabled="sending" @click="goHome"><Icon name="plus" size="sm" />{{ t('webChat.newChat') }}</button><button class="icon-button session-toggle" :aria-label="t('common.close')" @click="sessionsOpen=false"><Icon name="x" size="sm" /></button></div>
@@ -47,7 +47,7 @@
           <p v-if="agent.error.value" role="alert">{{ agent.error.value }}</p>
           <p v-if="agent.pending.value">{{ t('webAgent.pending') }} <button :disabled="agent.creating.value" @click="retryTaskSubmission">{{ t('webAgent.retrySubmission') }}</button></p>
         </div>
-        <WebAgentArtifactLibrary v-if="workspaceSection==='files'" ref="artifactLibrary" :enabled="Boolean(options.task_limits||options.tasks_enabled)" :user-id="authStore.user?.id" :sessions="sessions" @open="inspectArtifact" @conversation="openArtifactConversation" @loaded="libraryFiles=$event">
+        <WebAgentArtifactLibrary v-if="workspaceSection==='files'" ref="artifactLibrary" :enabled="artifactsEnabled" :user-id="authStore.user?.id" :sessions="sessions" @open="inspectArtifact" @conversation="openArtifactConversation" @loaded="libraryFiles=$event">
           <template v-if="options.files_enabled&&options.projects_enabled" #references><details class="reference-library"><summary>{{ t('webAgent.referenceLibrary') }}</summary><p>{{ t('workspace.filesHint') }}</p><button v-for="project in projects" :key="project.id" @click="openKnowledgeLibrary(project)"><Icon name="folder" size="sm" />{{ project.name }}</button><p v-if="!projects.length">{{ t('workspace.noProjects') }}</p></details></template>
         </WebAgentArtifactLibrary>
         <section v-else-if="workspaceSection==='projects'" class="projects-workspace">
@@ -158,6 +158,7 @@ const taskModes=['chat','slides','spreadsheet','document'] as const
 type TaskMode=typeof taskModes[number]
 const taskMode=ref<TaskMode>('chat'),selectedArtifact=ref<WebAgentArtifact|null>(null),sourceArtifact=ref<WebAgentArtifact|null>(null)
 const artifactLibrary=ref<InstanceType<typeof WebAgentArtifactLibrary>>(),libraryFiles=ref<WebAgentArtifact[]>([])
+const artifactsEnabled=computed(()=>agent.artifacts.value.length>0||Boolean(options.value.tasks_enabled)||['starting','ready','unavailable'].includes(options.value.task_status||''))
 const agent=useWebAgentTasks(activeSessionId,computed(()=>authStore.user?.id),computed(()=>Boolean(options.value.task_limits||options.value.tasks_enabled)))
 let artifactSelection=0
 const systemPrompt=ref(''), temperatureInput=ref(''), maxOutputTokens=ref(8192), messageListRef=ref<HTMLElement|null>(null)

@@ -36,7 +36,7 @@ beforeEach(()=>{
  mocks.agent.listArtifacts.mockResolvedValue({items:[],next_before:0})
  mocks.agent.getTaskEvents.mockResolvedValue({items:[],next_after:0})
  mocks.query={}
- mocks.api.getOptions.mockResolvedValue({enabled:true,groups:[{id:1,name:'test',platform:'openai',models:[{name:'test-model'}]}],projects_enabled:true,files_enabled:true,templates_enabled:true,history_enabled:true,file_limits:{}})
+ mocks.api.getOptions.mockResolvedValue({enabled:true,groups:[{id:1,name:'test',platform:'openai',models:[{name:'test-model'}]}],projects_enabled:true,files_enabled:true,templates_enabled:true,history_enabled:true,task_status:'ready',tasks_enabled:true,file_limits:{}})
  mocks.api.listSessions.mockResolvedValue([session(1),session(2)])
  mocks.api.listProjects.mockResolvedValue([])
  mocks.api.listTemplates.mockResolvedValue([])
@@ -50,6 +50,12 @@ describe('MONO workspace real entry',()=>{
   expect(wrapper.findComponent(WebChatHome).exists()).toBe(true)
   expect(mocks.api.listMessages).not.toHaveBeenCalled()
   expect(wrapper.text()).toContain('Session 1')
+  wrapper.unmount()
+ })
+ it('hides the artifact library entry when Agent is not configured',async()=>{
+  mocks.api.getOptions.mockResolvedValue({enabled:true,groups:[{id:1,name:'test',platform:'openai',models:[{name:'test-model'}]}],projects_enabled:false,files_enabled:false,templates_enabled:false,history_enabled:true,task_status:'not_configured',tasks_enabled:false,file_limits:{}})
+  const wrapper=render();await flushPromises()
+  expect(wrapper.findAll('.workbench-bar nav button').some(button=>button.text()==='workspace.files')).toBe(false)
   wrapper.unmount()
  })
  it('restores a conversation from its URL',async()=>{
