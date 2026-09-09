@@ -457,7 +457,7 @@ services:
       - web-agent-private
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health',headers={'Authorization':'Bearer '+os.environ['WEB_AGENT_RENDERER_TOKEN']},timeout=2)\""]
+      test: ["CMD-SHELL", "python -c \"import os,urllib.request; r=urllib.request.Request('http://127.0.0.1:8090/health',headers={'Authorization':'Bearer '+os.environ['WEB_AGENT_RENDERER_TOKEN']}); urllib.request.urlopen(r,timeout=2)\""]
       interval: 5s
       timeout: 3s
       retries: 20
