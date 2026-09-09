@@ -213,8 +213,10 @@ func (s *WebChatService) CreateSession(ctx context.Context, userID int64, req We
 			req.DefaultTemplateID = project.DefaultTemplateID
 		}
 	}
-	if req.DefaultTemplateID != nil && !s.runtime(ctx).TemplatesEnabled {
-		return nil, ErrWebChatTemplatesDisabled
+	if req.DefaultTemplateID != nil {
+		if _, err := s.usableTemplate(ctx, userID, *req.DefaultTemplateID); err != nil {
+			return nil, err
+		}
 	}
 	group, model, err := s.validateGroupModel(ctx, userID, req.GroupID, req.Model)
 	if err != nil {
@@ -362,11 +364,8 @@ func (s *WebChatService) PrepareSend(ctx context.Context, userID, sessionID int6
 		return nil, err
 	}
 	if req.TemplateID != nil {
-		if !s.runtime(ctx).TemplatesEnabled {
-			return nil, ErrWebChatTemplatesDisabled
-		}
-		if _, err := s.repo.GetTemplate(ctx, userID, *req.TemplateID, false); err != nil {
-			return nil, ErrWebChatTemplateNotFound
+		if _, err := s.usableTemplate(ctx, userID, *req.TemplateID); err != nil {
+			return nil, err
 		}
 	}
 	userMessage, assistantMessage, err := s.repo.CreateTurn(ctx, userID, session.ID, content, buildWebChatTitle(content), req.TemplateID)

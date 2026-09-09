@@ -65,6 +65,7 @@ type WebAgentTaskEvent struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 type WebAgentCreateRequest struct {
+	TemplateID       *int64  `json:"template_id,omitempty"`
 	GroupID          *int64  `json:"group_id,omitempty"`
 	Model            string  `json:"model,omitempty"`
 	SourceArtifactID *int64  `json:"source_artifact_id,omitempty"`
@@ -94,6 +95,9 @@ func (t WebAgentTask) Terminal() bool {
 	return false
 }
 func normalizeWebAgentRequest(req WebAgentCreateRequest) (WebAgentCreateRequest, error) {
+	if req.TemplateID != nil && *req.TemplateID <= 0 {
+		return req, ErrWebAgentInvalid
+	}
 	if req.GroupID != nil && *req.GroupID <= 0 {
 		return req, ErrWebAgentInvalid
 	}

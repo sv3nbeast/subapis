@@ -128,14 +128,23 @@ func (s *WebAgentService) Create(ctx context.Context, userID, sessionID int64, i
 	copySession := *session
 	session = &copySession
 	session.GroupID, session.Model, session.Platform = group.ID, model.Name, group.Platform
+	var selectedTemplate *WebAgentTemplateSnapshot
+	if req.TemplateID != nil {
+		template, err := s.chat.usableTemplate(ctx, userID, *req.TemplateID)
+		if err != nil {
+			return nil, err
+		}
+		selectedTemplate = &WebAgentTemplateSnapshot{ID: template.ID, Name: template.Name, UpdatedAt: template.UpdatedAt}
+	}
 	messages, err := s.chat.buildContextMessages(ctx, userID, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	snapshot, err := json.Marshal(struct {
-		Session  *WebChatSession     `json:"session"`
-		Messages []OpenAIChatMessage `json:"messages"`
-	}{session, messages})
+		Session  *WebChatSession           `json:"session"`
+		Messages []OpenAIChatMessage       `json:"messages"`
+		Template *WebAgentTemplateSnapshot `json:"template,omitempty"`
+	}{session, messages, selectedTemplate})
 	if err != nil {
 		return nil, err
 	}

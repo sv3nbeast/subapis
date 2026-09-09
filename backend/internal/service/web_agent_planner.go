@@ -35,8 +35,9 @@ func (p *WebAgentModelPlanner) Plan(ctx context.Context, task *WebAgentTask, sou
 		return nil, err
 	}
 	var snapshot struct {
-		Session  *WebChatSession     `json:"session"`
-		Messages []OpenAIChatMessage `json:"messages"`
+		Template *WebAgentTemplateSnapshot `json:"template,omitempty"`
+		Session  *WebChatSession           `json:"session"`
+		Messages []OpenAIChatMessage       `json:"messages"`
 	}
 	if json.Unmarshal(task.SessionSnapshot, &snapshot) != nil || snapshot.Session == nil {
 		return nil, ErrWebAgentInvalid
@@ -98,6 +99,7 @@ func (p *WebAgentModelPlanner) Plan(ctx context.Context, task *WebAgentTask, sou
 			plan.Generation = &WebAgentGeneration{}
 		}
 		plan.Generation.Sources = sources
+		plan.Generation.Template = snapshot.Template
 	}
 	if err != nil {
 		return plan, err
