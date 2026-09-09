@@ -577,6 +577,55 @@ The full goal remains active; production/domain configuration is not authorized.
 Verdict: PASS for the exercised reference-intent correction; BLOCKED for release
 and overall goal completion pending remaining product and browser/live-flow gates.
 
+## Artifact library and reference navigation (ninth slice)
+
+Base: 36ff52830. Added the missing “file-first” product flow without changing
+provider scheduling or chat streaming.
+
+- The global 我的文件 view lists owned generated artifacts across sessions, groups
+  the latest loaded version per lineage, filters by kind/title/file/session, and
+  loads earlier pages without replacing already loaded results.
+- Each artifact can open its authenticated preview/download/version pane, continue
+  editing from the selected version, delete only that version after confirmation,
+  or return to the original owned conversation. Sessions outside the recent list
+  are fetched through a new owner-checked GET endpoint; stale navigation results
+  cannot replace a newer selection.
+- Project source material remains a separate expandable section. Generated files
+  do not require reference-file storage to be enabled.
+- Added loading/error/empty states and 44px mobile hit targets; file preview and
+  version panels are full-screen on narrow screens. Existing MONO compact spacing,
+  reduced-motion and keyboard focus rules remain in force.
+- Source cards now identify explicit attachments versus automatically retrieved
+  excerpts, their included character count and truncation status. This prevents
+  users mistaking a budgeted excerpt for a complete file or model citation.
+
+Evidence:
+
+- 36 frontend tests pass in the preceding slice; after this library/navigation
+  change the full affected frontend set passes **36 tests in 8 files** (including
+  4 artifact-library tests and 7 workspace tests), plus typecheck, targeted ESLint
+  and production build. The build creates a lazy `vendor-pdf-preview` chunk.
+- Backend handler/routes, service and repository focused tests pass. Full affected
+  backend packages pass after the latest edits: service 177.022s, repository
+  1.692s, handler 34.383s, routes 1.650s, config 0.517s, migrations 0.022s.
+  `go build ./...` and `git diff --check` pass.
+- Local authenticated gateway canary remains valid: six Office task artifacts
+  (document/slides/spreadsheet create + revision), native files/PDF previews,
+  owner checks and ordinary chat completion. The local usage ledger shows one
+  row per task, matching user 1/group 2/key 1 and fixture 50/30 tokens. No hidden
+  model retry was observed.
+- Browser screenshot/DOM/click testing was not performed because the Sites skill
+  requires explicit browser-testing authorization. Local HTTP route 200, component
+  tests and build are not a visual browser acceptance claim.
+
+Unchanged baseline note: the two midnight-dependent subscription-model-quota tests
+still fail in the same clean base and are unrelated to Web Agent. They were not
+modified or masked. No production/domain action occurred.
+
+Review verdict: PASS for this artifact-library slice; overall goal remains active
+and release remains BLOCKED until browser/live-provider acceptance, history policy,
+assistant/product lifecycle completion, and final requirement audit are done.
+
 ## Cross-conversation artifact library (eighth slice)
 
 Base: c25de7553. Previous turn was progress; this turn adds a missing product
