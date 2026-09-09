@@ -631,6 +631,7 @@ const baseMessages = {
 
   // Common
   common: {
+    previous: '上一页',
     login: '登录',
     loading: '加载中...',
     submitting: '提交中...',
@@ -1733,6 +1734,7 @@ const baseMessages = {
   },
 
   webChat: {
+    selectModel: '请选择模型',
     eyebrow: '浏览器工作台',
     title: '网页对话',
     description: '无需配置 CLI，直接在控制台内使用可访问分组发起文本流式对话。',

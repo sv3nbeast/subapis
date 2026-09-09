@@ -658,6 +658,7 @@ const baseMessages = {
 
   // Common
   common: {
+    previous: 'Previous',
     loading: 'Loading...',
     submitting: 'Submitting...',
     justNow: 'just now',
@@ -1758,6 +1759,7 @@ const baseMessages = {
   },
 
   webChat: {
+    selectModel: 'Select a model',
     eyebrow: 'Browser Workbench',
     title: 'Web Chat',
     description: 'Use accessible groups for streaming text chat directly in the console without configuring CLI tools.',
