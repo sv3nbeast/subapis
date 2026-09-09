@@ -533,6 +533,7 @@ volumes:
 networks:
   sub2api-network:
     external: true
+    name: sub2api-deploy_sub2api-network
   web-agent-private:
     driver: bridge
     internal: true
