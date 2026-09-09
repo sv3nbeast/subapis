@@ -29,6 +29,11 @@ func TestWebChatExplicitIntentDoesNotInheritAutomaticSources(t *testing.T) {
 	_, err = db.Exec(string(migration))
 	require.NoError(t, err)
 	repo := NewWebChatDocumentRepository(db)
+	// The migration must be safe for startup replays/checksum verification.
+	secondMigration, err := os.ReadFile("../../migrations/237_web_chat_explicit_document_intent.sql")
+	require.NoError(t, err)
+	_, err = db.Exec(string(secondMigration))
+	require.NoError(t, err)
 	ctx := context.Background()
 	require.NoError(t, repo.LinkMessageDocuments(ctx, 1, 100, []int64{12, 10}))
 	require.NoError(t, repo.LinkMessageDocuments(ctx, 1, 100, []int64{12, 10}), "same attachment linkage is idempotent")
