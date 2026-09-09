@@ -162,6 +162,7 @@ const agent=useWebAgentTasks(activeSessionId,computed(()=>authStore.user?.id),co
 let artifactSelection=0
 const systemPrompt=ref(''), temperatureInput=ref(''), maxOutputTokens=ref(8192), messageListRef=ref<HTMLElement|null>(null)
 const abortController=ref<AbortController|null>(null)
+let taskOptionsTimer: ReturnType<typeof setTimeout> | undefined
 const {pendingDocuments,failedAttachments,attachmentState,uploadTemporaryDocuments,retryFailedAttachment,removePendingDocument,removeFailedAttachment,clearPendingDocuments,discardPendingDocuments}=useWebChatDocuments(async()=>activeSession.value||await createSessionForCurrentSelection(),key=>t(key))
 
 const activeSession=computed(()=>sessions.value.find(item=>item.id===activeSessionId.value)||null)
@@ -207,10 +208,14 @@ function sessionModelLabel(session: WebChatSession): string {
 watch(selectedGroupId,()=>{if(!selectedGroupModels.value.some(m=>m.name===selectedModel.value))selectedModel.value=selectedGroupModels.value[0]?.name||''})
 watch(draft,value=>localStorage.setItem(draftKey(activeSessionId.value),value))
 watch(activeSessionId,id=>{draft.value=localStorage.getItem(draftKey(id))||''})
+watch(()=>options.value.task_status,status=>{
+ clearTimeout(taskOptionsTimer)
+ if(status==='starting') taskOptionsTimer=setTimeout(()=>{void refreshTaskOptions()},2000)
+})
 watch(activeSessionId,()=>{artifactSelection++;selectedArtifact.value=null;sourceArtifact.value=null})
 watch(projectFilter,()=>{if(!activeSession.value)startDraftSession()})
 onMounted(()=>{void loadInitial()})
-onBeforeUnmount(()=>{selectionVersion++;artifactSelection++;abortController.value?.abort();if(agent.pending.value)clearPendingDocuments();else void discardPendingDocuments()})
+onBeforeUnmount(()=>{selectionVersion++;artifactSelection++;clearTimeout(taskOptionsTimer);abortController.value?.abort();if(agent.pending.value)clearPendingDocuments();else void discardPendingDocuments()})
 
 async function loadInitial(){
  loading.value=true

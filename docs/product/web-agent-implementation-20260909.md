@@ -678,6 +678,13 @@ browser-testing authorization is still needed under the selected Sites skill),
 local/live reference flows, assistant and product lifecycle scope, and history
 policy. Shared primary checkout, production and domain configuration are untouched.
 
+## Readiness refresh polish (twelfth slice)
+
+The workbench now automatically rechecks Agent capability once while the backend
+reports `starting`, instead of forcing users to press refresh. The timer is cleared
+on unmount and does not run during ordinary chat generation. Workspace tests,
+typecheck and targeted lint pass; this is a UI-state improvement only.
+
 ## Assistant/template execution boundary (eleventh slice)
 
 Audited the selected Assistant flow. Templates are prompt presets, not independent
