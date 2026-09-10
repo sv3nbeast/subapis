@@ -427,9 +427,11 @@ func formatReasoningEffortLabel(effort string) string {
 }
 
 // guardCSVCell neutralizes spreadsheet formula injection for free-text cells by
-// prefixing values that start with a formula trigger character.
+// prefixing values that start with a formula trigger character. A lone trigger
+// character (e.g. the "-" placeholder for an absent reasoning effort) cannot form
+// a formula and is left untouched so the export stays readable.
 func guardCSVCell(value string) string {
-	if value == "" {
+	if len(value) < 2 {
 		return value
 	}
 	switch value[0] {

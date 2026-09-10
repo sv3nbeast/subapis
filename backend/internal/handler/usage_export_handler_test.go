@@ -498,6 +498,7 @@ func TestUserUsageExport_GuardsSpreadsheetFormulaCells(t *testing.T) {
 	row := exportSampleLog(0)
 	row.APIKey = &service.APIKey{ID: 7, Name: `=HYPERLINK("http://evil")`}
 	row.RequestedModel = "-evil-model"
+	row.RequestedReasoningEffort = nil // renders the "-" placeholder, which must stay readable
 	endpoint := "@cmd"
 	row.InboundEndpoint = &endpoint
 	ip := "+1234"
@@ -512,7 +513,18 @@ func TestUserUsageExport_GuardsSpreadsheetFormulaCells(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	lines := exportCSVLines(t, rec.Body.Bytes())
 	require.Len(t, lines, 2)
-	require.Equal(t, `2026-03-08 00:00:00,"'=HYPERLINK(""http://evil"")",'-evil-model,XHigh,'@cmd,'+1234,Sync,Token,4057,101,278272,4,1,0.09288300,0.09288300,12,345`, lines[1])
+	require.Equal(t, `2026-03-08 00:00:00,"'=HYPERLINK(""http://evil"")",'-evil-model,-,'@cmd,'+1234,Sync,Token,4057,101,278272,4,1,0.09288300,0.09288300,12,345`, lines[1])
+}
+
+func TestGuardCSVCell(t *testing.T) {
+	require.Equal(t, "-", guardCSVCell("-"), "single trigger characters cannot form a formula")
+	require.Equal(t, "=", guardCSVCell("="))
+	require.Equal(t, "", guardCSVCell(""))
+	require.Equal(t, "'-1+1", guardCSVCell("-1+1"))
+	require.Equal(t, "'=SUM(A1)", guardCSVCell("=SUM(A1)"))
+	require.Equal(t, "'@cmd", guardCSVCell("@cmd"))
+	require.Equal(t, "'\tx", guardCSVCell("\tx"))
+	require.Equal(t, "gpt-5.4", guardCSVCell("gpt-5.4"))
 }
 
 func TestUserUsageExport_ZeroRowsWritesHeaderOnly(t *testing.T) {
