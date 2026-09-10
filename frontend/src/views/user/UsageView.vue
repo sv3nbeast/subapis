@@ -166,9 +166,26 @@
                 </button>
               </div>
             </div>
-            <button v-if="activeTab !== 'errors'" type="button" @click="exportToCSV" :disabled="exporting" class="btn btn-primary">
-              {{ exporting ? t('usage.exporting') : t('usage.exportCsv') }}
-            </button>
+            <template v-if="activeTab !== 'errors'">
+              <button
+                v-if="exporting"
+                type="button"
+                data-testid="usage-export-cancel"
+                class="btn btn-secondary"
+                @click="cancelExport"
+              >
+                {{ t('usage.cancelExport') }}
+              </button>
+              <button
+                type="button"
+                data-testid="usage-export"
+                :disabled="exporting"
+                class="btn btn-primary"
+                @click="exportToCSV"
+              >
+                {{ exporting ? exportButtonLabel : t('usage.exportCsv') }}
+              </button>
+            </template>
           </div>
         </div>
       </div>
@@ -242,9 +259,13 @@ import TokenUsageTrend from '@/components/charts/TokenUsageTrend.vue'
 import Icon from '@/components/icons/Icon.vue'
 import UserErrorRequestsTable from '@/components/user/UserErrorRequestsTable.vue'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
-import { formatReasoningEffort } from '@/utils/format'
-import { getBillingModeLabel, getDisplayBillingMode as resolveDisplayBillingMode } from '@/utils/billingMode'
-import { resolveUsageRequestType, requestTypeToLegacyStream } from '@/utils/usageRequestType'
+import { requestTypeToLegacyStream } from '@/utils/usageRequestType'
+import {
+  isUsageExportAborted,
+  type UsageExportError,
+  type UsageExportParams,
+  type UsageExportProgress,
+} from '@/api/usage'
 import type {
   ApiKey,
   EndpointStat,
@@ -280,6 +301,8 @@ const chartsLoading = ref(false)
 const modelStatsLoading = ref(false)
 const endpointStatsLoading = ref(false)
 const exporting = ref(false)
+const exportProgress = ref<UsageExportProgress | null>(null)
+let exportController: AbortController | null = null
 const errorRows = ref<UserErrorRequest[]>([])
 const errorLoading = ref(false)
 const errorPage = ref(1)
@@ -610,104 +633,88 @@ const handleIpGeoBatchFailed = () => {
   appStore.showError(t('usage.ipGeo.batchFailed'))
 }
 
-const getRequestTypeExportText = (log: UsageLog): string => {
-  const requestType = resolveUsageRequestType(log)
-  if (requestType === 'cyber') return 'Cyber'
-  if (requestType === 'live') return 'Live'
-  if (requestType === 'ws_v2') return 'WS'
-  if (requestType === 'stream') return 'Stream'
-  if (requestType === 'sync') return 'Sync'
-  return 'Unknown'
+const exportButtonLabel = computed(() => {
+  const progress = exportProgress.value
+  if (progress && progress.receivedRows > 0) {
+    return t('usage.exportedCount', {
+      current: progress.receivedRows.toLocaleString(),
+      total: Math.max(pagination.total, progress.receivedRows).toLocaleString(),
+    })
+  }
+  return t('usage.exporting')
+})
+
+// The export shares the list's normalized filters and sort so the CSV contains exactly
+// the rows the table would page through; pagination itself is never sent.
+const buildUsageExportParams = (): UsageExportParams => ({
+  ...normalizedFilters.value,
+  sort_by: sortState.sort_by,
+  sort_order: sortState.sort_order,
+})
+
+const resolveExportErrorMessage = (error: unknown): string => {
+  const detail = (error && typeof error === 'object' ? error : {}) as Partial<UsageExportError>
+  switch (detail.reason) {
+    case 'USAGE_EXPORT_TOO_LARGE':
+      return t('usage.exportTooLarge', { limit: Number(detail.metadata?.limit ?? 0).toLocaleString() })
+    case 'USAGE_EXPORT_IN_PROGRESS':
+      return t('usage.exportInProgress')
+    default:
+      break
+  }
+  if (detail.status === 429) return t('usage.exportRateLimited')
+  return detail.message ? `${t('usage.exportFailed')}: ${detail.message}` : t('usage.exportFailed')
 }
 
-const getDisplayBillingMode = (
-  row: Pick<UsageLog, 'billing_mode' | 'image_count'> | null | undefined
-): string | null | undefined => resolveDisplayBillingMode(row)
-
-const escapeCSVValue = (value: unknown): string => {
-  if (value == null) return ''
-  const str = String(value)
-  const escaped = str.replace(/"/g, '""')
-  if (/^[=+\-@\t\r]/.test(str)) return `"\'${escaped}"`
-  if (/[,"\n\r]/.test(str)) return `"${escaped}"`
-  return str
+const downloadBlob = (blob: Blob, filename: string) => {
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  window.URL.revokeObjectURL(url)
 }
 
 const exportToCSV = async () => {
+  if (exporting.value) return
   if (pagination.total === 0) {
     appStore.showWarning(t('usage.noDataToExport'))
     return
   }
+  const controller = new AbortController()
+  exportController = controller
   exporting.value = true
+  exportProgress.value = { receivedBytes: 0, receivedRows: 0 }
   appStore.showInfo(t('usage.preparingExport'))
   try {
-    const allLogs: UsageLog[] = []
-    const pageSize = 100
-    const totalPages = Math.ceil(pagination.total / pageSize)
-    for (let page = 1; page <= totalPages; page++) {
-      const response = await usageAPI.query(buildUsageListParams(page, pageSize))
-      allLogs.push(...response.items)
-    }
-    if (allLogs.length === 0) {
+    const result = await usageAPI.exportCsv(buildUsageExportParams(), {
+      signal: controller.signal,
+      onProgress: (progress) => {
+        exportProgress.value = progress
+      },
+    })
+    if (result.rows === 0) {
       appStore.showWarning(t('usage.noDataToExport'))
       return
     }
-    const headers = [
-      t('usage.time'),
-      t('usage.apiKeyFilter'),
-      t('usage.model'),
-      t('usage.reasoningEffort'),
-      t('usage.inboundEndpoint'),
-      t('admin.usage.ipAddress'),
-      t('usage.type'),
-      t('admin.usage.billingMode'),
-      t('admin.usage.inputTokens'),
-      t('admin.usage.outputTokens'),
-      t('admin.usage.cacheReadTokens'),
-      t('admin.usage.cacheCreationTokens'),
-      t('usage.rate'),
-      t('usage.userBilled'),
-      t('usage.original'),
-      `${t('usage.firstToken')} (ms)`,
-      `${t('usage.duration')} (ms)`,
-    ]
-    const rows = allLogs.map((log) => [
-      log.created_at,
-      log.api_key?.name || '',
-      log.model,
-      formatReasoningEffort(log.reasoning_effort),
-      log.inbound_endpoint || '',
-      log.ip_address || '',
-      getRequestTypeExportText(log),
-      getBillingModeLabel(getDisplayBillingMode(log), t),
-      log.input_tokens,
-      log.output_tokens,
-      log.cache_read_tokens,
-      log.cache_creation_tokens,
-      log.rate_multiplier,
-      log.actual_cost.toFixed(8),
-      log.total_cost.toFixed(8),
-      log.first_token_ms ?? '',
-      log.duration_ms ?? '',
-    ].map(escapeCSVValue))
-    const csvContent = [
-      headers.map(escapeCSVValue).join(','),
-      ...rows.map((row) => row.join(',')),
-    ].join('\n')
-    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' })
-    const url = window.URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `usage_${startDate.value}_to_${endDate.value}.csv`
-    link.click()
-    window.URL.revokeObjectURL(url)
+    downloadBlob(result.blob, result.filename)
     appStore.showSuccess(t('usage.exportSuccess'))
   } catch (error) {
+    if (isUsageExportAborted(error)) {
+      appStore.showInfo(t('usage.exportCancelled'))
+      return
+    }
     console.error('CSV Export failed:', error)
-    appStore.showError(t('usage.exportFailed'))
+    appStore.showError(resolveExportErrorMessage(error))
   } finally {
     exporting.value = false
+    exportProgress.value = null
+    exportController = null
   }
+}
+
+const cancelExport = () => {
+  exportController?.abort()
 }
 
 const ALWAYS_VISIBLE = ['created_at']
@@ -897,6 +904,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   abortController?.abort()
+  exportController?.abort()
   document.removeEventListener('click', handleColumnClickOutside)
 })
 

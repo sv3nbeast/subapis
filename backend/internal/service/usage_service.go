@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -442,6 +443,25 @@ func (s *UsageService) ListWithFilters(ctx context.Context, params pagination.Pa
 		return nil, nil, fmt.Errorf("list usage logs with filters: %w", err)
 	}
 	return logs, result, nil
+}
+
+// UsageExportTooLargeReason is the client-facing reason code returned when an export
+// would exceed the configured row limit.
+const UsageExportTooLargeReason = "USAGE_EXPORT_TOO_LARGE"
+
+// StreamWithFilters streams usage logs matching filters in keyset batches (CSV export).
+// The repository row-limit guard is translated into a client-facing 400 so callers can
+// surface it before any bytes are written; all other errors keep their wrapped cause.
+func (s *UsageService) StreamWithFilters(ctx context.Context, filters usagestats.UsageLogFilters, opts usagestats.UsageLogStreamOptions, fn func(batch []UsageLog) error) error {
+	err := s.usageRepo.StreamWithFilters(ctx, filters, opts, fn)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, usagestats.ErrUsageLogStreamTooLarge) {
+		return infraerrors.BadRequest(UsageExportTooLargeReason, "Export exceeds the maximum row limit; narrow the date range or filters").
+			WithMetadata(map[string]string{"limit": strconv.FormatInt(opts.MaxRows, 10)})
+	}
+	return fmt.Errorf("stream usage logs with filters: %w", err)
 }
 
 // GetGlobalStats returns global usage stats for a time range.

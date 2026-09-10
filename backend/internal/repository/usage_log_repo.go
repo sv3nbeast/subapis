@@ -2536,6 +2536,33 @@ type UsageLogFilters = usagestats.UsageLogFilters
 
 // ListWithFilters lists usage logs with optional filters (for admin)
 func (r *usageLogRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, filters UsageLogFilters) ([]service.UsageLog, *pagination.PaginationResult, error) {
+	conditions, args := buildUsageLogFilterConditions(filters)
+
+	whereClause := buildWhere(conditions)
+	var (
+		logs []service.UsageLog
+		page *pagination.PaginationResult
+		err  error
+	)
+	if shouldUseFastUsageLogTotal(filters) {
+		logs, page, err = r.listUsageLogsWithFastPagination(ctx, whereClause, args, params)
+	} else {
+		logs, page, err = r.listUsageLogsWithPagination(ctx, whereClause, args, params)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if err := r.hydrateUsageLogAssociations(ctx, logs); err != nil {
+		return nil, nil, err
+	}
+	return logs, page, nil
+}
+
+// buildUsageLogFilterConditions translates UsageLogFilters into positional SQL
+// conditions. It is the single source of truth shared by the paginated list and
+// the streaming export so both endpoints always select the same rows.
+func buildUsageLogFilterConditions(filters UsageLogFilters) ([]string, []any) {
 	conditions := make([]string, 0, 9)
 	args := make([]any, 0, 9)
 
@@ -2576,25 +2603,7 @@ func (r *usageLogRepository) ListWithFilters(ctx context.Context, params paginat
 		args = append(args, *filters.EndTime)
 	}
 
-	whereClause := buildWhere(conditions)
-	var (
-		logs []service.UsageLog
-		page *pagination.PaginationResult
-		err  error
-	)
-	if shouldUseFastUsageLogTotal(filters) {
-		logs, page, err = r.listUsageLogsWithFastPagination(ctx, whereClause, args, params)
-	} else {
-		logs, page, err = r.listUsageLogsWithPagination(ctx, whereClause, args, params)
-	}
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if err := r.hydrateUsageLogAssociations(ctx, logs); err != nil {
-		return nil, nil, err
-	}
-	return logs, page, nil
+	return conditions, args
 }
 
 func shouldUseFastUsageLogTotal(filters UsageLogFilters) bool {

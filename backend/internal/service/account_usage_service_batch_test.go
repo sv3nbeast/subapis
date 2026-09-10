@@ -124,6 +124,10 @@ func (r *usageBatchLogRepoStub) GetAccountStatsAggregated(context.Context, int64
 func (r *usageBatchLogRepoStub) GetModelStatsAggregated(context.Context, string, time.Time, time.Time) (*usagestats.UsageStats, error) {
 	return nil, nil
 }
+func (r *usageBatchLogRepoStub) StreamWithFilters(context.Context, usagestats.UsageLogFilters, usagestats.UsageLogStreamOptions, func([]UsageLog) error) error {
+	return nil
+}
+
 func (r *usageBatchLogRepoStub) GetDailyStatsAggregated(context.Context, int64, time.Time, time.Time) ([]map[string]any, error) {
 	return nil, nil
 }

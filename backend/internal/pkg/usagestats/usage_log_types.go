@@ -1,7 +1,10 @@
 // Package usagestats provides types for usage statistics and reporting.
 package usagestats
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 const (
 	ModelSourceRequested = "requested"
@@ -386,3 +389,25 @@ type AccountUsageStatsResponse struct {
 	Endpoints         []EndpointStat        `json:"endpoints"`
 	UpstreamEndpoints []EndpointStat        `json:"upstream_endpoints"`
 }
+
+// UsageLogStreamOptions controls keyset streaming of usage logs (e.g. CSV export).
+// Streaming reuses the exact filter semantics of UsageLogFilters; only the traversal
+// order and batching are configured here.
+type UsageLogStreamOptions struct {
+	// SortBy accepts "created_at" (default) or "id". Any other value falls back to
+	// created_at because keyset pagination needs an indexed, deterministic key.
+	SortBy string
+	// SortOrder accepts "asc" or "desc" (default).
+	SortOrder string
+	// BatchSize is the number of rows fetched per keyset query. Values <= 0 use the
+	// repository default; the repository also clamps unreasonable values.
+	BatchSize int
+	// MaxRows, when > 0, makes the stream fail fast with ErrUsageLogStreamTooLarge
+	// before any batch is delivered if the filtered row count exceeds it, and hard
+	// stops delivery at that many rows for rows inserted concurrently.
+	MaxRows int64
+}
+
+// ErrUsageLogStreamTooLarge is returned before any batch is delivered when the
+// filtered usage log count exceeds UsageLogStreamOptions.MaxRows.
+var ErrUsageLogStreamTooLarge = errors.New("usage log stream exceeds the maximum row limit")

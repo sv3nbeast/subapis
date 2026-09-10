@@ -8,6 +8,7 @@ const {
   getStats,
   getDashboardModels,
   getDashboardSnapshotV2,
+  exportCsv,
   list,
   getAvailable,
   showError,
@@ -19,6 +20,7 @@ const {
   getStats: vi.fn(),
   getDashboardModels: vi.fn(),
   getDashboardSnapshotV2: vi.fn(),
+  exportCsv: vi.fn(),
   list: vi.fn(),
   getAvailable: vi.fn(),
   showError: vi.fn(),
@@ -74,6 +76,12 @@ const messages: Record<string, string> = {
   'usage.preparingExport': 'Preparing export',
   'usage.exportSuccess': 'Export success',
   'usage.exportFailed': 'Export failed',
+  'usage.cancelExport': 'Cancel export',
+  'usage.exportCancelled': 'Export cancelled',
+  'usage.exportedCount': 'Exported rows',
+  'usage.exportTooLarge': 'Export too large',
+  'usage.exportInProgress': 'Export in progress',
+  'usage.exportRateLimited': 'Rate limited',
   'common.refresh': 'Refresh',
   'common.reset': 'Reset',
 }
@@ -84,6 +92,7 @@ vi.mock('@/api', () => ({
     getStats,
     getDashboardModels,
     getDashboardSnapshotV2,
+    exportCsv,
   },
   keysAPI: {
     list,
@@ -168,30 +177,34 @@ function mountUsageView() {
   })
 }
 
-function stubCsvExport() {
-  let csvContent = ''
-  const OriginalBlob = globalThis.Blob
-  vi.stubGlobal('Blob', vi.fn((parts: BlobPart[], options?: BlobPropertyBag) => {
-    csvContent = parts.map((part) => String(part)).join('')
-    return new OriginalBlob(parts, options)
-  }))
+function stubDownload() {
   const originalCreateObjectURL = window.URL.createObjectURL
   const originalRevokeObjectURL = window.URL.revokeObjectURL
-  window.URL.createObjectURL = vi.fn(() => 'blob:usage-export') as typeof window.URL.createObjectURL
+  const createObjectURL = vi.fn(() => 'blob:usage-export')
+  window.URL.createObjectURL = createObjectURL as typeof window.URL.createObjectURL
   window.URL.revokeObjectURL = vi.fn(() => {}) as typeof window.URL.revokeObjectURL
-  const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+  const downloads: string[] = []
+  const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+    downloads.push(this.download)
+  })
   return {
-    get csvContent() {
-      return csvContent
-    },
+    createObjectURL,
+    clickSpy,
+    downloads,
     restore() {
       window.URL.createObjectURL = originalCreateObjectURL
       window.URL.revokeObjectURL = originalRevokeObjectURL
-      vi.unstubAllGlobals()
       clickSpy.mockRestore()
     },
-    clickSpy,
   }
+}
+
+function abortableExport() {
+  return vi.fn((_params: unknown, options: { signal?: AbortSignal }) =>
+    new Promise((_resolve, reject) => {
+      options.signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')))
+    }),
+  )
 }
 
 describe('user UsageView', () => {
@@ -200,6 +213,7 @@ describe('user UsageView', () => {
     getStats.mockReset()
     getDashboardModels.mockReset()
     getDashboardSnapshotV2.mockReset()
+    exportCsv.mockReset()
     list.mockReset()
     getAvailable.mockReset()
     showError.mockReset()
@@ -298,71 +312,121 @@ describe('user UsageView', () => {
     expect(getDashboardSnapshotV2).toHaveBeenCalledWith(expect.objectContaining({ native_compaction_v2: null }))
   })
 
-  it('exports csv with current filters and without admin-only fields', async () => {
+  it('exports through the streaming endpoint with the current filters and never pages the list', async () => {
     const wrapper = mountUsageView()
     await flushPromises()
     query.mockClear()
-    const csv = stubCsvExport()
+    const download = stubDownload()
+    const blob = new Blob(['\uFEFFTime,Model\n2026-03-08 00:00:00,gpt-5.4\n'], { type: 'text/csv;charset=utf-8;' })
+    exportCsv.mockResolvedValue({ blob, filename: 'usage_2026-03-01_to_2026-03-08.csv', rows: 1 })
     ;(wrapper.vm as any).filters.native_compaction_v2 = true
 
     await (wrapper.vm as any).exportToCSV()
 
-    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({
-      page_size: 100,
+    expect(exportCsv).toHaveBeenCalledTimes(1)
+    const [params, options] = exportCsv.mock.calls[0]
+    expect(params).toEqual(expect.objectContaining({
+      start_date: expect.any(String),
+      end_date: expect.any(String),
+      native_compaction_v2: true,
       sort_by: 'created_at',
       sort_order: 'desc',
-      native_compaction_v2: true,
     }))
-    expect(csv.clickSpy).toHaveBeenCalled()
-    expect(showSuccess).toHaveBeenCalled()
-    expect(csv.csvContent).toContain('IP Address')
-    expect(csv.csvContent).toContain('203.0.113.10')
-    expect(csv.csvContent).toContain('Billed Cost')
-    expect(csv.csvContent).toContain('Original Cost')
-    expect(csv.csvContent).not.toContain('Upstream Endpoint')
-    expect(csv.csvContent).not.toContain('account_cost')
-    expect(csv.csvContent).not.toContain('account_rate_multiplier')
+    expect(params).not.toHaveProperty('page')
+    expect(params).not.toHaveProperty('page_size')
+    expect(options.signal).toBeInstanceOf(AbortSignal)
+    expect(typeof options.onProgress).toBe('function')
+    expect(query).not.toHaveBeenCalled()
+    expect(download.createObjectURL).toHaveBeenCalledWith(blob)
+    expect(download.downloads).toEqual(['usage_2026-03-01_to_2026-03-08.csv'])
+    expect(showSuccess).toHaveBeenCalledWith('Export success')
+    expect((wrapper.vm as any).exporting).toBe(false)
 
-    csv.restore()
+    download.restore()
   })
 
-  it('exports historical image rows with image billing mode derived from image_count', async () => {
-    query.mockResolvedValue({
-      items: [
-        {
-          ...usageLog,
-          request_id: 'req-user-export-legacy-image',
-          actual_cost: 0.2,
-          total_cost: 0.2,
-          input_cost: 0,
-          output_cost: 0,
-          cache_creation_cost: 0,
-          cache_read_cost: 0,
-          input_tokens: 0,
-          output_tokens: 0,
-          cache_creation_tokens: 0,
-          cache_read_tokens: 0,
-          image_count: 1,
-          model: 'gpt-image-2',
-          billing_mode: null,
-          ip_address: null,
-        },
-      ],
-      total: 1,
-      pages: 1,
-    })
-
+  it('shows a cancel control while exporting and reports cancellation instead of failure', async () => {
     const wrapper = mountUsageView()
     await flushPromises()
-    query.mockClear()
-    const csv = stubCsvExport()
+    const download = stubDownload()
+    exportCsv.mockImplementation(abortableExport())
+
+    const pending = (wrapper.vm as any).exportToCSV()
+    await flushPromises()
+
+    const cancelButton = wrapper.find('[data-testid="usage-export-cancel"]')
+    expect(cancelButton.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="usage-export"]').attributes('disabled')).toBeDefined()
+
+    const [, options] = exportCsv.mock.calls[0]
+    options.onProgress({ receivedBytes: 2048, receivedRows: 12 })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="usage-export"]').text()).toBe('Exported rows')
+
+    await cancelButton.trigger('click')
+    await pending
+    await flushPromises()
+
+    expect(showInfo).toHaveBeenCalledWith('Export cancelled')
+    expect(showError).not.toHaveBeenCalled()
+    expect(download.clickSpy).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="usage-export-cancel"]').exists()).toBe(false)
+    expect((wrapper.vm as any).exporting).toBe(false)
+
+    download.restore()
+  })
+
+  it('maps server-side export limits to localized messages', async () => {
+    const wrapper = mountUsageView()
+    await flushPromises()
+    const download = stubDownload()
+
+    exportCsv.mockRejectedValueOnce({
+      status: 400,
+      reason: 'USAGE_EXPORT_TOO_LARGE',
+      message: 'Export exceeds the maximum row limit',
+      metadata: { limit: '500000' },
+    })
+    await (wrapper.vm as any).exportToCSV()
+    expect(showError).toHaveBeenLastCalledWith('Export too large')
+
+    exportCsv.mockRejectedValueOnce({ status: 429, reason: 'USAGE_EXPORT_IN_PROGRESS', message: 'running' })
+    await (wrapper.vm as any).exportToCSV()
+    expect(showError).toHaveBeenLastCalledWith('Export in progress')
+
+    exportCsv.mockRejectedValueOnce({ status: 429, code: 'RATE_LIMITED', message: 'slow down' })
+    await (wrapper.vm as any).exportToCSV()
+    expect(showError).toHaveBeenLastCalledWith('Rate limited')
+
+    exportCsv.mockRejectedValueOnce({ status: 502, message: 'Bad Gateway' })
+    await (wrapper.vm as any).exportToCSV()
+    expect(showError).toHaveBeenLastCalledWith('Export failed: Bad Gateway')
+
+    expect(download.clickSpy).not.toHaveBeenCalled()
+    download.restore()
+  })
+
+  it('warns instead of downloading when the export contains no rows', async () => {
+    const wrapper = mountUsageView()
+    await flushPromises()
+    const download = stubDownload()
+    exportCsv.mockResolvedValue({ blob: new Blob(['Time\n']), filename: 'usage_all.csv', rows: 0 })
 
     await (wrapper.vm as any).exportToCSV()
 
-    expect(csv.csvContent).toContain('Billing Mode')
-    expect(csv.csvContent).toContain('Image')
-    expect(csv.csvContent).not.toContain(',Token,0,0,0,0,')
+    expect(showWarning).toHaveBeenCalledWith('No data')
+    expect(download.clickSpy).not.toHaveBeenCalled()
+    download.restore()
+  })
 
-    csv.restore()
+  it('skips the request entirely when the current filters match no records', async () => {
+    query.mockResolvedValue({ items: [], total: 0, pages: 0 })
+    const wrapper = mountUsageView()
+    await flushPromises()
+
+    await (wrapper.vm as any).exportToCSV()
+
+    expect(exportCsv).not.toHaveBeenCalled()
+    expect(showWarning).toHaveBeenCalledWith('No data')
   })
 })

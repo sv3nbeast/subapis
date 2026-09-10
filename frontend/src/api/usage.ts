@@ -3,8 +3,13 @@
  * Handles usage logs and statistics retrieval
  */
 
+import { getLocale } from '@/i18n'
+import { USER_UI_REQUEST_HEADER } from './adminUIRequest'
 import { apiClient } from './client'
+import { refreshAuthTokens } from './tokenRefresh'
+import { buildApiUrl } from './url'
 import type {
+  ApiResponse,
   UsageLog,
   UsageQueryParams,
   UsageStatsResponse,
@@ -356,6 +361,218 @@ export async function getDashboardApiKeysUsage(
   return data
 }
 
+// ==================== CSV Export (server-side streaming) ====================
+
+/** Filters accepted by the streaming CSV export; pagination is never part of it. */
+export type UsageExportParams = Omit<UsageQueryParams, 'page' | 'page_size'>
+
+export interface UsageExportProgress {
+  /** Bytes received so far. The server streams, so the total size is unknown up front. */
+  receivedBytes: number
+  /** Data rows received so far, derived from newline count (header excluded). */
+  receivedRows: number
+}
+
+export interface UsageExportOptions {
+  /** Aborting the signal cancels the download and the server-side query. */
+  signal?: AbortSignal
+  onProgress?: (progress: UsageExportProgress) => void
+}
+
+export interface UsageExportResult {
+  blob: Blob
+  filename: string
+  /** Data rows contained in the CSV (header excluded). */
+  rows: number
+}
+
+/** Normalized failure raised by {@link exportCsv}, mirroring the axios interceptor shape. */
+export interface UsageExportError {
+  status: number
+  code?: number | string
+  reason?: string
+  message: string
+  metadata?: Record<string, string>
+  retryAfterSeconds?: number
+}
+
+export const USAGE_EXPORT_PATH = '/usage/export'
+export const USAGE_EXPORT_MIME = 'text/csv;charset=utf-8;'
+
+const NEWLINE_BYTE = 0x0a
+
+function getUserTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone
+  } catch {
+    return 'UTC'
+  }
+}
+
+/**
+ * Serialize export filters the same way the paginated list request does (axios drops
+ * null/undefined, booleans become "true"/"false") and attach the browser timezone so the
+ * server resolves date boundaries exactly like GET /usage.
+ */
+export function buildUsageExportQuery(params: UsageExportParams): URLSearchParams {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === '') continue
+    query.set(key, String(value))
+  }
+  if (!query.has('timezone')) {
+    query.set('timezone', getUserTimezone())
+  }
+  return query
+}
+
+/** Parse RFC 6266 `Content-Disposition` filenames (both `filename*=` and `filename=`). */
+export function parseAttachmentFilename(header: string | null | undefined): string | null {
+  if (!header) return null
+  const extended = /filename\*=utf-8''([^;]+)/i.exec(header)
+  if (extended) {
+    try {
+      const decoded = decodeURIComponent(extended[1].trim().replace(/^"|"$/g, ''))
+      if (decoded) return decoded
+    } catch {
+      // fall through to the plain filename
+    }
+  }
+  const plain = /filename=(?:"([^"]*)"|([^;]+))/i.exec(header)
+  if (!plain) return null
+  const value = (plain[1] ?? plain[2] ?? '').trim()
+  return value || null
+}
+
+export function defaultUsageExportFilename(params: UsageExportParams): string {
+  if (params.start_date && params.end_date) {
+    return `usage_${params.start_date}_to_${params.end_date}.csv`
+  }
+  return 'usage_export.csv'
+}
+
+export function isUsageExportAborted(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const candidate = error as { name?: unknown; code?: unknown }
+  return candidate.name === 'AbortError' || candidate.code === 'ERR_CANCELED'
+}
+
+function exportHeaders(token: string | null): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: 'text/csv',
+    'Accept-Language': getLocale(),
+    [USER_UI_REQUEST_HEADER]: '1'
+  }
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+  return headers
+}
+
+async function requestExport(url: string, signal?: AbortSignal): Promise<Response> {
+  const token = localStorage.getItem('auth_token')
+  const response = await fetch(url, { method: 'GET', headers: exportHeaders(token), credentials: 'include', signal })
+  if (response.status !== 401 || !localStorage.getItem('refresh_token')) {
+    return response
+  }
+  // Mirror the axios client: refresh once, then retry with the rotated access token.
+  let tokens
+  try {
+    tokens = await refreshAuthTokens({ failedAccessToken: token })
+  } catch {
+    const refreshFailed: UsageExportError = {
+      status: 401,
+      code: 'TOKEN_REFRESH_FAILED',
+      message: 'Session expired. Please log in again.'
+    }
+    throw refreshFailed
+  }
+  return fetch(url, { method: 'GET', headers: exportHeaders(tokens.access_token), credentials: 'include', signal })
+}
+
+async function readExportError(response: Response): Promise<UsageExportError> {
+  const error: UsageExportError = {
+    status: response.status,
+    message: response.statusText || 'Export failed'
+  }
+  const retryAfter = Number(response.headers.get('Retry-After'))
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    error.retryAfterSeconds = retryAfter
+  }
+  try {
+    const payload = (await response.json()) as Partial<ApiResponse<unknown>> & {
+      code?: number | string
+      reason?: string
+      metadata?: Record<string, string>
+    }
+    if (payload && typeof payload === 'object') {
+      error.code = payload.code
+      error.reason = payload.reason
+      error.metadata = payload.metadata
+      if (typeof payload.message === 'string' && payload.message) {
+        error.message = payload.message
+      }
+    }
+  } catch {
+    // Non-JSON error body (proxy page, empty body): keep the HTTP status text.
+  }
+  return error
+}
+
+function countNewlines(chunk: Uint8Array): number {
+  let count = 0
+  for (let i = 0; i < chunk.length; i++) {
+    if (chunk[i] === NEWLINE_BYTE) count++
+  }
+  return count
+}
+
+async function readCsvBody(response: Response, options: UsageExportOptions): Promise<{ blob: Blob; rows: number }> {
+  const body = response.body
+  if (!body || typeof body.getReader !== 'function') {
+    const buffered = await response.blob()
+    const bytes = new Uint8Array(await buffered.arrayBuffer())
+    return { blob: new Blob([bytes], { type: USAGE_EXPORT_MIME }), rows: Math.max(0, countNewlines(bytes) - 1) }
+  }
+
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let receivedBytes = 0
+  let newlines = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (!value || value.byteLength === 0) continue
+    chunks.push(value)
+    receivedBytes += value.byteLength
+    newlines += countNewlines(value)
+    options.onProgress?.({ receivedBytes, receivedRows: Math.max(0, newlines - 1) })
+  }
+  return { blob: new Blob(chunks, { type: USAGE_EXPORT_MIME }), rows: Math.max(0, newlines - 1) }
+}
+
+/**
+ * Download the current user's usage records as CSV in a single streamed request.
+ *
+ * The server applies exactly the same filters as `query()`, so the export never triggers
+ * the per-user panel rate limit the old page-by-page approach ran into. Pass `signal` to
+ * cancel: the browser drops the connection and the server stops its query.
+ */
+export async function exportCsv(
+  params: UsageExportParams,
+  options: UsageExportOptions = {}
+): Promise<UsageExportResult> {
+  const url = `${buildApiUrl(USAGE_EXPORT_PATH)}?${buildUsageExportQuery(params).toString()}`
+  const response = await requestExport(url, options.signal)
+  if (!response.ok) {
+    throw await readExportError(response)
+  }
+  const filename =
+    parseAttachmentFilename(response.headers.get('Content-Disposition')) ?? defaultUsageExportFilename(params)
+  const { blob, rows } = await readCsvBody(response, options)
+  return { blob, filename, rows }
+}
+
 export async function listMyErrorRequests(
   params: UserErrorListParams
 ): Promise<PaginatedResponse<UserErrorRequest>> {
@@ -384,6 +601,8 @@ export const usageAPI = {
   getMyApiKeyDailyUsage,
   getDashboardSnapshotV2,
   getDashboardApiKeysUsage,
+  // CSV export
+  exportCsv,
   // Error requests
   listMyErrorRequests,
   getMyErrorDetail

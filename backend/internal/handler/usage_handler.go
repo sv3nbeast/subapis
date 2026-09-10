@@ -50,6 +50,8 @@ type UsageHandler struct {
 	apiKeyService  *service.APIKeyService
 	opsService     *service.OpsService
 	settingService *service.SettingService
+	// exportGuard serializes CSV exports per user (see Export).
+	exportGuard usageExportGuard
 }
 
 // NewUsageHandler creates a new UsageHandler

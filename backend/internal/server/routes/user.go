@@ -145,6 +145,8 @@ func RegisterUserRoutes(
 		usage.Use(panelRateLimiter.Heavy())
 		{
 			usage.GET("", h.Usage.List)
+			// 服务端流式 CSV 导出：一次请求完成全部数据，避免前端高频翻页触发限流
+			usage.GET("/export", h.Usage.Export)
 			usage.GET("/errors", h.Usage.ListErrors)
 			usage.GET("/errors/:id", h.Usage.GetErrorDetail)
 			usage.GET("/:id", h.Usage.GetByID)

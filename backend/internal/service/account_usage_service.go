@@ -66,6 +66,10 @@ type UsageLogRepository interface {
 
 	// Admin usage listing/stats
 	ListWithFilters(ctx context.Context, params pagination.PaginationParams, filters usagestats.UsageLogFilters) ([]UsageLog, *pagination.PaginationResult, error)
+	// StreamWithFilters delivers every usage log matching filters in keyset batches.
+	// It shares the WHERE semantics of ListWithFilters so exports never diverge from
+	// the paginated list; iteration stops when fn returns an error or ctx ends.
+	StreamWithFilters(ctx context.Context, filters usagestats.UsageLogFilters, opts usagestats.UsageLogStreamOptions, fn func(batch []UsageLog) error) error
 	GetGlobalStats(ctx context.Context, startTime, endTime time.Time) (*usagestats.UsageStats, error)
 	GetStatsWithFilters(ctx context.Context, filters usagestats.UsageLogFilters) (*usagestats.UsageStats, error)
 

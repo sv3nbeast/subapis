@@ -2746,6 +2746,10 @@ func (r *stubUsageLogRepo) GetModelStatsAggregated(ctx context.Context, modelNam
 	return nil, errors.New("not implemented")
 }
 
+func (r *stubUsageLogRepo) StreamWithFilters(ctx context.Context, filters usagestats.UsageLogFilters, opts usagestats.UsageLogStreamOptions, fn func(batch []service.UsageLog) error) error {
+	return errors.New("not implemented")
+}
+
 func (r *stubUsageLogRepo) GetDailyStatsAggregated(ctx context.Context, userID int64, startTime, endTime time.Time) ([]map[string]any, error) {
 	return nil, errors.New("not implemented")
 }
