@@ -1,6 +1,6 @@
 <template>
-  <details v-if="sources.length" class="source-files wc-sources">
-    <summary class="wc-src-summary"><Icon name="book" size="xs" />{{ t('workspace.sources', { files: grouped.length, citations: sources.length }) }}</summary>
+  <details v-if="sources?.length" class="source-files wc-sources">
+    <summary class="wc-src-summary"><Icon name="book" size="xs" />{{ t('workspace.sources', { files: grouped.length, citations: sources?.length || 0 }) }}</summary>
     <div v-for="group in grouped" :key="group.id" class="source-file wc-src-group">
       <strong>{{ group.name }}</strong>
       <div><button v-for="source in group.sources" :key="source.index" @click="selected=source">{{ location(source) }}</button></div>
@@ -22,10 +22,10 @@ import type { WebChatSource } from '@/api/webChat'
 const props=defineProps<{ sources:WebChatSource[] }>()
 const { t }=useI18n()
 const selected=ref<WebChatSource|null>(null)
-watch(()=>props.sources,sources=>{if(selected.value){const old=selected.value;selected.value=sources.find(s=>s.document_id===old.document_id&&s.index===old.index&&s.content_sha256===old.content_sha256&&s.excerpt===old.excerpt)||null}})
+watch(()=>props.sources,sources=>{if(selected.value){const old=selected.value;selected.value=(sources||[]).find(s=>s.document_id===old.document_id&&s.index===old.index&&s.content_sha256===old.content_sha256&&s.excerpt===old.excerpt)||null}})
 const grouped=computed(()=>{
  const groups=new Map<number,{id:number;name:string;sources:WebChatSource[]}>()
- for(const source of props.sources){
+ for(const source of (props.sources || [])){
   if(!groups.has(source.document_id))groups.set(source.document_id,{id:source.document_id,name:source.document_name,sources:[]})
   groups.get(source.document_id)!.sources.push(source)
  }

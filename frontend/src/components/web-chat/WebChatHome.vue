@@ -9,9 +9,9 @@
         <Icon :name="item.icon" size="sm" /> {{ t('workspace.' + item.key) }} <Icon name="chevronRight" size="xs" />
       </button>
     </div>
-    <div class="recent-work wc-recent" v-if="sessions.length">
+    <div class="recent-work wc-recent" v-if="sessions?.length">
       <h2>{{ t('workspace.recent') }}</h2>
-      <button v-for="session in sessions.slice(0, 5)" :key="session.id" :disabled="disabled" @click="$emit('select', session)">
+      <button v-for="session in (sessions || []).slice(0, 5)" :key="session.id" :disabled="disabled" @click="$emit('select', session)">
         <Icon name="chat" size="sm" />
         <span>{{ session.title || session.model }}</span>
         <time :datetime="session.updated_at">{{ date(session.updated_at) }}</time>

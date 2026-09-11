@@ -203,8 +203,8 @@ const taskMode=ref<TaskMode>('chat'),selectedArtifact=ref<WebAgentArtifact|null>
 const artifactLibrary=ref<InstanceType<typeof WebAgentArtifactLibrary>>(),libraryFiles=ref<WebAgentArtifact[]>([])
 const artifactsEnabled=computed(()=>agent.artifacts.value.length>0||Boolean(options.value.tasks_enabled)||['starting','ready','unavailable'].includes(options.value.task_status||''))
 const artifactPaneOpen=ref(true)
-const activeSessionProject=computed(()=>projects.value.find(project=>project.id===activeSession.value?.project_id)||null)
-const uncategorizedCount=computed(()=>sessions.value.filter(session=>!session.project_id).length)
+const activeSessionProject=computed(()=>asArray(projects.value).find(project=>project.id===activeSession.value?.project_id)||null)
+const uncategorizedCount=computed(()=>asArray(sessions.value).filter(session=>!session.project_id).length)
 const agent=useWebAgentTasks(activeSessionId,computed(()=>authStore.user?.id),computed(()=>Boolean(options.value.task_limits||options.value.tasks_enabled)))
 let artifactSelection=0
 const systemPrompt=ref(''), temperatureInput=ref(''), maxOutputTokens=ref(8192), messageListRef=ref<HTMLElement|null>(null)
@@ -213,17 +213,17 @@ let taskOptionsTimer: ReturnType<typeof setTimeout> | undefined
 const {pendingDocuments,failedAttachments,attachmentState,uploadTemporaryDocuments,retryFailedAttachment,removePendingDocument,removeFailedAttachment,clearPendingDocuments,discardPendingDocuments}=useWebChatDocuments(async()=>activeSession.value||await createSessionForCurrentSelection(),key=>t(key))
 
 const activeSession=computed(()=>sessions.value.find(item=>item.id===activeSessionId.value)||null)
-const selectedGroup=computed(()=>options.value.groups.find(group=>group.id===selectedGroupId.value)||null)
-const selectedGroupModels=computed(()=>selectedGroup.value?.models||[])
+const selectedGroup=computed(()=>asArray(options.value.groups).find(group=>group.id===selectedGroupId.value)||null)
+const selectedGroupModels=computed(()=>asArray(selectedGroup.value?.models))
 const selectedModelOption=computed(()=>selectedGroupModels.value.find(model=>model.name===selectedModel.value)||null)
-const hasUsableModel=computed(()=>options.value.groups.some(group=>group.models.length>0))
+const hasUsableModel=computed(()=>asArray(options.value.groups).some(group=>asArray(group.models).length>0))
 const displayedSessions=computed(()=>{
   const startToday=new Date().setHours(0,0,0,0)
   const rank=(session:WebChatSession)=>{ if(session.pinned_at)return 0; const ts=new Date(session.updated_at||session.created_at).getTime(); if(Number.isNaN(ts)||ts>=startToday)return 1; if(ts>=startToday-DAY)return 2; return 3 }
-  return sessions.value.filter(s=>(projectFilter.value==='all'||(s.project_id??null)===projectFilter.value)&&[s.title,s.model,s.group_name||''].some(value=>value.toLowerCase().includes(sessionQuery.value.trim().toLowerCase()))).slice().sort((a,b)=>rank(a)-rank(b)||new Date(b.updated_at||b.created_at).getTime()-new Date(a.updated_at||a.created_at).getTime())
+  return asArray(sessions.value).filter(s=>(projectFilter.value==='all'||(s.project_id??null)===projectFilter.value)&&[s.title,s.model,s.group_name||''].some(value=>value.toLowerCase().includes(sessionQuery.value.trim().toLowerCase()))).slice().sort((a,b)=>rank(a)-rank(b)||new Date(b.updated_at||b.created_at).getTime()-new Date(a.updated_at||a.created_at).getTime())
 })
-const selectedProject=computed(()=>typeof projectFilter.value==='number'?projects.value.find(p=>p.id===projectFilter.value)||null:null)
-const activeTemplateName=computed(()=>templates.value.find(x=>x.id===activeTemplateId.value)?.name||'')
+const selectedProject=computed(()=>typeof projectFilter.value==='number'?asArray(projects.value).find(p=>p.id===projectFilter.value)||null:null)
+const activeTemplateName=computed(()=>asArray(templates.value).find(x=>x.id===activeTemplateId.value)?.name||'')
 const localizedTemplates=computed(()=>selectLocalizedWebChatTemplates(templates.value,locale.value))
 const canCompose=computed(()=>enabled.value&&hasUsableModel.value&&!creatingSession.value)
 const canSend=computed(()=>canCompose.value&&!messagesLoading.value&&!sending.value&&!agent.creating.value&&(taskMode.value==='chat'||(Boolean(options.value.tasks_enabled)&&!attachmentState.value&&!failedAttachments.value.length&&pendingDocuments.value.every(d=>d.status==='ready')))&&Boolean(selectedGroup.value&&selectedModel.value)&&draft.value.length<=20000)
@@ -258,7 +258,7 @@ const sessionGroups=computed(()=>{
   const sorted=displayedSessions.value.slice().sort((a,b)=>new Date(b.updated_at||b.created_at).getTime()-new Date(a.updated_at||a.created_at).getTime())
   return order.map(([key,label])=>({key,label,items:sorted.filter(session=>bucket(session)===key)})).filter(group=>group.items.length)
 })
-function projectColor(session: WebChatSession): string { return projects.value.find(project => project.id === session.project_id)?.color || 'transparent' }
+function projectColor(session: WebChatSession): string { return asArray(projects.value).find(project => project.id === session.project_id)?.color || 'transparent' }
 function relativeTime(value: string): string {
   const date=new Date(value)
   if(Number.isNaN(date.getTime()))return ''
@@ -275,8 +275,8 @@ function formatMessageTime(value: string): string { const date=new Date(value); 
 function shortRequestID(id: string): string { return id.length>16?`${id.slice(0,8)}…${id.slice(-6)}`:id }
 
 function sessionModelLabel(session: WebChatSession): string {
-  const platform = session.platform || options.value.groups.find(group => group.id === session.group_id)?.platform
-  const option = options.value.groups.find(group => group.id === session.group_id)?.models.find(model => model.name === session.model)
+  const platform = session.platform || asArray(options.value.groups).find(group => group.id === session.group_id)?.platform
+  const option = asArray(options.value.groups).find(group => group.id === session.group_id)?.models?.find(model => model.name === session.model)
   return option?.display_name || modelDisplayName(session.model, platform)
 }
 
@@ -297,7 +297,7 @@ async function loadInitial(){
  const intent=selectionVersion
  try{
   const[opts,list]=await Promise.all([webChatAPI.getOptions(),webChatAPI.listSessions()])
-  options.value=opts;enabled.value=opts.enabled;sessions.value=list
+  options.value={...opts,groups:asArray(opts.groups)};enabled.value=opts.enabled;sessions.value=asArray(list)
   selectedGroupId.value=opts.default_group_id??opts.groups[0]?.id??null;selectedModel.value=opts.default_model||opts.groups[0]?.models[0]?.name||''
   await Promise.all([opts.projects_enabled?loadProjects():Promise.resolve(),opts.templates_enabled?loadTemplates():Promise.resolve()])
   const requested=Number(route.query.session)
@@ -310,9 +310,10 @@ async function loadInitial(){
  }catch(e){if(intent===selectionVersion)operationError.value=extractApiErrorMessage(e,t('workspace.loadFailed'))}
  finally{loading.value=false}
 }
-async function refreshSessions(){sessions.value=await webChatAPI.listSessions().catch(()=>sessions.value)}
-async function loadProjects(){if(!options.value.projects_enabled)return;projects.value=await webChatAPI.listProjects().catch(()=>projects.value)}
-async function loadTemplates(){if(!options.value.templates_enabled)return;templates.value=await webChatAPI.listTemplates().catch(()=>templates.value)}
+function asArray<T>(value: T[] | null | undefined): T[] { return Array.isArray(value) ? value : [] }
+async function refreshSessions(){sessions.value=asArray(await webChatAPI.listSessions().catch(()=>sessions.value))}
+async function loadProjects(){if(!options.value.projects_enabled)return;projects.value=asArray(await webChatAPI.listProjects().catch(()=>projects.value))}
+async function loadTemplates(){if(!options.value.templates_enabled)return;templates.value=asArray(await webChatAPI.listTemplates().catch(()=>templates.value))}
 function openProjectEditor(project:WebChatProject|null){editingProject.value=project;projectDialogOpen.value=true}
 function openKnowledgeLibrary(project:WebChatProject){knowledgeProject.value=project;knowledgeLibraryOpen.value=true}
 function onProjectSaved(project:WebChatProject){const index=projects.value.findIndex(p=>p.id===project.id);if(index>=0)projects.value[index]=project;else projects.value.push(project);projects.value.sort((a,b)=>a.sort_order-b.sort_order);projectDialogOpen.value=false;projectFilter.value=project.id}
@@ -347,7 +348,7 @@ async function selectSession(session:WebChatSession){
   activeSessionId.value=session.id;messages.value=[];selectedGroupId.value=session.group_id;selectedModel.value=session.model
   activeTemplateId.value=session.default_template_id??null;applySessionSettings(session);sessionsOpen.value=false
   await router.replace({query:{...route.query,session:String(session.id)}})
-  const loaded=await webChatAPI.listMessages(session.id)
+  const loaded=asArray(await webChatAPI.listMessages(session.id))
   if(version===selectionVersion){messages.value=loaded;followOutput.value=true;await scrollToBottom()}
  }catch(e){if(version===selectionVersion)operationError.value=extractApiErrorMessage(e)}
  finally{if(version===selectionVersion)messagesLoading.value=false}
@@ -379,7 +380,7 @@ async function send(){
  }catch(e){operationError.value=extractApiErrorMessage(e)}
 }
 function setTaskMode(mode:TaskMode){taskMode.value=mode;if(sourceArtifact.value?.kind!==mode)sourceArtifact.value=null}
-async function refreshTaskOptions(){try{options.value=await webChatAPI.getOptions()}catch(e){operationError.value=extractApiErrorMessage(e)}}
+async function refreshTaskOptions(){try{const opts=await webChatAPI.getOptions();options.value={...opts,groups:asArray(opts.groups)}}catch(e){operationError.value=extractApiErrorMessage(e)}}
 async function inspectArtifact(id:number){const version=++artifactSelection;try{const artifact=await getArtifact(id);if(version===artifactSelection)selectedArtifact.value=artifact}catch(e){if(version===artifactSelection)operationError.value=extractApiErrorMessage(e)}}
 function navigateWorkspace(section:'files'|'projects'){if(sending.value||agent.creating.value)return;artifactSelection++;selectedArtifact.value=null;workspaceSection.value=section;sessionsOpen.value=false}
 async function openArtifactConversation(artifact:WebAgentArtifact){
@@ -412,7 +413,7 @@ async function cancelFileTask(id:number){try{await agent.cancel(id)}catch(e){ope
 async function loadTaskDetails(id:number){try{await agent.loadEvents(id)}catch(e){operationError.value=extractApiErrorMessage(e)}}
 async function regenerateMessage(message:WebChatMessage){const s=activeSession.value;if(!s)return;await runGeneration(handlers=>webChatAPI.regenerateMessage(s.id,message.id,handlers))}
 async function reviseMessage(message:WebChatMessage){const content=window.prompt(t('webChat.revisePrompt'),message.content)?.trim();const s=activeSession.value;if(!s||!content||content===message.content)return;await runGeneration(handlers=>webChatAPI.reviseMessage(s.id,message.id,content,handlers))}
-async function switchVersion(message:WebChatMessage,direction:-1|1){const s=activeSession.value;if(!s||sending.value)return;const versions=await webChatAPI.listMessageVersions(s.id,message.id);const current=versions.findIndex(v=>v.id===message.id);const target=versions[current+direction];if(!target)return;messages.value=await webChatAPI.activateMessageVersion(s.id,target.id);await scrollToBottom()}
+async function switchVersion(message:WebChatMessage,direction:-1|1){const s=activeSession.value;if(!s||sending.value)return;const versions=asArray(await webChatAPI.listMessageVersions(s.id,message.id));const current=versions.findIndex(v=>v.id===message.id);const target=versions[current+direction];if(!target)return;messages.value=asArray(await webChatAPI.activateMessageVersion(s.id,target.id));await scrollToBottom()}
 function versionReason(reason:WebChatMessage['version_reason']){return reason==='regenerate'?t('webChat.versionRegenerated'):reason==='edit'?t('webChat.versionEdited'):t('webChat.versionOriginal')}
 async function runGeneration(request:(handlers:WebChatStreamHandlers)=>Promise<void>,optimistic?:{role:'user';content:string},onAccepted?:()=>void){
  const sessionID=activeSessionId.value
@@ -434,7 +435,7 @@ async function runGeneration(request:(handlers:WebChatStreamHandlers)=>Promise<v
  }catch(e){if((e as Error).name!=='AbortError')operationError.value=extractApiErrorMessage(e)}
  finally{
   const partialText=streamingText.value
-  try{messages.value=await webChatAPI.listMessages(sessionID)}
+  try{messages.value=asArray(await webChatAPI.listMessages(sessionID))}
   catch(e){
    operationError.value=extractApiErrorMessage(e)
    if(terminalMessage)messages.value=[...messages.value.filter(m=>m.id!==terminalMessage!.id),terminalMessage]
@@ -451,7 +452,7 @@ async function copyText(text:string){await navigator.clipboard.writeText(text)}
 function exportConversation(format:'markdown'|'json'){const s=activeSession.value;if(!s)return;const displayModel=sessionModelLabel(s);const content=format==='json'?JSON.stringify({session:s,messages:messages.value},null,2):[`# ${s.title||displayModel}`,`> ${s.group_name||groupName(s.group_id)} · ${displayModel}`,'',...messages.value.flatMap(m=>[`## ${m.role==='user'?'User':'Assistant'}`,m.content,''])].join('\n');const blob=new Blob([content],{type:format==='json'?'application/json':'text/markdown'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`web-chat-${s.id}.${format==='json'?'json':'md'}`;a.click();URL.revokeObjectURL(url)}
 
 function draftKey(id:number|null){return`subapis.webChat.draft.${authStore.user?.id||'anonymous'}.${id??'new'}`}
-function groupName(id:number){return options.value.groups.find(g=>g.id===id)?.name||`#${id}`}
+function groupName(id:number){return asArray(options.value.groups).find(g=>g.id===id)?.name||`#${id}`}
 function hasUsage(m:WebChatMessage){return m.input_tokens+m.output_tokens+m.cache_read_tokens+m.cache_creation_tokens>0}
 
 async function scrollToBottom(){await nextTick();if(messageListRef.value&&followOutput.value)messageListRef.value.scrollTop=messageListRef.value.scrollHeight}

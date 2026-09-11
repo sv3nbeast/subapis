@@ -1,7 +1,7 @@
 <template>
   <section class="task-feed wc-feed" :aria-label="t('webAgent.tasks')">
-    <div v-if="!tasks.length" class="task-empty wc-empty"><span class="wc-empty-ic"><Icon name="layers" size="lg" /></span><h2>{{ t('webAgent.empty') }}</h2><p>{{ t('webAgent.emptyHint') }}</p></div>
-    <article v-for="task in tasks" :key="task.id" class="task-thread wc-task">
+    <div v-if="!tasks?.length" class="task-empty wc-empty"><span class="wc-empty-ic"><Icon name="layers" size="lg" /></span><h2>{{ t('webAgent.empty') }}</h2><p>{{ t('webAgent.emptyHint') }}</p></div>
+    <article v-for="task in (tasks || [])" :key="task.id" class="task-thread wc-task">
       <p class="task-request wc-task-req-p"><span class="wc-task-req-b">{{ task.prompt }}</span></p>
       <div class="task-response wc-task-res">
         <span class="wc-av ai" aria-hidden="true">S</span>
