@@ -1,15 +1,15 @@
 <template>
-  <section class="workspace-home" aria-labelledby="workspace-welcome">
-    <p class="welcome-name" v-if="name">{{ t('workspace.hello', { name }) }}</p>
+  <section class="workspace-home wc-home" aria-labelledby="workspace-welcome">
+    <p class="welcome-name hello" v-if="name">{{ t('workspace.hello', { name }) }}</p>
     <h1 id="workspace-welcome">{{ t('workspace.startTitle') }}</h1>
-    <p class="welcome-hint">{{ t('workspace.startHint') }}</p>
+    <p class="welcome-hint hint">{{ t('workspace.startHint') }}</p>
     <slot name="composer" />
-    <div class="task-shortcuts">
+    <div class="task-shortcuts wc-shortcuts">
       <button v-for="item in shortcuts" :key="item.key" :disabled="disabled" @click="$emit('shortcut', item.key)">
         <Icon :name="item.icon" size="sm" /> {{ t('workspace.' + item.key) }} <Icon name="chevronRight" size="xs" />
       </button>
     </div>
-    <div class="recent-work" v-if="sessions.length">
+    <div class="recent-work wc-recent" v-if="sessions.length">
       <h2>{{ t('workspace.recent') }}</h2>
       <button v-for="session in sessions.slice(0, 5)" :key="session.id" :disabled="disabled" @click="$emit('select', session)">
         <Icon name="chat" size="sm" />

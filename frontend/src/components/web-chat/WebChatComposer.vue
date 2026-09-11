@@ -1,16 +1,22 @@
 <template>
-  <form class="composer" @submit.prevent="submit" @dragover.prevent @drop.prevent="drop">
-    <div v-if="documents.length || failedAttachments.length || attachmentState" class="attachment-strip">
-      <span v-for="doc in documents" :key="doc.id">
-        {{ doc.original_name }}
-        <button type="button" @click="emit('remove-document', doc.id)">×</button>
+  <form class="composer wc-cbox" @submit.prevent="submit" @dragover.prevent @drop.prevent="drop">
+    <div v-if="templateName" class="wc-tplbar">
+      <span class="tile"><Icon name="sparkles" size="xs" /></span>
+      <span>{{ t('webChat.templateApplied') }}</span><b class="trunc">{{ templateName }}</b>
+      <button type="button" class="x" :aria-label="t('webChat.clearTemplate')" :title="t('webChat.clearTemplate')" @click="emit('clear-template')"><Icon name="x" size="xs" /></button>
+    </div>
+    <div v-if="documents.length || failedAttachments.length || attachmentState" class="attachment-strip wc-attach-strip">
+      <span v-for="doc in documents" :key="doc.id" class="wc-att">
+        <i class="ext" :data-ext="extension(doc.extension || doc.original_name)">{{ extension(doc.extension || doc.original_name).toUpperCase() }}</i>
+        <span class="trunc">{{ doc.original_name }}</span><small>{{ bytes(doc.size_bytes) }}</small>
+        <button type="button" :aria-label="t('common.delete')" @click="emit('remove-document', doc.id)"><Icon name="x" size="xs" /></button>
       </span>
-      <span v-for="failed in failedAttachments" :key="failed.key" class="attachment-failed" :title="failed.error">
-        {{ failed.file.name }} · {{ failed.error || t('webChat.documentFailed') }}
-        <button type="button" @click="emit('retry-attachment', failed.key)">{{ t('webChat.retry') }}</button>
-        <button type="button" @click="emit('remove-failed-attachment', failed.key)">×</button>
+      <span v-for="failed in failedAttachments" :key="failed.key" class="wc-att failed attachment-failed" :title="failed.error">
+        <i class="ext">!</i><span class="trunc">{{ failed.file.name }}</span><small>{{ failed.error || t('webChat.documentFailed') }}</small>
+        <button type="button" class="retry" @click="emit('retry-attachment', failed.key)">{{ t('webChat.retry') }}</button>
+        <button type="button" :aria-label="t('common.delete')" @click="emit('remove-failed-attachment', failed.key)"><Icon name="x" size="xs" /></button>
       </span>
-      <span v-if="attachmentState">{{ attachmentState }}</span>
+      <span v-if="attachmentState" class="wc-att state">{{ attachmentState }}</span>
     </div>
     <textarea
       :value="modelValue"
@@ -18,23 +24,25 @@
       :aria-label="t('workspace.inputLabel')"
       :placeholder="t('webChat.placeholder')"
       :disabled="disabled"
-      class="composer-input"
+      class="composer-input wc-ctext"
       @input="emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
       @keydown="handleKeydown"
     />
-    <div class="composer-bottom">
-      <span>
-        <label v-if="filesEnabled" class="template-trigger">
-          <input class="sr-only" type="file" :disabled="disabled || sending" multiple accept=".pdf,.docx,.xlsx,.txt,.md,.csv" @change="pick" />
-          <Icon name="upload" size="xs" /> {{ t('webChat.attach') }}
-        </label>
-        <button v-if="templatesEnabled" type="button" :disabled="disabled || sending" class="template-trigger" @click="emit('open-template')">
-          <Icon name="sparkles" size="xs" /> {{ templateName || t('webChat.templates') }}
+    <div class="composer-bottom wc-cbar">
+      <div v-if="allowModes && modes.length" class="task-modebar wc-seg wc-modes" :aria-label="t('webAgent.mode')">
+        <button v-for="item in modes" :key="item" type="button" :aria-pressed="mode === item" :disabled="modeDisabled" @click="emit('update:mode', item)">
+          <Icon :name="modeIcon[item]" size="xs" /><span class="label">{{ t(`webAgent.${item}`) }}</span>
         </button>
-        <small v-if="modelValue.length > 18000" class="char-count">{{ modelValue.length.toLocaleString() }} / 20,000</small>
-      </span>
-      <button v-if="sending" type="button" class="btn-stop" :aria-label="t('webChat.stop')" :title="t('webChat.stop')" @click="emit('stop')"><span class="stop-square" /></button>
-      <button v-else class="btn-send" :disabled="!canSend || disabled || !modelValue.trim()" :aria-label="t('webChat.send')" :title="t('webChat.send')"><Icon name="arrowUp" size="sm" /></button>
+      </div>
+      <label v-if="filesEnabled" class="template-trigger wc-ib" :title="t('webChat.attach')" :aria-label="t('webChat.attach')">
+        <input class="wc-sr-only" type="file" :disabled="disabled || sending" multiple accept=".pdf,.docx,.xlsx,.txt,.md,.csv" @change="pick" />
+        <Icon name="paperClip" size="sm" />
+      </label>
+      <button v-if="templatesEnabled" type="button" :disabled="disabled || sending" class="template-trigger wc-ib" :title="t('webChat.templates')" :aria-label="t('webChat.templates')" @click="emit('open-template')"><Icon name="sparkles" size="sm" /></button>
+      <small v-if="modelValue.length > 18000" class="char-count wc-cnt">{{ modelValue.length.toLocaleString() }} / 20,000</small>
+      <span v-else class="wc-cnt">{{ modelValue.length.toLocaleString() }} / 20,000</span>
+      <button v-if="sending" type="button" class="btn-stop wc-send stop" :aria-label="t('webChat.stop')" :title="t('webChat.stop')" @click="emit('stop')"><Icon name="stop" size="sm" /></button>
+      <button v-else class="btn-send wc-send" :disabled="!canSend || disabled || !modelValue.trim()" :aria-label="t('webChat.send')" :title="t('webChat.send')"><Icon name="arrowUp" size="sm" /></button>
     </div>
   </form>
 </template>
@@ -45,7 +53,9 @@ import Icon from '@/components/icons/Icon.vue'
 import type { WebChatDocument } from '@/api/webChat'
 import type { WebChatFailedAttachment } from '@/composables/useWebChatDocuments'
 
-const props = defineProps<{
+type TaskMode = 'chat' | 'slides' | 'spreadsheet' | 'document'
+
+const props = withDefaults(defineProps<{
   modelValue: string
   disabled: boolean
   canSend: boolean
@@ -56,23 +66,38 @@ const props = defineProps<{
   documents: WebChatDocument[]
   failedAttachments: WebChatFailedAttachment[]
   attachmentState: string
-}>()
+  modes?: readonly TaskMode[]
+  mode?: TaskMode
+  modeDisabled?: boolean
+  allowModes?: boolean
+}>(), { modes: () => [], mode: 'chat', modeDisabled: false, allowModes: false })
 const emit = defineEmits<{
   'update:modelValue': [string]
+  'update:mode': [TaskMode]
   submit: []
   stop: []
   'open-template': []
+  'clear-template': []
   files: [File[]]
   'remove-document': [number]
   'retry-attachment': [string]
   'remove-failed-attachment': [string]
 }>()
 const { t } = useI18n()
+const modeIcon: Record<TaskMode, 'chat' | 'presentation' | 'chartBar' | 'document'> = {
+  chat: 'chat',
+  slides: 'presentation',
+  spreadsheet: 'chartBar',
+  document: 'document',
+}
 
-function pick(event: Event) {
-  const input = event.target as HTMLInputElement
-  emit('files', Array.from(input.files || []))
-  input.value = ''
+function extension(nameOrExt: string): string {
+  const raw = nameOrExt.includes('.') ? nameOrExt.slice(nameOrExt.lastIndexOf('.') + 1) : nameOrExt
+  return raw.trim().toLowerCase()
+}
+function bytes(value: number): string {
+  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`
+  return `${Math.max(1, Math.ceil(value / 1024))} KB`
 }
 function submit() {
   if (!props.disabled && !props.sending && props.canSend && props.modelValue.trim()) emit('submit')
@@ -82,17 +107,12 @@ function handleKeydown(event: KeyboardEvent) {
   event.preventDefault()
   submit()
 }
+function pick(event: Event) {
+  const input = event.target as HTMLInputElement
+  emit('files', Array.from(input.files || []))
+  input.value = ''
+}
 function drop(event: DragEvent) {
   if (props.filesEnabled && !props.disabled && !props.sending) emit('files', Array.from(event.dataTransfer?.files || []))
 }
 </script>
-
-<style scoped>
-.composer{border:1px solid var(--wa-line,#e4e4e7);border-radius:6px;padding:.65rem .8rem;background:var(--wa-bg,#fff)}
-.composer:focus-within{border-color:#a1a1aa}.composer-input{width:100%;resize:none;border:0;background:transparent;color:var(--wa-text,#18181b);min-height:3rem;padding:.3rem .15rem;font-size:1rem;line-height:1.6;outline:none}
-.composer-bottom{display:flex;align-items:center;justify-content:space-between;gap:.5rem;color:var(--wa-muted,#71717a);font-size:.875rem;margin-top:.3rem}.composer-bottom>span{display:flex;flex-wrap:wrap;align-items:center;gap:.65rem}
-.btn-send,.btn-stop{display:grid;place-items:center;flex-shrink:0;width:2rem;height:2rem;border-radius:6px;color:var(--wa-bg,#fff);background:var(--wa-text,#18181b)}.btn-send:disabled{opacity:.35;cursor:not-allowed}.stop-square{width:.6rem;height:.6rem;background:currentColor;border-radius:1px}
-.template-trigger{display:inline-flex;align-items:center;gap:.35rem;position:relative;cursor:pointer;font-size:.875rem;min-height:2rem}.template-trigger:focus-within{outline:2px solid var(--wa-accent,#2563eb);outline-offset:3px}.char-count{font-size:.75rem}
-.attachment-strip{display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.5rem}.attachment-strip>span{display:inline-flex;align-items:center;gap:.4rem;border:1px solid var(--wa-line,#e4e4e7);border-radius:5px;padding:.25rem .45rem;font-size:.8125rem;overflow-wrap:anywhere}.attachment-strip .attachment-failed{color:#b91c1c;background:#fef2f2}.attachment-failed button:first-of-type{text-decoration:underline}
-@media(max-width:767px){.btn-send,.btn-stop{width:44px;height:44px;background:transparent;position:relative;isolation:isolate}.btn-send:before,.btn-stop:before{content:"";position:absolute;inset:6px;z-index:-1;border-radius:6px;background:var(--wa-text,#18181b)}.template-trigger{min-height:44px}.attachment-strip button{min-width:32px;min-height:32px}}
-</style>

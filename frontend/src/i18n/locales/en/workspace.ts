@@ -22,7 +22,7 @@ export default { workspace: {
   budgetDetails: 'Input up to {input} KiB, output up to {output} tokens, file and preview up to {file} MiB combined.',
   chatHint: 'Chat produces text. Choose Slides, Spreadsheet or Document for a downloadable file.',
   empty: 'Describe the file you need', emptyHint: 'Preview and download the result, or continue editing a version.',
-  tasks: 'File tasks', files: 'Artifacts', preview: 'Preview', versions: 'Versions', details: 'Execution details',
+  tasks: 'File tasks', files: 'Artifacts', preview: 'Preview', versions: 'Versions', details: 'Execution details', technicalDetails: 'Technical details', 
   queued: 'Queued', running: 'Running', cancel_requested: 'Cancelling', succeeded: 'Completed', failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted',
   cancel: 'Cancel task', open: 'View artifact', revise: 'Continue editing', source: 'Editing version {version}', clearSource: 'Create a new file instead',
   download: 'Download file', close: 'Close artifact', more: 'Load earlier tasks', noFiles: 'No artifacts yet',

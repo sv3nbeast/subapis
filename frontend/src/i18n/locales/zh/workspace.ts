@@ -22,7 +22,7 @@ export default { workspace: {
   budgetDetails: '输入上限 {input} KiB，输出上限 {output} Token；文件与预览合计最多 {file} MiB。',
   chatHint: '聊天生成文本。需要可下载文件，请选择 PPT、表格或文档。',
   empty: '描述要生成的文件', emptyHint: '文件生成后可在右侧预览、下载，或继续修改。',
-  tasks: '文件任务', files: '成果文件', preview: '预览', versions: '版本', details: '执行记录',
+  tasks: '文件任务', files: '成果文件', preview: '预览', versions: '版本', details: '执行记录', technicalDetails: '技术细节', 
   queued: '排队中', running: '进行中', cancel_requested: '正在取消', succeeded: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断',
   cancel: '取消任务', open: '查看成果', revise: '继续修改', source: '基于版本 {version} 修改', clearSource: '取消修改，创建新文件',
   download: '下载文件', close: '关闭成果', more: '加载更早的任务', noFiles: '还没有成果文件',

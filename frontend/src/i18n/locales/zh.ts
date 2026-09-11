@@ -1836,7 +1836,20 @@ const baseMessages = {
     promptPlan: '将我的目标拆解为可执行计划',
     yesterday: '昨天',
     resizeSessions: '拖拽调整会话列表宽度',
-    resizeContext: '拖拽调整上下文面板宽度'
+    resizeContext: '拖拽调整上下文面板宽度',
+    groupPinned: '置顶',
+    groupToday: '今天',
+    groupYesterday: '昨天',
+    groupEarlier: '更早',
+    justNow: '刚刚',
+    minutesAgo: '{count} 分钟前',
+    you: '你',
+    templateApplied: '模板',
+    clearTemplate: '移除模板',
+    export: '导出',
+    modelSettings: '模型与参数',
+    toggleInspector: '显示或隐藏右侧面板',
+    sessionCount: '{count} 个会话',
   },
 
   affiliate: {

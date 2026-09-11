@@ -1863,7 +1863,20 @@ const baseMessages = {
     promptPlan: 'Turn my goal into an actionable plan',
     yesterday: 'Yesterday',
     resizeSessions: 'Drag to resize the session list',
-    resizeContext: 'Drag to resize the context panel'
+    resizeContext: 'Drag to resize the context panel',
+    groupPinned: 'Pinned',
+    groupToday: 'Today',
+    groupYesterday: 'Yesterday',
+    groupEarlier: 'Earlier',
+    justNow: 'Just now',
+    minutesAgo: '{count} min ago',
+    you: 'You',
+    templateApplied: 'Template',
+    clearTemplate: 'Remove template',
+    export: 'Export',
+    modelSettings: 'Model and settings',
+    toggleInspector: 'Show or hide the side panel',
+    sessionCount: '{count} sessions',
   },
 
   affiliate: {

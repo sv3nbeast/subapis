@@ -1,15 +1,15 @@
 <template>
-  <details v-if="sources.length" class="source-files">
-    <summary>{{ t('workspace.sources', { files: grouped.length, citations: sources.length }) }}</summary>
-    <div v-for="group in grouped" :key="group.id" class="source-file">
+  <details v-if="sources.length" class="source-files wc-sources">
+    <summary class="wc-src-summary"><Icon name="book" size="xs" />{{ t('workspace.sources', { files: grouped.length, citations: sources.length }) }}</summary>
+    <div v-for="group in grouped" :key="group.id" class="source-file wc-src-group">
       <strong>{{ group.name }}</strong>
       <div><button v-for="source in group.sources" :key="source.index" @click="selected=source">{{ location(source) }}</button></div>
     </div>
     <BaseDialog :show="Boolean(selected)" :title="selected?.document_name||''" @close="selected=null">
-      <p class="source-location">{{ selected ? location(selected) : '' }}</p>
+      <p class="source-location wc-sl-sec">{{ selected ? location(selected) : '' }}</p>
       <p v-if="selected?.origin">{{ t(`workspace.sourceOrigin.${selected.origin}`) }}</p>
       <p v-if="selected?.included_chars">{{ t('workspace.sourceIncluded',{count:selected.included_chars}) }} <span v-if="selected.truncated">{{ t('workspace.sourceTruncated') }}</span></p>
-      <pre class="excerpt">{{ selected?.excerpt }}</pre>
+      <pre class="excerpt wc-excerpt">{{ selected?.excerpt }}</pre>
     </BaseDialog>
   </details>
 </template>
@@ -17,6 +17,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import Icon from '@/components/icons/Icon.vue'
 import type { WebChatSource } from '@/api/webChat'
 const props=defineProps<{ sources:WebChatSource[] }>()
 const { t }=useI18n()
@@ -33,5 +34,6 @@ const grouped=computed(()=>{
 function location(s:WebChatSource){return s.page_number ? `${t('webChat.page')} ${s.page_number}` : s.location_label || `${t('webChat.source')} ${s.index}`}
 </script>
 <style scoped>
-.source-files{font-size:.8125rem;color:var(--wa-muted,#71717a);margin-top:.75rem}.source-files summary{cursor:pointer}.source-file{border-left:2px solid var(--wa-line,#e4e4e7);padding:.5rem .75rem;margin-top:.5rem}.source-file strong{font-weight:550;overflow-wrap:anywhere}.source-file>div{display:flex;gap:.6rem;flex-wrap:wrap}.source-file button{color:var(--wa-accent,#2563eb);padding:.3rem 0;text-decoration:underline;text-underline-offset:3px}.source-location{font-size:.875rem;font-weight:600}.excerpt{white-space:pre-wrap;overflow-wrap:anywhere;max-height:60vh;overflow:auto;margin-top:.75rem;font: .875rem/1.6 system-ui,sans-serif}
+.wc-sources{font-size:11.5px;color:var(--wc-ink3);margin-top:10px}
+.wc-sources summary{cursor:pointer}
 </style>
