@@ -677,6 +677,10 @@ const (
 	SettingKeyClaudeOAuthSystemPrompt = "claude_oauth_system_prompt"
 	// SettingKeyClaudeOAuthSystemPromptBlocks Claude OAuth mimic 路径注入的 system blocks JSON 配置（空值使用内置默认）
 	SettingKeyClaudeOAuthSystemPromptBlocks = "claude_oauth_system_prompt_blocks"
+	// SettingKeyEnableKiroOperatorInstructions 是否在 Kiro 渠道 Claude 模型（Sonnet 系除外）的平台前导中追加运营附加指令（默认 true）
+	SettingKeyEnableKiroOperatorInstructions = "enable_kiro_operator_instructions"
+	// SettingKeyKiroOperatorInstructions Kiro 渠道运营附加指令文本（空值使用内置默认）
+	SettingKeyKiroOperatorInstructions = "kiro_operator_instructions"
 	// SettingKeyEnableAnthropicCacheTTL1hInjection 是否对 Anthropic OAuth/SetupToken 请求体注入 1h cache_control ttl（默认 false）
 	SettingKeyEnableAnthropicCacheTTL1hInjection = "enable_anthropic_cache_ttl_1h_injection"
 	// SettingKeyEnableClientDatelineNormalization 是否对 Anthropic OAuth/SetupToken 账号

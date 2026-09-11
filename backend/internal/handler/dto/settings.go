@@ -219,6 +219,8 @@ type SystemSettings struct {
 	EnableClaudeOAuthSystemPromptInjection        bool   `json:"enable_claude_oauth_system_prompt_injection"`
 	ClaudeOAuthSystemPrompt                       string `json:"claude_oauth_system_prompt"`
 	ClaudeOAuthSystemPromptBlocks                 string `json:"claude_oauth_system_prompt_blocks"`
+	EnableKiroOperatorInstructions                bool   `json:"enable_kiro_operator_instructions"`
+	KiroOperatorInstructions                      string `json:"kiro_operator_instructions"`
 	OpenAICodexUserAgent                          string `json:"openai_codex_user_agent"`
 	OpenAICodexClientVersion                      string `json:"openai_codex_client_version"`
 	OpenAICodexClientVersionSynced                string `json:"openai_codex_client_version_synced"`

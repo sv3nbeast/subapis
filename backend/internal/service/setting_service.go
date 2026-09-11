@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
@@ -165,6 +166,8 @@ type cachedGatewayForwardingSettings struct {
 	claudeOAuthSystemPromptInjection bool
 	claudeOAuthSystemPrompt          string
 	claudeOAuthSystemPromptBlocks    string
+	kiroOperatorInstructionsEnabled  bool
+	kiroOperatorInstructions         string
 	anthropicCacheTTL1hInjection     bool
 	rewriteMessageCacheControl       bool
 	clientDatelineNormalization      bool
@@ -3182,6 +3185,11 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		return nil, err
 	}
 	updates[SettingKeyClaudeOAuthSystemPromptBlocks] = settings.ClaudeOAuthSystemPromptBlocks
+	updates[SettingKeyEnableKiroOperatorInstructions] = strconv.FormatBool(settings.EnableKiroOperatorInstructions)
+	if err := ValidateKiroOperatorInstructions(settings.KiroOperatorInstructions); err != nil {
+		return nil, err
+	}
+	updates[SettingKeyKiroOperatorInstructions] = strings.TrimSpace(settings.KiroOperatorInstructions)
 	updates[SettingKeyEnableAnthropicCacheTTL1hInjection] = strconv.FormatBool(settings.EnableAnthropicCacheTTL1hInjection)
 	updates[SettingKeyRewriteMessageCacheControl] = strconv.FormatBool(settings.RewriteMessageCacheControl)
 	updates[SettingKeyEnableClientDatelineNormalization] = strconv.FormatBool(settings.EnableClientDatelineNormalization)
@@ -3366,6 +3374,8 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 		claudeOAuthSystemPromptInjection: settings.EnableClaudeOAuthSystemPromptInjection,
 		claudeOAuthSystemPrompt:          settings.ClaudeOAuthSystemPrompt,
 		claudeOAuthSystemPromptBlocks:    settings.ClaudeOAuthSystemPromptBlocks,
+		kiroOperatorInstructionsEnabled:  settings.EnableKiroOperatorInstructions,
+		kiroOperatorInstructions:         settings.KiroOperatorInstructions,
 		anthropicCacheTTL1hInjection:     settings.EnableAnthropicCacheTTL1hInjection,
 		rewriteMessageCacheControl:       settings.RewriteMessageCacheControl,
 		clientDatelineNormalization:      settings.EnableClientDatelineNormalization,
@@ -3597,6 +3607,8 @@ type gatewayForwardingSettingsResult struct {
 	fp, mp, cch, claudeOAuthSystemPromptInjection, cacheTTL1h, rewriteMessageCacheControl bool
 	clientDatelineNormalization                                                           bool
 	claudeOAuthSystemPrompt, claudeOAuthSystemPromptBlocks                                string
+	kiroOperatorInstructionsEnabled                                                       bool
+	kiroOperatorInstructions                                                              string
 }
 
 func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context) gatewayForwardingSettingsResult {
@@ -3609,6 +3621,8 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 				claudeOAuthSystemPromptInjection: cached.claudeOAuthSystemPromptInjection,
 				claudeOAuthSystemPrompt:          cached.claudeOAuthSystemPrompt,
 				claudeOAuthSystemPromptBlocks:    cached.claudeOAuthSystemPromptBlocks,
+				kiroOperatorInstructionsEnabled:  cached.kiroOperatorInstructionsEnabled,
+				kiroOperatorInstructions:         cached.kiroOperatorInstructions,
 				cacheTTL1h:                       cached.anthropicCacheTTL1hInjection,
 				rewriteMessageCacheControl:       cached.rewriteMessageCacheControl,
 				clientDatelineNormalization:      cached.clientDatelineNormalization,
@@ -3625,6 +3639,8 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 					claudeOAuthSystemPromptInjection: cached.claudeOAuthSystemPromptInjection,
 					claudeOAuthSystemPrompt:          cached.claudeOAuthSystemPrompt,
 					claudeOAuthSystemPromptBlocks:    cached.claudeOAuthSystemPromptBlocks,
+					kiroOperatorInstructionsEnabled:  cached.kiroOperatorInstructionsEnabled,
+					kiroOperatorInstructions:         cached.kiroOperatorInstructions,
 					cacheTTL1h:                       cached.anthropicCacheTTL1hInjection,
 					rewriteMessageCacheControl:       cached.rewriteMessageCacheControl,
 					clientDatelineNormalization:      cached.clientDatelineNormalization,
@@ -3641,6 +3657,8 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 			SettingKeyEnableClaudeOAuthSystemPromptInjection,
 			SettingKeyClaudeOAuthSystemPrompt,
 			SettingKeyClaudeOAuthSystemPromptBlocks,
+			SettingKeyEnableKiroOperatorInstructions,
+			SettingKeyKiroOperatorInstructions,
 			SettingKeyEnableAnthropicCacheTTL1hInjection,
 			SettingKeyRewriteMessageCacheControl,
 			SettingKeyEnableClientDatelineNormalization,
@@ -3652,12 +3670,13 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 				metadataPassthrough:              false,
 				cchSigning:                       false,
 				claudeOAuthSystemPromptInjection: true,
+				kiroOperatorInstructionsEnabled:  true,
 				anthropicCacheTTL1hInjection:     false,
 				rewriteMessageCacheControl:       s.defaultRewriteMessageCacheControl(),
 				clientDatelineNormalization:      true,
 				expiresAt:                        time.Now().Add(gatewayForwardingErrorTTL).UnixNano(),
 			})
-			return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true, rewriteMessageCacheControl: s.defaultRewriteMessageCacheControl(), clientDatelineNormalization: true}, nil
+			return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true, kiroOperatorInstructionsEnabled: true, rewriteMessageCacheControl: s.defaultRewriteMessageCacheControl(), clientDatelineNormalization: true}, nil
 		}
 		fp := true
 		if v, ok := values[SettingKeyEnableFingerprintUnification]; ok && v != "" {
@@ -3671,6 +3690,11 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		}
 		systemPrompt := values[SettingKeyClaudeOAuthSystemPrompt]
 		systemPromptBlocks := values[SettingKeyClaudeOAuthSystemPromptBlocks]
+		kiroOperatorInstructionsEnabled := true
+		if v, ok := values[SettingKeyEnableKiroOperatorInstructions]; ok && v != "" {
+			kiroOperatorInstructionsEnabled = v == "true"
+		}
+		kiroOperatorInstructions := values[SettingKeyKiroOperatorInstructions]
 		cacheTTL1h := values[SettingKeyEnableAnthropicCacheTTL1hInjection] == "true"
 		rewriteMessageCacheControl := s.defaultRewriteMessageCacheControl()
 		if v, ok := values[SettingKeyRewriteMessageCacheControl]; ok && v != "" {
@@ -3688,6 +3712,8 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 			claudeOAuthSystemPromptInjection: systemPromptInjection,
 			claudeOAuthSystemPrompt:          systemPrompt,
 			claudeOAuthSystemPromptBlocks:    systemPromptBlocks,
+			kiroOperatorInstructionsEnabled:  kiroOperatorInstructionsEnabled,
+			kiroOperatorInstructions:         kiroOperatorInstructions,
 			anthropicCacheTTL1hInjection:     cacheTTL1h,
 			rewriteMessageCacheControl:       rewriteMessageCacheControl,
 			clientDatelineNormalization:      clientDatelineNormalization,
@@ -3700,6 +3726,8 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 			claudeOAuthSystemPromptInjection: systemPromptInjection,
 			claudeOAuthSystemPrompt:          systemPrompt,
 			claudeOAuthSystemPromptBlocks:    systemPromptBlocks,
+			kiroOperatorInstructionsEnabled:  kiroOperatorInstructionsEnabled,
+			kiroOperatorInstructions:         kiroOperatorInstructions,
 			cacheTTL1h:                       cacheTTL1h,
 			rewriteMessageCacheControl:       rewriteMessageCacheControl,
 			clientDatelineNormalization:      clientDatelineNormalization,
@@ -3708,7 +3736,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 	if r, ok := val.(gatewayForwardingSettingsResult); ok {
 		return r
 	}
-	return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true, clientDatelineNormalization: true}
+	return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true, kiroOperatorInstructionsEnabled: true, clientDatelineNormalization: true}
 }
 
 // GetGatewayForwardingSettings returns cached gateway forwarding settings.
@@ -3741,6 +3769,38 @@ func (s *SettingService) IsClientDatelineNormalizationEnabled(ctx context.Contex
 func (s *SettingService) GetClaudeOAuthSystemPromptInjectionSettings(ctx context.Context) (enabled bool, prompt string, blocks string) {
 	result := s.getGatewayForwardingSettingsCached(ctx)
 	return result.claudeOAuthSystemPromptInjection, result.claudeOAuthSystemPrompt, result.claudeOAuthSystemPromptBlocks
+}
+
+// DefaultKiroOperatorInstructions is the built-in operator instruction block for
+// Kiro Claude models when the admin setting is enabled but left empty. Live A/B
+// against the Kiro upstream (2026-09-11) showed no identity or task regression on
+// Opus 4.8 / Opus 5 / Haiku 4.5 with this text in place.
+const DefaultKiroOperatorInstructions = "Verify before asserting. Never present an assumption as fact; if unverified, say so. Check that your evidence actually covers the question (all relevant fields, states, units) before concluding. When findings conflict with your hypothesis, suspect the hypothesis, not the findings. Exercise the real path before claiming something works."
+
+// MaxKiroOperatorInstructionsRunes bounds the admin-editable operator block so a
+// pasted document cannot silently inflate every Kiro request.
+const MaxKiroOperatorInstructionsRunes = 4000
+
+// ValidateKiroOperatorInstructions rejects oversized operator instruction text.
+func ValidateKiroOperatorInstructions(text string) error {
+	if utf8.RuneCountInString(strings.TrimSpace(text)) > MaxKiroOperatorInstructionsRunes {
+		return fmt.Errorf("kiro operator instructions exceed %d characters", MaxKiroOperatorInstructionsRunes)
+	}
+	return nil
+}
+
+// GetKiroOperatorInstructions returns the operator instruction block to append to
+// the Kiro platform preamble, or "" when the admin disabled it. Empty text falls
+// back to DefaultKiroOperatorInstructions so the toggle is the single off switch.
+func (s *SettingService) GetKiroOperatorInstructions(ctx context.Context) string {
+	result := s.getGatewayForwardingSettingsCached(ctx)
+	if !result.kiroOperatorInstructionsEnabled {
+		return ""
+	}
+	if text := strings.TrimSpace(result.kiroOperatorInstructions); text != "" {
+		return text
+	}
+	return DefaultKiroOperatorInstructions
 }
 
 // IsEmailVerifyEnabled 检查是否开启邮件验证
@@ -4872,6 +4932,12 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	}
 	result.ClaudeOAuthSystemPrompt = settings[SettingKeyClaudeOAuthSystemPrompt]
 	result.ClaudeOAuthSystemPromptBlocks = settings[SettingKeyClaudeOAuthSystemPromptBlocks]
+	if v, ok := settings[SettingKeyEnableKiroOperatorInstructions]; ok && v != "" {
+		result.EnableKiroOperatorInstructions = v == "true"
+	} else {
+		result.EnableKiroOperatorInstructions = true
+	}
+	result.KiroOperatorInstructions = settings[SettingKeyKiroOperatorInstructions]
 	result.EnableAnthropicCacheTTL1hInjection = settings[SettingKeyEnableAnthropicCacheTTL1hInjection] == "true"
 	if v, ok := settings[SettingKeyRewriteMessageCacheControl]; ok && v != "" {
 		result.RewriteMessageCacheControl = v == "true"

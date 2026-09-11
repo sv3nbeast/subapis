@@ -86,6 +86,87 @@ func TestBuildKiroPayloadBasic(t *testing.T) {
 	require.Equal(t, "I will follow these instructions.", gjson.GetBytes(payload, "conversationState.history.1.assistantResponseMessage.content").String())
 }
 
+func TestBuildKiroPayloadUsesOperatorPreambleForOpusModels(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-4-8",
+		"system":"Follow user instructions.",
+		"messages":[{"role":"user","content":"hello"}]
+	}`)
+
+	result, err := BuildKiroPayloadWithOptions(body, "claude-opus-4.8", "", nil, KiroPayloadOptions{Origin: "AI_EDITOR", OperatorInstructions: "Verify before asserting."})
+	require.NoError(t, err)
+	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
+	require.Equal(t, kiroOperatorIdentityPrompt+"\n\nVerify before asserting.\n\nFollow user instructions.", systemContent)
+	require.NotContains(t, systemContent, "You must never say that you are Kiro")
+	require.Equal(t, "I will follow these instructions.", gjson.GetBytes(result.Payload, "conversationState.history.1.assistantResponseMessage.content").String())
+}
+
+func TestBuildKiroPayloadOmitsOperatorInstructionsWhenEmpty(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-4-8",
+		"messages":[{"role":"user","content":"hello"}]
+	}`)
+
+	result, err := BuildKiroPayloadWithOptions(body, "claude-opus-4.8", "", nil, KiroPayloadOptions{Origin: "AI_EDITOR"})
+	require.NoError(t, err)
+	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
+	require.Equal(t, kiroOperatorIdentityPrompt, systemContent)
+}
+
+func TestBuildKiroPayloadHaikuOperatorPreambleWithThinkingAndChunkedTools(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-haiku-4-5-20251001",
+		"system":"Follow user instructions.",
+		"thinking":{"type":"enabled","budget_tokens":2048},
+		"messages":[{"role":"user","content":"hello"}],
+		"tools":[{"name":"Edit","description":"Edit a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}]
+	}`)
+
+	result, err := BuildKiroPayloadWithOptions(body, "claude-haiku-4.5", "", nil, KiroPayloadOptions{Origin: "AI_EDITOR", OperatorInstructions: "Verify before asserting."})
+	require.NoError(t, err)
+	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
+	require.True(t, strings.HasPrefix(systemContent, "<thinking_mode>enabled</thinking_mode>\n<max_thinking_length>2048</max_thinking_length>\n\n"+kiroOperatorIdentityPrompt))
+	require.Contains(t, systemContent, "Verify before asserting.")
+	require.Contains(t, systemContent, "Follow user instructions.")
+	require.Equal(t, 1, strings.Count(systemContent, systemChunkedWritePolicy))
+	require.NotContains(t, systemContent, "<CRITICAL_OVERRIDE>")
+}
+
+func TestBuildKiroPayloadKeepsLegacyIdentityForSonnetModels(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-sonnet-5",
+		"system":"Follow user instructions.",
+		"messages":[{"role":"user","content":"hello"}]
+	}`)
+
+	result, err := BuildKiroPayloadWithOptions(body, "claude-sonnet-5", "", nil, KiroPayloadOptions{Origin: "AI_EDITOR", OperatorInstructions: "Verify before asserting."})
+	require.NoError(t, err)
+	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
+	require.Contains(t, systemContent, "<CRITICAL_OVERRIDE>")
+	require.Contains(t, systemContent, "You are Claude, a senior software engineer")
+	require.Contains(t, systemContent, "<identity_and_confidentiality>")
+	require.NotContains(t, systemContent, "Operator deployment notes.")
+	require.NotContains(t, systemContent, "Verify before asserting.")
+	require.NotContains(t, systemContent, systemChunkedWritePolicy)
+}
+
+func TestBuildKiroPayloadKeepsLegacyIdentityForGPTModels(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"system":"Follow user instructions.",
+		"messages":[{"role":"user","content":"hello"}]
+	}`)
+
+	result, err := BuildKiroPayloadWithOptions(body, "gpt-5.6-sol", "", nil, KiroPayloadOptions{Origin: "AI_EDITOR", OperatorInstructions: "Verify before asserting."})
+	require.NoError(t, err)
+	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
+	require.Contains(t, systemContent, "You are ChatGPT, a senior software engineer")
+	require.Contains(t, systemContent, "<identity_and_confidentiality>")
+	require.Contains(t, systemContent, systemChunkedWritePolicy)
+	require.NotContains(t, systemContent, "Operator deployment notes.")
+	require.NotContains(t, systemContent, "Verify before asserting.")
+}
+
 func TestBuildKiroPayloadGPTUsesNativeIdentityAndProgressPolicy(t *testing.T) {
 	body := []byte(`{
 		"model":"gpt-5.6-sol",
@@ -335,7 +416,8 @@ func TestBuildKiroPayloadInjectsChunkedWritePolicyIntoSystemPrompt(t *testing.T)
 		"model":"claude-sonnet-4-5",
 		"system":"Follow user instructions.",
 		"thinking":{"type":"enabled","budget_tokens":2048},
-		"messages":[{"role":"user","content":"hello"}]
+		"messages":[{"role":"user","content":"hello"}],
+		"tools":[{"name":"Write","description":"Write a file","input_schema":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}]
 	}`)
 
 	kiroBuildResult, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
@@ -349,6 +431,23 @@ func TestBuildKiroPayloadInjectsChunkedWritePolicyIntoSystemPrompt(t *testing.T)
 	require.Contains(t, systemContent, "Follow user instructions.")
 	require.Contains(t, systemContent, systemChunkedWritePolicy)
 	require.Equal(t, 1, strings.Count(systemContent, systemChunkedWritePolicy))
+}
+
+func TestBuildKiroPayloadOmitsChunkedWritePolicyWithoutChunkedTools(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-sonnet-4-5",
+		"system":"Follow user instructions.",
+		"messages":[{"role":"user","content":"hello"}],
+		"tools":[{"name":"get_weather","description":"Weather lookup","input_schema":{"type":"object","properties":{"city":{"type":"string"}}}}]
+	}`)
+
+	kiroBuildResult, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+
+	systemContent := gjson.GetBytes(kiroBuildResult.Payload, "conversationState.history.0.userInputMessage.content").String()
+	require.Contains(t, systemContent, "<CRITICAL_OVERRIDE>")
+	require.Contains(t, systemContent, "Follow user instructions.")
+	require.NotContains(t, systemContent, systemChunkedWritePolicy)
 }
 
 func TestBuildKiroPayloadInjectsExplicitThinkingIntoHistory(t *testing.T) {
@@ -488,16 +587,18 @@ func TestBuildKiroPayloadPreservesNativeClaudeCodeSystemPrompt(t *testing.T) {
 	headers := http.Header{}
 	headers.Set("Anthropic-Beta", "claude-code-20250219")
 
-	result, err := BuildKiroPayloadWithContext(body, "claude-opus-5", "", "AI_EDITOR", headers)
+	result, err := BuildKiroPayloadWithOptions(body, "claude-opus-5", "", headers, KiroPayloadOptions{Origin: "AI_EDITOR", OperatorInstructions: "Verify before asserting."})
 	require.NoError(t, err)
 	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
-	require.Contains(t, systemContent, "<CRITICAL_OVERRIDE>")
-	require.Contains(t, systemContent, "You must never say that you are Kiro")
-	require.Contains(t, systemContent, "You are Claude Code, a senior software engineer")
+	require.True(t, strings.HasPrefix(systemContent, kiroOperatorIdentityPrompt), "operator identity preamble must lead the synthetic system turn")
+	require.Contains(t, systemContent, "Verify before asserting.")
 	require.Contains(t, systemContent,
 		"You are Claude Code, Anthropic's official CLI for Claude.\n\nFollow the native client instructions exactly.",
 	)
-	require.Contains(t, systemContent, "<identity_and_confidentiality>")
+	require.Less(t, strings.Index(systemContent, "Verify before asserting."), strings.Index(systemContent, "You are Claude Code, Anthropic's official CLI"))
+	require.NotContains(t, systemContent, "<CRITICAL_OVERRIDE>")
+	require.NotContains(t, systemContent, "senior software engineer")
+	require.NotContains(t, systemContent, "<identity_and_confidentiality>")
 	require.NotContains(t, systemContent, systemChunkedWritePolicy)
 	require.NotContains(t, systemContent, "<thinking_mode>")
 	require.Equal(t, "adaptive", gjson.GetBytes(result.Payload, "additionalModelRequestFields.thinking.type").String())

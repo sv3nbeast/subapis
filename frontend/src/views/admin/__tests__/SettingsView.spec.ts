@@ -477,6 +477,8 @@ const baseSettingsResponse = {
   enable_claude_oauth_system_prompt_injection: true,
   claude_oauth_system_prompt: "",
   claude_oauth_system_prompt_blocks: "",
+  enable_kiro_operator_instructions: true,
+  kiro_operator_instructions: "",
   enable_anthropic_cache_ttl_1h_injection: false,
   rewrite_message_cache_control: false,
   enable_client_dateline_normalization: true,
@@ -1229,6 +1231,28 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(updateSettings).toHaveBeenCalledTimes(1);
     expect(updateSettings.mock.calls[0]?.[0]).not.toHaveProperty(
       "enable_cch_signing",
+    );
+  });
+
+  it("submits Kiro operator instruction gateway settings", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      enable_kiro_operator_instructions: false,
+      kiro_operator_instructions: "  Custom operator block.  ",
+    });
+
+    const wrapper = mountView();
+
+    await flushPromises();
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enable_kiro_operator_instructions: false,
+        kiro_operator_instructions: "Custom operator block.",
+      }),
     );
   });
 

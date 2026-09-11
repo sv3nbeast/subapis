@@ -1338,6 +1338,16 @@ func nianzsKiroEndpointModeForRequest(account *Account, parsed *ParsedRequest) s
 
 // buildKiroPayloadForAccountWithArnNianzs 使用显式 profileArn 构建 Kiro 请求 payload。
 // auto 模式下 Q/KRS 端点需要不同 profileArn，调用方按端点维度传入。
+// kiroOperatorInstructionsForPayload resolves the admin-configured operator
+// instruction block for the Kiro platform preamble. Nil services (tests) inject
+// nothing.
+func (s *GatewayService) kiroOperatorInstructionsForPayload(ctx context.Context) string {
+	if s == nil || s.settingService == nil {
+		return ""
+	}
+	return s.settingService.GetKiroOperatorInstructions(ctx)
+}
+
 func (s *GatewayService) buildKiroPayloadForAccountWithArnNianzs(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header, profileArn string, flattenCompletedToolHistory, compactOldCompletedToolHistory bool, options nianzsKiroUpstreamRequestOptions) (*nianzskiro.KiroBuildResult, error) {
 	_ = token
 	anthropicBody = nianzsPrepareKiroPayloadBodyForRequestModel(anthropicBody, requestModel)
@@ -1357,6 +1367,7 @@ func (s *GatewayService) buildKiroPayloadForAccountWithArnNianzs(ctx context.Con
 		RequireNativeToolProgress:              requireNativeToolProgress,
 		RequireNativeToolCallMarker:            requireNativeToolCallMarker,
 		RequireNativeToolTextPrelude:           requireNativeToolTextPrelude,
+		OperatorInstructions:                   s.kiroOperatorInstructionsForPayload(ctx),
 		FlattenCompletedToolHistory:            flattenCompletedToolHistory,
 		CompletedToolHistoryKeepRecentToolUses: keepRecentToolUses,
 		CompletedToolHistoryOldInputLimit:      oldToolInputLimit,

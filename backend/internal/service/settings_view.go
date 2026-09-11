@@ -262,6 +262,8 @@ type SystemSettings struct {
 	EnableClaudeOAuthSystemPromptInjection        bool   // 是否对 Claude OAuth mimic 路径注入 Claude Code system blocks（默认 true）
 	ClaudeOAuthSystemPrompt                       string // Claude OAuth mimic 路径注入的通用扩展 system prompt；空值使用内置默认
 	ClaudeOAuthSystemPromptBlocks                 string // Claude OAuth mimic 路径注入的 system blocks JSON 配置；空值使用内置默认
+	EnableKiroOperatorInstructions                bool   // 是否在 Kiro 渠道 Claude 模型（Sonnet 系除外）前导中追加运营附加指令（默认 true）
+	KiroOperatorInstructions                      string // Kiro 渠道运营附加指令文本；空值使用内置默认
 	MinCodexVersion                               string // codex_cli_only 最低 Codex 引擎版本；空=不检查
 	MaxCodexVersion                               string // codex_cli_only 最高 Codex 引擎版本；空=不检查
 	CodexCLIOnlyBlacklist                         string // codex_cli_only 全局黑名单 JSON（[]AllowedClientEntry，OR deny）

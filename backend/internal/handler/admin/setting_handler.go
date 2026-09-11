@@ -324,6 +324,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		EnableClaudeOAuthSystemPromptInjection:                 settings.EnableClaudeOAuthSystemPromptInjection,
 		ClaudeOAuthSystemPrompt:                                settings.ClaudeOAuthSystemPrompt,
 		ClaudeOAuthSystemPromptBlocks:                          settings.ClaudeOAuthSystemPromptBlocks,
+		EnableKiroOperatorInstructions:                         settings.EnableKiroOperatorInstructions,
+		KiroOperatorInstructions:                               settings.KiroOperatorInstructions,
 		EnableAnthropicCacheTTL1hInjection:                     settings.EnableAnthropicCacheTTL1hInjection,
 		RewriteMessageCacheControl:                             settings.RewriteMessageCacheControl,
 		EnableClientDatelineNormalization:                      settings.EnableClientDatelineNormalization,
@@ -757,6 +759,8 @@ type UpdateSettingsRequest struct {
 	EnableClaudeOAuthSystemPromptInjection        *bool   `json:"enable_claude_oauth_system_prompt_injection"`
 	ClaudeOAuthSystemPrompt                       *string `json:"claude_oauth_system_prompt"`
 	ClaudeOAuthSystemPromptBlocks                 *string `json:"claude_oauth_system_prompt_blocks"`
+	EnableKiroOperatorInstructions                *bool   `json:"enable_kiro_operator_instructions"`
+	KiroOperatorInstructions                      *string `json:"kiro_operator_instructions"`
 	OpenAICodexUserAgent                          *string `json:"openai_codex_user_agent"`
 	MinCodexVersion                               string  `json:"min_codex_version"`
 	MaxCodexVersion                               string  `json:"max_codex_version"`
@@ -2093,6 +2097,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.ClaudeOAuthSystemPromptBlocks
 		}(),
+		EnableKiroOperatorInstructions: func() bool {
+			if req.EnableKiroOperatorInstructions != nil {
+				return *req.EnableKiroOperatorInstructions
+			}
+			return previousSettings.EnableKiroOperatorInstructions
+		}(),
+		KiroOperatorInstructions: func() string {
+			if req.KiroOperatorInstructions != nil {
+				return *req.KiroOperatorInstructions
+			}
+			return previousSettings.KiroOperatorInstructions
+		}(),
 		EnableAnthropicCacheTTL1hInjection: func() bool {
 			if req.EnableAnthropicCacheTTL1hInjection != nil {
 				return *req.EnableAnthropicCacheTTL1hInjection
@@ -2677,6 +2693,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		EnableClaudeOAuthSystemPromptInjection:                 updatedSettings.EnableClaudeOAuthSystemPromptInjection,
 		ClaudeOAuthSystemPrompt:                                updatedSettings.ClaudeOAuthSystemPrompt,
 		ClaudeOAuthSystemPromptBlocks:                          updatedSettings.ClaudeOAuthSystemPromptBlocks,
+		EnableKiroOperatorInstructions:                         updatedSettings.EnableKiroOperatorInstructions,
+		KiroOperatorInstructions:                               updatedSettings.KiroOperatorInstructions,
 		EnableAnthropicCacheTTL1hInjection:                     updatedSettings.EnableAnthropicCacheTTL1hInjection,
 		RewriteMessageCacheControl:                             updatedSettings.RewriteMessageCacheControl,
 		EnableClientDatelineNormalization:                      updatedSettings.EnableClientDatelineNormalization,
@@ -3219,6 +3237,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.ClaudeOAuthSystemPromptBlocks != after.ClaudeOAuthSystemPromptBlocks {
 		changed = append(changed, "claude_oauth_system_prompt_blocks")
+	}
+	if before.EnableKiroOperatorInstructions != after.EnableKiroOperatorInstructions {
+		changed = append(changed, "enable_kiro_operator_instructions")
+	}
+	if before.KiroOperatorInstructions != after.KiroOperatorInstructions {
+		changed = append(changed, "kiro_operator_instructions")
 	}
 	if before.EnableAnthropicCacheTTL1hInjection != after.EnableAnthropicCacheTTL1hInjection {
 		changed = append(changed, "enable_anthropic_cache_ttl_1h_injection")
