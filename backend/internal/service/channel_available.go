@@ -23,6 +23,8 @@ type AvailableGroupRef struct {
 	PeakEnd            string
 	PeakRateMultiplier float64
 	IsExclusive        bool
+	// LongContextPricingEnabled 分组是否按上下文长度应用阶梯价；关闭时实收只按基础档。
+	LongContextPricingEnabled bool
 }
 
 // AvailableChannel 可用渠道视图：用于「可用渠道」页面展示渠道基础信息 +
@@ -74,6 +76,8 @@ func (s *ChannelService) ListAvailable(ctx context.Context) ([]AvailableChannel,
 			PeakEnd:            g.PeakEnd,
 			PeakRateMultiplier: g.PeakRateMultiplier,
 			IsExclusive:        g.IsExclusive,
+
+			LongContextPricingEnabled: g.LongContextPricingEnabled,
 		}
 	}
 

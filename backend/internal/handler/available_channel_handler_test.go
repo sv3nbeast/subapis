@@ -213,7 +213,7 @@ func TestUserAvailableChannel_FieldWhitelist(t *testing.T) {
 	require.NoError(t, err)
 	var groupDecoded map[string]any
 	require.NoError(t, json.Unmarshal(rawGroup, &groupDecoded))
-	for _, key := range []string{"id", "name", "platform", "subscription_type", "rate_multiplier", "peak_rate_enabled", "peak_start", "peak_end", "peak_rate_multiplier", "is_exclusive"} {
+	for _, key := range []string{"id", "name", "platform", "subscription_type", "rate_multiplier", "peak_rate_enabled", "peak_start", "peak_end", "peak_rate_multiplier", "is_exclusive", "long_context_pricing_enabled"} {
 		_, exists := groupDecoded[key]
 		require.Truef(t, exists, "group DTO must expose %q", key)
 	}
@@ -358,4 +358,111 @@ func TestBuildPlatformSections_CompositeWithoutModelsKeepsEmptyCompositeSection(
 	require.Equal(t, service.PlatformComposite, sections[0].Platform)
 	require.Len(t, sections[0].Groups, 1)
 	require.Empty(t, sections[0].SupportedModels)
+}
+
+func floatPtr(v float64) *float64 { return &v }
+
+// solLadder 模拟计费阶梯表折出的两档：渠道基础价 + 目录 272K 翻倍档。
+func solLadder() []service.PricingInterval {
+	max := 272000
+	return []service.PricingInterval{
+		{MinTokens: 0, MaxTokens: &max, TierLabel: "≤272K", InputPrice: floatPtr(4e-6), OutputPrice: floatPtr(20e-6), CacheWritePrice: floatPtr(5e-6), CacheReadPrice: floatPtr(0.4e-6)},
+		{MinTokens: 272000, TierLabel: ">272K", InputPrice: floatPtr(8e-6), OutputPrice: floatPtr(30e-6), CacheWritePrice: floatPtr(10e-6), CacheReadPrice: floatPtr(0.8e-6), SortOrder: 1},
+	}
+}
+
+func contextIntervalSections() []userChannelPlatformSection {
+	return []userChannelPlatformSection{{
+		Platform: "openai",
+		Groups: []userAvailableGroup{
+			{ID: 1, Name: "off", Platform: "openai"},
+			{ID: 2, Name: "on", Platform: "openai", LongContextPricingEnabled: true},
+		},
+		SupportedModels: []userSupportedModel{
+			{Name: "gpt-5.6-sol", Platform: "openai", Pricing: &userSupportedModelPricing{BillingMode: "token", InputPrice: floatPtr(4e-6), Intervals: []userPricingIntervalDTO{}}},
+			{Name: "gpt-image-2", Platform: "openai", Pricing: &userSupportedModelPricing{BillingMode: "image", PerRequestPrice: floatPtr(0.04), Intervals: []userPricingIntervalDTO{}}},
+			{Name: "no-pricing", Platform: "openai"},
+		},
+	}}
+}
+
+// 渠道行没配区间的 token 模型，用计费阶梯表补出多档 intervals；按次/图片模型与无定价模型不动。
+// 解析用的分组必须是 section 内已开启长上下文阶梯的那个。
+func TestApplyContextIntervals_FillsTokenModelsWithBillingLadder(t *testing.T) {
+	sections := contextIntervalSections()
+	groups := map[int64]*service.Group{
+		1: {ID: 1, Platform: "openai"},
+		2: {ID: 2, Platform: "openai", LongContextPricingEnabled: true},
+	}
+	var seen []string
+	resolve := func(model, platform string, group *service.Group) []service.PricingInterval {
+		seen = append(seen, model)
+		require.Equal(t, "openai", platform)
+		require.Equal(t, int64(2), group.ID, "must resolve with the long-context-enabled group")
+		if model == "gpt-5.6-sol" {
+			return solLadder()
+		}
+		return nil
+	}
+
+	applyContextIntervals(sections, groups, resolve)
+
+	require.Equal(t, []string{"gpt-5.6-sol"}, seen, "only token models with pricing are resolved")
+	sol := sections[0].SupportedModels[0].Pricing
+	require.Len(t, sol.Intervals, 2)
+	require.Equal(t, "≤272K", sol.Intervals[0].TierLabel)
+	require.Equal(t, 272000, *sol.Intervals[0].MaxTokens)
+	require.InDelta(t, 4e-6, *sol.Intervals[0].InputPrice, 1e-12)
+	require.Equal(t, ">272K", sol.Intervals[1].TierLabel)
+	require.Nil(t, sol.Intervals[1].MaxTokens)
+	require.InDelta(t, 8e-6, *sol.Intervals[1].InputPrice, 1e-12)
+	require.InDelta(t, 30e-6, *sol.Intervals[1].OutputPrice, 1e-12)
+	require.InDelta(t, 10e-6, *sol.Intervals[1].CacheWritePrice, 1e-12)
+	require.InDelta(t, 0.8e-6, *sol.Intervals[1].CacheReadPrice, 1e-12)
+	require.InDelta(t, 4e-6, *sol.InputPrice, 1e-12, "flat base price is untouched")
+	require.Empty(t, sections[0].SupportedModels[1].Pricing.Intervals)
+	require.Nil(t, sections[0].SupportedModels[2].Pricing)
+}
+
+// section 内所有分组都关闭阶梯时，按首个分组的副本以开启口径解析（原实体不改），
+// 让前端能在分组开关关闭时展示"未启用阶梯"提示；解析不出多档则保持原样。
+func TestApplyContextIntervals_AllGroupsDisabledResolvesWithEnabledClone(t *testing.T) {
+	sections := contextIntervalSections()
+	sections[0].Groups[1].LongContextPricingEnabled = false
+	original := &service.Group{ID: 1, Platform: "openai"}
+	groups := map[int64]*service.Group{1: original, 2: {ID: 2, Platform: "openai"}}
+
+	var resolvedWith *service.Group
+	applyContextIntervals(sections, groups, func(model, platform string, group *service.Group) []service.PricingInterval {
+		resolvedWith = group
+		if model == "gpt-5.6-sol" {
+			return solLadder()
+		}
+		return nil
+	})
+
+	require.NotNil(t, resolvedWith)
+	require.Equal(t, int64(1), resolvedWith.ID)
+	require.True(t, resolvedWith.LongContextPricingEnabled)
+	require.False(t, original.LongContextPricingEnabled, "the caller's group entity must not be mutated")
+	require.Len(t, sections[0].SupportedModels[0].Pricing.Intervals, 2)
+}
+
+func TestApplyContextIntervals_NoResolverOrSingleTierKeepsRawIntervals(t *testing.T) {
+	sections := contextIntervalSections()
+	raw := userPricingIntervalDTO{MinTokens: 0, TierLabel: "raw"}
+	sections[0].SupportedModels[0].Pricing.Intervals = []userPricingIntervalDTO{raw}
+	groups := map[int64]*service.Group{2: {ID: 2, Platform: "openai", LongContextPricingEnabled: true}}
+
+	applyContextIntervals(sections, groups, nil)
+	require.Equal(t, []userPricingIntervalDTO{raw}, sections[0].SupportedModels[0].Pricing.Intervals)
+
+	single := solLadder()[:1]
+	applyContextIntervals(sections, groups, func(string, string, *service.Group) []service.PricingInterval { return single })
+	require.Equal(t, []userPricingIntervalDTO{raw}, sections[0].SupportedModels[0].Pricing.Intervals, "a single tier is not a ladder")
+
+	applyContextIntervals(sections, map[int64]*service.Group{}, func(string, string, *service.Group) []service.PricingInterval {
+		t.Fatal("must not resolve without any group entity")
+		return nil
+	})
 }

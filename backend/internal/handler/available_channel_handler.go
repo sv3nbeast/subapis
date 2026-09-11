@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"sort"
 	"strings"
 
@@ -24,6 +25,10 @@ type AvailableChannelHandler struct {
 	channelService *service.ChannelService
 	apiKeyService  *service.APIKeyService
 	settingService *service.SettingService
+	// billingService + pricingResolver 用于按实收口径解析模型的上下文阶梯（与计费同源）；
+	// 任一为 nil 时跳过阶梯补全，沿用渠道原始定价。
+	billingService  *service.BillingService
+	pricingResolver *service.ModelPricingResolver
 }
 
 // NewAvailableChannelHandler 创建用户侧可用渠道 handler。
@@ -31,11 +36,15 @@ func NewAvailableChannelHandler(
 	channelService *service.ChannelService,
 	apiKeyService *service.APIKeyService,
 	settingService *service.SettingService,
+	billingService *service.BillingService,
+	pricingResolver *service.ModelPricingResolver,
 ) *AvailableChannelHandler {
 	return &AvailableChannelHandler{
-		channelService: channelService,
-		apiKeyService:  apiKeyService,
-		settingService: settingService,
+		channelService:  channelService,
+		apiKeyService:   apiKeyService,
+		settingService:  settingService,
+		billingService:  billingService,
+		pricingResolver: pricingResolver,
 	}
 }
 
@@ -63,6 +72,8 @@ type userAvailableGroup struct {
 	PeakEnd            string  `json:"peak_end"`
 	PeakRateMultiplier float64 `json:"peak_rate_multiplier"`
 	IsExclusive        bool    `json:"is_exclusive"`
+	// LongContextPricingEnabled 分组是否按上下文长度应用阶梯价：关闭时前端只展示基础档。
+	LongContextPricingEnabled bool `json:"long_context_pricing_enabled"`
 }
 
 // userSupportedModelPricing 用户可见的定价字段白名单。
@@ -306,9 +317,12 @@ func (h *AvailableChannelHandler) List(c *gin.Context) {
 		return
 	}
 	allowedGroupIDs := make(map[int64]struct{}, len(userGroups))
+	groupByID := make(map[int64]*service.Group, len(userGroups))
 	for i := range userGroups {
 		allowedGroupIDs[userGroups[i].ID] = struct{}{}
+		groupByID[userGroups[i].ID] = &userGroups[i]
 	}
+	resolveIntervals := h.contextIntervalResolver(c.Request.Context())
 
 	channels, err := h.channelService.ListAvailable(c.Request.Context())
 	if err != nil {
@@ -329,6 +343,7 @@ func (h *AvailableChannelHandler) List(c *gin.Context) {
 		if len(sections) == 0 {
 			continue
 		}
+		applyContextIntervals(sections, groupByID, resolveIntervals)
 		out = append(out, userAvailableChannel{
 			Name:        ch.Name,
 			Description: ch.Description,
@@ -403,6 +418,79 @@ func buildPlatformSections(
 	return sections
 }
 
+// contextIntervalResolver 解析（模型, 平台, 分组）的实收上下文阶梯；返回 nil 表示无阶梯。
+type contextIntervalResolver func(model, platform string, group *service.Group) []service.PricingInterval
+
+// contextIntervalResolver 把计费服务包装成阶梯解析函数；依赖缺失（测试或未注入）时返回 nil，
+// 调用方跳过阶梯补全。
+func (h *AvailableChannelHandler) contextIntervalResolver(ctx context.Context) contextIntervalResolver {
+	if h.billingService == nil || h.pricingResolver == nil {
+		return nil
+	}
+	return func(model, platform string, group *service.Group) []service.PricingInterval {
+		return h.billingService.ResolveDisplayContextIntervals(ctx, h.pricingResolver, model, platform, group)
+	}
+}
+
+// applyContextIntervals 用与计费同源的阶梯表覆盖各 section 中 token 模型的 intervals。
+//
+// 渠道行没配区间、但目录带长上下文阶梯（如 GPT 系列 272K 起输入/缓存 2x、输出 1.5x）的模型，
+// 原始渠道定价看不出阶梯，用户在「可用分组」页只能看到基础价。同一 section 的分组共享同一
+// 渠道定价，分组间唯一影响阶梯的差异是 long_context_pricing_enabled 开关，因此按一个代表分组
+// 解析（优先已开启的分组；都未开启时按开启口径解析），前端再按各分组开关决定展示整梯还是基础档。
+// 解析不出多档（单档/非 token/无来源）的模型保持原样。
+func applyContextIntervals(
+	sections []userChannelPlatformSection,
+	groups map[int64]*service.Group,
+	resolve contextIntervalResolver,
+) {
+	if resolve == nil {
+		return
+	}
+	for si := range sections {
+		section := &sections[si]
+		rep := representativeContextGroup(section.Groups, groups)
+		if rep == nil {
+			continue
+		}
+		for mi := range section.SupportedModels {
+			m := &section.SupportedModels[mi]
+			if m.Pricing == nil || m.Pricing.BillingMode != string(service.BillingModeToken) {
+				continue
+			}
+			intervals := resolve(m.Name, section.Platform, rep)
+			if len(intervals) < 2 {
+				continue
+			}
+			m.Pricing.Intervals = toUserPricingIntervals(intervals)
+		}
+	}
+}
+
+// representativeContextGroup 选出 section 内用于解析阶梯的分组实体：优先开启了长上下文阶梯
+// 的分组；都未开启时取首个分组的副本并置开启（不改动原实体），让阶梯本身可被解析出来。
+func representativeContextGroup(refs []userAvailableGroup, groups map[int64]*service.Group) *service.Group {
+	var first *service.Group
+	for _, ref := range refs {
+		g := groups[ref.ID]
+		if g == nil {
+			continue
+		}
+		if g.LongContextPricingEnabled {
+			return g
+		}
+		if first == nil {
+			first = g
+		}
+	}
+	if first == nil {
+		return nil
+	}
+	clone := *first
+	clone.LongContextPricingEnabled = true
+	return &clone
+}
+
 // filterUserVisibleGroups 仅保留用户可访问的分组。
 func filterUserVisibleGroups(
 	groups []service.AvailableGroupRef,
@@ -424,6 +512,8 @@ func filterUserVisibleGroups(
 			PeakEnd:            g.PeakEnd,
 			PeakRateMultiplier: g.PeakRateMultiplier,
 			IsExclusive:        g.IsExclusive,
+
+			LongContextPricingEnabled: g.LongContextPricingEnabled,
 		})
 	}
 	return visible

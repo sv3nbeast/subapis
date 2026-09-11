@@ -321,7 +321,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	handlerPaymentHandler := handler.NewPaymentHandler(paymentService, paymentConfigService, channelService, invoiceService)
 	paymentWebhookHandler := handler.NewPaymentWebhookHandler(paymentService, registry)
 	statusHandler := handler.NewStatusHandler(statusProbeService)
-	availableChannelHandler := handler.NewAvailableChannelHandler(channelService, apiKeyService, settingService)
+	availableChannelHandler := handler.NewAvailableChannelHandler(channelService, apiKeyService, settingService, billingService, modelPricingResolver)
 	modelPlazaService := service.NewModelPlazaService(channelRepository, groupRepository, pricingService, billingService, modelPricingResolver)
 	modelPlazaHandler := handler.NewModelPlazaHandler(modelPlazaService, apiKeyService, settingService)
 	batchImageRepository := repository.NewBatchImageRepository(db)

@@ -170,6 +170,7 @@
                     :key="`${entry.group.id}-${channel.channelName}-${model.platform}-${model.name}`"
                     :model="model"
                     :no-pricing-label="noPricingLabel"
+                    :long-context-enabled="entry.group.long_context_pricing_enabled !== false"
                   />
                 </tbody>
               </table>

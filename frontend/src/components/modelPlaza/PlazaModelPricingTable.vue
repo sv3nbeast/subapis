@@ -111,7 +111,7 @@
                   :key="idx"
                   class="whitespace-nowrap text-xs leading-5"
                 >
-                  <span class="mr-1 font-sans font-normal text-gray-400 dark:text-dark-500" :title="tierHint(m)">{{ tierLabel(iv) }}</span>
+                  <span class="mr-1 font-sans font-normal text-gray-400 dark:text-dark-500" :title="tierHint(m)">{{ formatContextTierLabel(iv) }}</span>
                   {{ paidPerMillion(iv.input_price, period) }}
                 </div>
               </template>
@@ -184,7 +184,7 @@
                   :key="idx"
                   class="inline-flex items-center gap-1 rounded-md bg-gray-100 px-2 py-0.5 font-mono text-xs text-gray-800 dark:bg-dark-700/60 dark:text-gray-200"
                 >
-                  <span class="font-sans text-gray-400 dark:text-dark-500">{{ tierLabel(iv) }}</span>
+                  <span class="font-sans text-gray-400 dark:text-dark-500">{{ formatContextTierLabel(iv) }}</span>
                   {{ paidRequestPrice(m, iv.per_request_price)
                   }}<span class="font-sans text-gray-400 dark:text-dark-500">{{ perUnitSuffix(m) }}</span>
                 </span>
@@ -209,7 +209,7 @@
                 :key="idx"
                 class="whitespace-nowrap leading-5"
               >
-                <span class="mr-1 font-sans text-gray-400 dark:text-dark-500" :title="t('modelPlaza.table.tierHint')">{{ tierLabel(iv) }}</span>
+                <span class="mr-1 font-sans text-gray-400 dark:text-dark-500" :title="t('modelPlaza.table.tierHint')">{{ formatContextTierLabel(iv) }}</span>
                 {{ official(iv.input_price) }}
               </div>
             </template>
@@ -299,7 +299,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { formatScaled } from '@/utils/pricing'
+import { formatContextTierLabel, formatScaled } from '@/utils/pricing'
 import { platformAccentColor, platformBadgeLightClass, platformLabel } from '@/utils/platformColors'
 import {
   BILLING_MODE_TOKEN,
@@ -504,25 +504,6 @@ function requestIntervals(m: PlazaModel): UserPricingInterval[] {
   return (m.pricing?.intervals ?? []).filter((iv) => iv.per_request_price != null)
 }
 
-/**
- * 档位标签:优先后端/管理员给出的 tier_label,否则按区间生成统一形态——
- * 有上限为「≤上限」,末档为「>下限」;档位升序排列,相邻的 ≤100K / ≤200K 即表示 (100K,200K]。
- */
-function tierLabel(iv: UserPricingInterval): string {
-  if (iv.tier_label) return iv.tier_label
-  const { min_tokens: min, max_tokens: max } = iv
-  return max == null ? `>${formatTokenCount(min)}` : `≤${formatTokenCount(max)}`
-}
-
-function formatTokenCount(n: number): string {
-  if (n >= 1_000_000) return `${trimZero(n / 1_000_000)}M`
-  if (n >= 1_000) return `${trimZero(n / 1_000)}K`
-  return String(n)
-}
-
-function trimZero(n: number): string {
-  return String(Math.round(n * 100) / 100)
-}
 </script>
 
 <style scoped>

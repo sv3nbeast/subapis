@@ -1703,7 +1703,10 @@ const baseMessages = {
       viewStatus: '查看状态',
       priceStatus: '价格状态',
       unknownBilling: '未配置',
-      intervalHint: '包含 {count} 组阶梯价格，默认显示基础价格摘要'
+      intervalHint: '包含 {count} 组阶梯价格，默认显示基础价格摘要',
+      longContextBadge: '上下文阶梯',
+      longContextTierHint: '按单次请求的总上下文（输入 + 缓存写入 + 缓存读取）所在档位对整单计价',
+      longContextDisabledHint: '该分组未启用长上下文阶梯计费，超阈值请求仍按基础档计费'
     },
     columns: {
       name: '渠道名',

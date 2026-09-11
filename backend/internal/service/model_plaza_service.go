@@ -257,26 +257,9 @@ func plazaPricingFromSchedule(raw *ChannelModelPricing, sched *ContextPricingSch
 	out.CacheWritePrice = first.CacheWrite
 	out.CacheReadPrice = first.CacheRead
 	if len(sched.Tiers) > 1 {
-		out.Intervals = plazaIntervalsFromTiers(sched.Tiers)
+		out.Intervals = ContextPricingIntervalsFromTiers(sched.Tiers)
 	}
 	return out
-}
-
-func plazaIntervalsFromTiers(tiers []ContextPricingTier) []PricingInterval {
-	intervals := make([]PricingInterval, 0, len(tiers))
-	for i, t := range tiers {
-		intervals = append(intervals, PricingInterval{
-			MinTokens:       t.MinTokens,
-			MaxTokens:       t.MaxTokens,
-			TierLabel:       t.Label,
-			InputPrice:      t.Input,
-			OutputPrice:     t.Output,
-			CacheWritePrice: t.CacheWrite,
-			CacheReadPrice:  t.CacheRead,
-			SortOrder:       i,
-		})
-	}
-	return intervals
 }
 
 // plazaImageDisplayPricing 为图片计费模型合成展示定价，使档位价与实收口径一致：
@@ -351,7 +334,7 @@ func (s *ModelPlazaService) lookupOfficialPricing(ctx context.Context, modelName
 		if s.resolver != nil {
 			sched, schedErr := s.billingService.ResolveContextPricingSchedule(ctx, s.resolver, ContextPricingScheduleInput{Model: modelName})
 			if schedErr == nil && sched != nil && len(sched.Tiers) > 1 {
-				result.Intervals = plazaIntervalsFromTiers(sched.Tiers)
+				result.Intervals = ContextPricingIntervalsFromTiers(sched.Tiers)
 			}
 		}
 		if result.InputPrice == nil && result.OutputPrice == nil && result.CacheWritePrice == nil &&

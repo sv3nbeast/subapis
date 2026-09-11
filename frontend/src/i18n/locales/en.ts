@@ -1728,7 +1728,10 @@ const baseMessages = {
       viewStatus: 'View Status',
       priceStatus: 'Pricing Status',
       unknownBilling: 'Not Configured',
-      intervalHint: 'Includes {count} tiered price sets; base price summary is shown by default'
+      intervalHint: 'Includes {count} tiered price sets; base price summary is shown by default',
+      longContextBadge: 'Context tiers',
+      longContextTierHint: 'The whole request is billed at the tier matching its total context (input + cache write + cache read)',
+      longContextDisabledHint: 'Long-context tiered billing is disabled for this group; requests above the threshold are still billed at the base tier'
     },
     columns: {
       name: 'Channel',
