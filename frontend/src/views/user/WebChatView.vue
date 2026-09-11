@@ -1,6 +1,6 @@
 <template>
-  <WebChatWorkbench :section="workspaceSection" :busy="sending || creatingSession || agent.creating.value" :projects-enabled="options.projects_enabled" :files-enabled="options.files_enabled" :artifacts-enabled="artifactsEnabled" :templates-enabled="options.templates_enabled" @home="goHome" @navigate="navigateWorkspace" @templates="templateDialogOpen=true">
-    <div class="web-chat-shell">
+  <WebChatWorkbench :section="workspaceSection" :busy="sending || creatingSession || agent.creating.value" :projects-enabled="options.projects_enabled" :files-enabled="options.files_enabled" :artifacts-enabled="artifactsEnabled" :templates-enabled="options.templates_enabled" :balance="balanceLabel" :user-name="authStore.user?.username" @home="goHome" @navigate="navigateWorkspace" @templates="templateDialogOpen=true">
+    <div class="web-chat-shell" :class="{ 'is-focus': focusMode }">
       <aside class="session-panel wc-sessions" :class="{ 'is-open': sessionsOpen }">
         <div class="wc-sess-head"><h2>{{ t('webChat.sessions') }}</h2><div class="wc-sess-actions"><button class="wc-ib wc-sess-close" :aria-label="t('common.close')" @click="sessionsOpen=false"><Icon name="x" size="sm" /></button><button class="wc-ib wc-ib-pri" :title="t('webChat.newChat')" :aria-label="t('webChat.newChat')" :disabled="sending" @click="goHome"><Icon name="plus" size="sm" /></button></div></div>
         <label class="search-box wc-search"><Icon name="search" size="sm" /><input v-model="sessionQuery" :aria-label="t('webChat.searchSessions')" :placeholder="t('webChat.searchSessions')" /><kbd>⌘K</kbd></label>
@@ -22,7 +22,8 @@
             <p class="wc-grp">{{ t(`webChat.${group.label}`) }}</p>
             <article v-for="session in group.items" :key="session.id" class="session-item wc-item" :class="{active:session.id===activeSessionId, on:session.id===activeSessionId}" :style="{ '--pc': projectColor(session) }">
               <button class="session-select wc-item-main" :disabled="sending" @click="selectSession(session)"><span class="wc-item-t trunc">{{ session.title || sessionModelLabel(session) }}</span><span class="wc-item-s trunc">{{ sessionModelLabel(session) }} · {{ relativeTime(session.updated_at || session.created_at) }}</span></button>
-              <span v-if="session.pinned_at" class="wc-item-pin"><Icon name="bookmark" size="xs" /></span>
+              <span v-if="sessionBadge(session)" class="wc-item-badge"><Icon :name="sessionBadge(session)!.icon" size="xs" />{{ sessionBadge(session)!.label }}</span>
+              <span v-else-if="session.pinned_at" class="wc-item-pin"><Icon name="bookmark" size="xs" /></span>
               <div class="session-actions wc-item-acts"><button :aria-label="t('webChat.pin')" :disabled="sending" @click="togglePin(session)"><Icon name="bookmark" size="xs" /></button><button :aria-label="t('webChat.rename')" :disabled="sending" @click="renameSession(session)"><Icon name="edit" size="xs" /></button></div>
             </article>
           </template>
@@ -31,7 +32,7 @@
         <button v-if="options.templates_enabled" class="assistant-entry wc-sess-entry" :disabled="sending" @click="templateDialogOpen=true"><Icon name="sparkles" size="sm" />{{ t('workspace.assistants') }}</button>
         <div class="wc-sess-foot"><span>{{ t('webChat.sessionCount', { count: sessions.length }) }}</span></div>
       </aside>
-      <main id="web-agent-main" class="chat-panel" tabindex="-1">
+      <main id="web-agent-main" class="chat-panel wc-chat" tabindex="-1">
         <header class="chat-header wc-chead">
           <button class="icon-button session-toggle wc-ib wc-sess-toggle" :aria-label="t('webChat.openSessions')" @click="sessionsOpen=true"><Icon name="menu" size="sm" /></button>
           <div class="chat-heading wc-crumb">
@@ -40,6 +41,7 @@
             <button v-if="activeSession && workspaceSection==='chat'" class="wc-ib wc-ib-xs" :title="t('webChat.rename')" :aria-label="t('webChat.rename')" :disabled="sending" @click="renameSession(activeSession)"><Icon name="edit" size="xs" /></button>
           </div>
           <div class="wc-head-acts">
+            <button v-if="workspaceSection==='chat'" class="wc-tb wc-tb-o" :aria-pressed="focusMode" :title="focusMode ? t('workspace.exitFocus') : t('workspace.focus')" @click="toggleFocusMode"><Icon :name="focusMode ? 'arrowsPointingIn' : 'arrowsPointingOut'" size="sm" /><span>{{ focusMode ? t('workspace.exitFocus') : t('workspace.focus') }}</span></button>
             <button v-if="workspaceSection==='chat'&&agent.artifacts.value.length" class="wc-tb wc-tb-o" @click="inspectArtifact(agent.artifacts.value[0]!.id)"><Icon name="layers" size="sm" /><span>{{ t('webAgent.files') }} · {{ agent.artifacts.value.length }}</span></button>
             <button v-if="workspaceSection==='chat'" class="wc-tb wc-tb-o" :aria-pressed="contextOpen" :title="t('webChat.modelSettings')" @click="contextOpen=true"><Icon name="sparkles" size="sm" /><span>{{ selectedModelOption?.display_name || selectedModel || t('webChat.selectModel') }}</span><Icon name="chevronDown" size="xs" /></button>
             <details v-if="activeSession&&workspaceSection==='chat'" class="header-menu wc-menu-wrap"><summary class="wc-tb wc-tb-o" :aria-label="t('workspace.actions')"><Icon name="download" size="sm" /><span>{{ t('webChat.export') }}</span></summary><div class="wc-menu">
@@ -169,7 +171,7 @@ import WebAgentTaskFeed from '@/components/web-chat/WebAgentTaskFeed.vue'
 import WebAgentArtifactPane from '@/components/web-chat/WebAgentArtifactPane.vue'
 import WebAgentArtifactLibrary from '@/components/web-chat/WebAgentArtifactLibrary.vue'
 import { useWebAgentTasks } from '@/composables/useWebAgentTasks'
-import { getArtifact, type WebAgentArtifact, type WebAgentTask } from '@/api/webAgent'
+import { getArtifact, listArtifacts, type WebAgentArtifact, type WebAgentTask } from '@/api/webAgent'
 import webChatAPI, { type WebChatMessage, type WebChatOptions, type WebChatProject, type WebChatSession, type WebChatSource, type WebChatStreamHandlers, type WebChatTemplate } from '@/api/webChat'
 import { useAuthStore } from '@/stores/auth'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -203,8 +205,22 @@ const taskMode=ref<TaskMode>('chat'),selectedArtifact=ref<WebAgentArtifact|null>
 const artifactLibrary=ref<InstanceType<typeof WebAgentArtifactLibrary>>(),libraryFiles=ref<WebAgentArtifact[]>([])
 const artifactsEnabled=computed(()=>agent.artifacts.value.length>0||Boolean(options.value.tasks_enabled)||['starting','ready','unavailable'].includes(options.value.task_status||''))
 const artifactPaneOpen=ref(true)
+const focusMode=ref(localStorage.getItem('subapis.webChat.focus')==='1')
+const balanceLabel=computed(()=>{const raw=(authStore.user as {balance?:number}|null)?.balance;return typeof raw==='number'?`$${raw.toFixed(2)}`:''})
 const activeSessionProject=computed(()=>asArray(projects.value).find(project=>project.id===activeSession.value?.project_id)||null)
 const uncategorizedCount=computed(()=>asArray(sessions.value).filter(session=>!session.project_id).length)
+const ownedArtifacts=ref<WebAgentArtifact[]>([])
+const BADGE_ICONS:Record<string,'presentation'|'chartBar'|'document'>={slides:'presentation',spreadsheet:'chartBar',document:'document'}
+const artifactKindBySession=computed(()=>{
+  const map=new Map<number,string>()
+  for(const file of asArray(ownedArtifacts.value)) if(!map.has(file.session_id)) map.set(file.session_id,file.kind)
+  for(const file of asArray(agent.artifacts.value)) map.set(file.session_id,file.kind)
+  return map
+})
+function sessionBadge(session:WebChatSession):{icon:'presentation'|'chartBar'|'document';label:string}|null{
+  const kind=artifactKindBySession.value.get(session.id)
+  return kind&&BADGE_ICONS[kind]?{icon:BADGE_ICONS[kind],label:t(`webAgent.${kind}`)}:null
+}
 const agent=useWebAgentTasks(activeSessionId,computed(()=>authStore.user?.id),computed(()=>Boolean(options.value.task_limits||options.value.tasks_enabled)))
 let artifactSelection=0
 const systemPrompt=ref(''), temperatureInput=ref(''), maxOutputTokens=ref(8192), messageListRef=ref<HTMLElement|null>(null)
@@ -258,6 +274,7 @@ const sessionGroups=computed(()=>{
   const sorted=displayedSessions.value.slice().sort((a,b)=>new Date(b.updated_at||b.created_at).getTime()-new Date(a.updated_at||a.created_at).getTime())
   return order.map(([key,label])=>({key,label,items:sorted.filter(session=>bucket(session)===key)})).filter(group=>group.items.length)
 })
+function toggleFocusMode(){focusMode.value=!focusMode.value;localStorage.setItem('subapis.webChat.focus',focusMode.value?'1':'0');sessionsOpen.value=false}
 function projectColor(session: WebChatSession): string { return asArray(projects.value).find(project => project.id === session.project_id)?.color || 'transparent' }
 function relativeTime(value: string): string {
   const date=new Date(value)
@@ -299,7 +316,7 @@ async function loadInitial(){
   const[opts,list]=await Promise.all([webChatAPI.getOptions(),webChatAPI.listSessions()])
   options.value={...opts,groups:asArray(opts.groups)};enabled.value=opts.enabled;sessions.value=asArray(list)
   selectedGroupId.value=opts.default_group_id??opts.groups[0]?.id??null;selectedModel.value=opts.default_model||opts.groups[0]?.models[0]?.name||''
-  await Promise.all([opts.projects_enabled?loadProjects():Promise.resolve(),opts.templates_enabled?loadTemplates():Promise.resolve()])
+  await Promise.all([opts.projects_enabled?loadProjects():Promise.resolve(),opts.templates_enabled?loadTemplates():Promise.resolve(),loadOwnedArtifacts()])
   const requested=Number(route.query.session)
   if(intent===selectionVersion&&Number.isSafeInteger(requested)&&requested>0){
    const target=list.find(s=>s.id===requested)||await webChatAPI.getSession(requested)
@@ -311,6 +328,10 @@ async function loadInitial(){
  finally{loading.value=false}
 }
 function asArray<T>(value: T[] | null | undefined): T[] { return Array.isArray(value) ? value : [] }
+async function loadOwnedArtifacts(){
+  if(!options.value.tasks_enabled&&!options.value.task_limits)return
+  try{const list=await listArtifacts({});ownedArtifacts.value=asArray(list?.items)}catch{ownedArtifacts.value=[]}
+}
 async function refreshSessions(){sessions.value=asArray(await webChatAPI.listSessions().catch(()=>sessions.value))}
 async function loadProjects(){if(!options.value.projects_enabled)return;projects.value=asArray(await webChatAPI.listProjects().catch(()=>projects.value))}
 async function loadTemplates(){if(!options.value.templates_enabled)return;templates.value=asArray(await webChatAPI.listTemplates().catch(()=>templates.value))}
@@ -349,9 +370,16 @@ async function selectSession(session:WebChatSession){
   activeTemplateId.value=session.default_template_id??null;applySessionSettings(session);sessionsOpen.value=false
   await router.replace({query:{...route.query,session:String(session.id)}})
   const loaded=asArray(await webChatAPI.listMessages(session.id))
+  void revealSessionArtifact(session.id,version)
   if(version===selectionVersion){messages.value=loaded;followOutput.value=true;await scrollToBottom()}
  }catch(e){if(version===selectionVersion)operationError.value=extractApiErrorMessage(e)}
  finally{if(version===selectionVersion)messagesLoading.value=false}
+}
+async function revealSessionArtifact(sessionID:number,version:number){
+  const known=asArray(ownedArtifacts.value).filter(file=>file.session_id===sessionID).sort((a,b)=>b.id-a.id)[0]
+  if(!known||version!==selectionVersion)return
+  const ticket=++artifactSelection
+  try{const artifact=await getArtifact(known.id);if(ticket===artifactSelection&&version===selectionVersion)selectedArtifact.value=artifact}catch{/* 成果不可用时保持对话视图 */}
 }
 function applySessionSettings(session:WebChatSession){systemPrompt.value=session.system_prompt||'';temperatureInput.value=session.temperature==null?'':String(session.temperature);maxOutputTokens.value=session.max_output_tokens||8192}
 async function renameSession(session:WebChatSession){const title=window.prompt(t('webChat.renamePrompt'),session.title||session.model)?.trim();if(!title)return;const updated=await webChatAPI.patchSession(session.id,{title});Object.assign(session,updated)}

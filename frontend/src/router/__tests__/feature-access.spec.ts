@@ -26,6 +26,7 @@ const appStore = vi.hoisted(() => ({
     payment_enabled?: boolean
     risk_control_enabled?: boolean
     public_model_market_enabled?: boolean
+    web_chat_enabled?: boolean
     custom_menu_items?: []
   },
   fetchPublicSettings: vi.fn(),
@@ -143,6 +144,7 @@ describe('feature route guard', () => {
   it.each([
     ['payment', { requiresPayment: true }, '/purchase'],
     ['risk control', { requiresRiskControl: true }, '/admin/risk-control'],
+    ['web chat', { requiresWebChat: true }, '/chat'],
   ])('does not treat a failed %s settings load as explicitly disabled', async (_name, meta, path) => {
     authStore.isAdmin = meta.requiresRiskControl === true
     appStore.fetchPublicSettings.mockResolvedValue(null)
@@ -151,6 +153,26 @@ describe('feature route guard', () => {
     await navigation
 
     expect(appStore.publicSettingsLoaded).toBe(false)
+    expect(next).toHaveBeenCalledOnce()
+    expect(next).toHaveBeenCalledWith()
+  })
+
+  it('waits for the first public-settings request before deciding web chat access', async () => {
+    const deferred = createDeferred<{ web_chat_enabled: boolean }>()
+    appStore.fetchPublicSettings.mockImplementation(async () => {
+      const settings = await deferred.promise
+      appStore.cachedPublicSettings = settings
+      appStore.publicSettingsLoaded = true
+      return settings
+    })
+
+    const { navigation, next } = runGuard({ requiresWebChat: true }, '/chat')
+
+    await vi.waitFor(() => expect(appStore.fetchPublicSettings).toHaveBeenCalledTimes(1))
+    expect(next).not.toHaveBeenCalled()
+
+    deferred.resolve({ web_chat_enabled: true })
+    await navigation
     expect(next).toHaveBeenCalledOnce()
     expect(next).toHaveBeenCalledWith()
   })

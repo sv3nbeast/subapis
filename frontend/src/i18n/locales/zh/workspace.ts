@@ -13,7 +13,7 @@ export default { workspace: {
   messageLoading: '正在加载会话…', sessionUnavailable: '会话不存在或当前账号无权访问。',
   loadFailed: '无法加载工作台，请重试。', retry: '重试', sources: '{files} 份参考资料 · {citations} 处摘录',
   sourceOrigin: {explicit:'用户选择的附件',retrieved:'自动检索的参考资料'}, sourceIncluded:'本次提供 {count} 字。', sourceTruncated:'此片段因上下文预算被截取。',
-  modeChat: '对话', inputLabel: '任务或消息', actions: '会话操作', projectSettings: '项目设置',
+  focus: '专注模式', exitFocus: '退出专注', modeChat: '对话', inputLabel: '任务或消息', actions: '会话操作', projectSettings: '项目设置',
 }, webAgent: {
   library:'成果文件', libraryHint:'跨会话查看成果；默认展示每份文件最新的已加载版本。', searchLoaded:'搜索已加载的成果', allKinds:'全部类型', loadedVersions:'已加载 {count} 个版本', noLoadedMatch:'已加载的成果中没有匹配项，可继续加载更早的文件。', moreFiles:'加载更早的文件', sessionFallback:'会话 #{id}', referenceLibrary:'项目参考资料',
   chat: '聊天', slides: 'PPT', spreadsheet: '表格', document: '文档', mode: '任务类型',

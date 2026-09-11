@@ -11,7 +11,9 @@
       </nav>
       <div class="wc-right">
         <slot name="usage" />
+        <span v-if="balance" class="wc-usage"><Icon name="dollar" size="xs" /><b>{{ balance }}</b></span>
         <RouterLink class="console-link wc-tb wc-tb-o" to="/dashboard">{{ t('workspace.console') }}<Icon name="chevronRight" size="xs" /></RouterLink>
+        <span v-if="userName" class="wc-who" :title="userName">{{ userName.slice(0, 1).toUpperCase() }}</span>
       </div>
     </header>
     <slot />
@@ -21,7 +23,7 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
-defineProps<{ section: string; busy: boolean; projectsEnabled: boolean; filesEnabled: boolean; templatesEnabled: boolean; artifactsEnabled?: boolean }>()
+defineProps<{ section: string; busy: boolean; projectsEnabled: boolean; filesEnabled: boolean; templatesEnabled: boolean; artifactsEnabled?: boolean; balance?: string; userName?: string }>()
 defineEmits<{ home: []; navigate: [section: 'projects' | 'files']; templates: [] }>()
 const { t } = useI18n()
 </script>

@@ -13,7 +13,7 @@ export default { workspace: {
   messageLoading: 'Loading conversation…', sessionUnavailable: 'Conversation not found or unavailable to this account.',
   loadFailed: 'Unable to load the workspace. Please try again.', retry: 'Retry', sources: '{files} source files · {citations} excerpts',
   sourceOrigin: {explicit:'User-selected attachment',retrieved:'Automatically retrieved reference'}, sourceIncluded:'{count} characters provided for this request.', sourceTruncated:'This excerpt was truncated to fit the context budget.',
-  modeChat: 'Chat', inputLabel: 'Task or message', actions: 'Conversation actions', projectSettings: 'Project settings',
+  focus: 'Focus', exitFocus: 'Exit focus', modeChat: 'Chat', inputLabel: 'Task or message', actions: 'Conversation actions', projectSettings: 'Project settings',
 }, webAgent: {
   library:'Artifacts', libraryHint:'Browse across conversations. Each file shows its latest loaded version.', searchLoaded:'Search loaded artifacts', allKinds:'All types', loadedVersions:'{count} versions loaded', noLoadedMatch:'No match among loaded artifacts. You can load earlier files.', moreFiles:'Load earlier files', sessionFallback:'Conversation #{id}', referenceLibrary:'Project source material',
   chat: 'Chat', slides: 'Slides', spreadsheet: 'Spreadsheet', document: 'Document', mode: 'Task type',
