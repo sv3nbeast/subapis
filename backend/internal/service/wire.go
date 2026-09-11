@@ -58,8 +58,9 @@ func ProvideWebChatDocumentService(repo WebChatDocumentRepository, settings Sett
 	return svc
 }
 
-func ProvideWebChatService(repo WebChatRepository, keyRepo WebChatAPIKeyRepository, keys webChatAPIKeyManager, catalog webChatModelCatalog, settings webChatRuntimeReader, documents *WebChatDocumentService, cfg *config.Config) *WebChatService {
+func ProvideWebChatService(repo WebChatRepository, keyRepo WebChatAPIKeyRepository, keys webChatAPIKeyManager, catalog webChatModelCatalog, settings webChatRuntimeReader, documents *WebChatDocumentService, groups GroupRepository, cfg *config.Config) *WebChatService {
 	svc := NewWebChatService(repo, keyRepo, keys, catalog, settings)
+	svc.catalogGroups = groups
 	svc.SetDocumentService(documents)
 	if cfg != nil {
 		if err := svc.ConfigureAgent(cfg.WebAgent, cfg.Server.Port); err != nil {

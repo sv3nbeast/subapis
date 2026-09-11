@@ -13,11 +13,11 @@ type knowledgeReplayChat struct {
 	turns int
 }
 
-func (r *knowledgeReplayChat) RegenerateTurn(context.Context, int64, int64, int64) (*WebChatMessage, error) {
+func (r *knowledgeReplayChat) RegenerateTurn(context.Context, int64, int64, int64, ...WebChatTarget) (*WebChatMessage, error) {
 	r.turns++
 	return &WebChatMessage{ID: 101, Role: "assistant"}, nil
 }
-func (r *knowledgeReplayChat) ReviseTurn(context.Context, int64, int64, int64, string, string) (*WebChatMessage, *WebChatMessage, error) {
+func (r *knowledgeReplayChat) ReviseTurn(context.Context, int64, int64, int64, string, string, ...WebChatTarget) (*WebChatMessage, *WebChatMessage, error) {
 	r.turns++
 	return &WebChatMessage{ID: 100, Role: "user"}, &WebChatMessage{ID: 101, Role: "assistant"}, nil
 }

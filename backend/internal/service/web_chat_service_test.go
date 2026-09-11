@@ -51,17 +51,20 @@ func (s *webChatRepoStub) DeleteSession(context.Context, int64, int64) error {
 	panic("unexpected DeleteSession call")
 }
 
-func (s *webChatRepoStub) CreateTurn(_ context.Context, userID, sessionID int64, content, _ string, _ *int64) (*WebChatMessage, *WebChatMessage, error) {
+func (s *webChatRepoStub) CreateTurn(_ context.Context, userID, sessionID int64, content, _ string, _ *int64, target ...WebChatTarget) (*WebChatMessage, *WebChatMessage, error) {
+	if len(target) > 0 {
+		s.updatedTarget = &WebChatSession{GroupID: target[0].GroupID, Model: target[0].Model}
+	}
 	user := WebChatMessage{ID: int64(len(s.created) + 1), SessionID: sessionID, UserID: userID, Role: WebChatMessageRoleUser, Content: content, Status: WebChatMessageStatusCompleted}
 	assistant := WebChatMessage{ID: user.ID + 1, SessionID: sessionID, UserID: userID, Role: WebChatMessageRoleAssistant, Status: WebChatMessageStatusStreaming}
 	s.created = append(s.created, user, assistant)
 	return &user, &assistant, nil
 }
 
-func (s *webChatRepoStub) RegenerateTurn(context.Context, int64, int64, int64) (*WebChatMessage, error) {
+func (s *webChatRepoStub) RegenerateTurn(context.Context, int64, int64, int64, ...WebChatTarget) (*WebChatMessage, error) {
 	panic("unexpected RegenerateTurn call")
 }
-func (s *webChatRepoStub) ReviseTurn(context.Context, int64, int64, int64, string, string) (*WebChatMessage, *WebChatMessage, error) {
+func (s *webChatRepoStub) ReviseTurn(context.Context, int64, int64, int64, string, string, ...WebChatTarget) (*WebChatMessage, *WebChatMessage, error) {
 	panic("unexpected ReviseTurn call")
 }
 func (s *webChatRepoStub) UpdateMessageResult(context.Context, int64, int64, string, string, string, string, WebChatUsage) (*WebChatMessage, error) {

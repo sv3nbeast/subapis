@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lib/pq"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -123,7 +124,7 @@ func scanWebChatMessage(row interface{ Scan(...any) error }, m *service.WebChatM
 	return nil
 }
 
-func (r *webChatRepository) CreateTurn(ctx context.Context, userID, sessionID int64, content, title string, templateID *int64) (*service.WebChatMessage, *service.WebChatMessage, error) {
+func (r *webChatRepository) CreateTurn(ctx context.Context, userID, sessionID int64, content, title string, templateID *int64, target ...service.WebChatTarget) (*service.WebChatMessage, *service.WebChatMessage, error) {
 	tx, err := r.begin(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -134,6 +135,9 @@ func (r *webChatRepository) CreateTurn(ctx context.Context, userID, sessionID in
 		return nil, nil, err
 	}
 	if err = ensureWebChatGenerationAvailable(ctx, tx, userID, sessionID); err != nil {
+		return nil, nil, err
+	}
+	if err = applyWebChatTarget(ctx, tx, userID, sessionID, target); err != nil {
 		return nil, nil, err
 	}
 	user, err := insertWebChatMessage(ctx, tx, userID, sessionID, service.WebChatMessageRoleUser, content, service.WebChatMessageStatusCompleted, leaf, nil, 1, "original", templateID)
@@ -152,7 +156,7 @@ func (r *webChatRepository) CreateTurn(ctx context.Context, userID, sessionID in
 	}
 	return user, assistant, nil
 }
-func (r *webChatRepository) RegenerateTurn(ctx context.Context, userID, sessionID, messageID int64) (*service.WebChatMessage, error) {
+func (r *webChatRepository) RegenerateTurn(ctx context.Context, userID, sessionID, messageID int64, target ...service.WebChatTarget) (*service.WebChatMessage, error) {
 	tx, err := r.begin(ctx)
 	if err != nil {
 		return nil, err
@@ -174,6 +178,9 @@ func (r *webChatRepository) RegenerateTurn(ctx context.Context, userID, sessionI
 	if err != nil {
 		return nil, err
 	}
+	if err = applyWebChatTarget(ctx, tx, userID, sessionID, target); err != nil {
+		return nil, err
+	}
 	assistant, err := insertWebChatMessage(ctx, tx, userID, sessionID, service.WebChatMessageRoleAssistant, "", service.WebChatMessageStatusStreaming, parent, &logical, version, "regenerate", nil)
 	if err != nil {
 		return nil, err
@@ -186,7 +193,7 @@ func (r *webChatRepository) RegenerateTurn(ctx context.Context, userID, sessionI
 	}
 	return assistant, nil
 }
-func (r *webChatRepository) ReviseTurn(ctx context.Context, userID, sessionID, messageID int64, content, title string) (*service.WebChatMessage, *service.WebChatMessage, error) {
+func (r *webChatRepository) ReviseTurn(ctx context.Context, userID, sessionID, messageID int64, content, title string, target ...service.WebChatTarget) (*service.WebChatMessage, *service.WebChatMessage, error) {
 	tx, err := r.begin(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -208,6 +215,9 @@ func (r *webChatRepository) ReviseTurn(ctx context.Context, userID, sessionID, m
 	if err != nil {
 		return nil, nil, err
 	}
+	if err = applyWebChatTarget(ctx, tx, userID, sessionID, target); err != nil {
+		return nil, nil, err
+	}
 	user, err := insertWebChatMessage(ctx, tx, userID, sessionID, service.WebChatMessageRoleUser, content, service.WebChatMessageStatusCompleted, parent, &logical, version, "edit", nil)
 	if err != nil {
 		return nil, nil, err
@@ -225,7 +235,7 @@ func (r *webChatRepository) ReviseTurn(ctx context.Context, userID, sessionID, m
 	return user, assistant, nil
 }
 func (r *webChatRepository) UpdateMessageResult(ctx context.Context, userID, messageID int64, content, status, errorMessage, requestID string, usage service.WebChatUsage) (*service.WebChatMessage, error) {
-	rows, err := r.sql.QueryContext(ctx, `UPDATE web_chat_messages SET content=$3,status=$4,error_message=$5,request_id=$6,input_tokens=$7,output_tokens=$8,cache_read_tokens=$9,cache_creation_tokens=$10,updated_at=now() WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL RETURNING id`, messageID, userID, content, status, webChatNullString(errorMessage), requestID, usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheCreationTokens)
+	rows, err := r.sql.QueryContext(ctx, `UPDATE web_chat_messages SET content=$3,status=$4,error_message=$5,request_id=$6,input_tokens=$7,output_tokens=$8,cache_read_tokens=$9,cache_creation_tokens=$10,model=COALESCE(NULLIF($11,''),model),platform=COALESCE(NULLIF($12,''),platform),group_id=COALESCE(NULLIF($13,0),group_id),updated_at=now() WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL RETURNING id`, messageID, userID, content, status, webChatNullString(errorMessage), requestID, usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheCreationTokens, usage.Model, usage.Platform, usage.GroupID)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +268,11 @@ const activePathCTE = `WITH RECURSIVE path AS (SELECT m.* FROM web_chat_messages
 
 func (r *webChatRepository) ListMessages(ctx context.Context, userID, sessionID int64) ([]service.WebChatMessage, error) {
 	_, _ = r.sql.ExecContext(ctx, `UPDATE web_chat_messages SET status='partial',error_message='generation timed out',updated_at=now() WHERE user_id=$1 AND session_id=$2 AND status='streaming' AND deleted_at IS NULL AND updated_at < now()-interval '`+webChatStaleGenerationInterval+`'`, userID, sessionID)
-	return r.listMessages(ctx, activePathCTE+` SELECT `+webChatMessageColumns+` FROM path m ORDER BY m.created_at,m.id`, userID, sessionID)
+	items, err := r.listMessages(ctx, activePathCTE+` SELECT `+webChatMessageColumns+` FROM path m ORDER BY m.created_at,m.id`, userID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return items, r.enrichWebChatBilling(ctx, userID, items)
 }
 func (r *webChatRepository) RecentMessages(ctx context.Context, userID, sessionID int64, limit int) ([]service.WebChatMessage, error) {
 	if limit <= 0 {
@@ -267,7 +281,48 @@ func (r *webChatRepository) RecentMessages(ctx context.Context, userID, sessionI
 	return r.listMessages(ctx, activePathCTE+` SELECT `+webChatMessageColumns+` FROM (SELECT * FROM path WHERE status IN ('completed','partial') AND role IN ('user','assistant') ORDER BY created_at DESC,id DESC LIMIT $3) m ORDER BY m.created_at,m.id`, userID, sessionID, limit)
 }
 func (r *webChatRepository) ListMessageVersions(ctx context.Context, userID, sessionID, messageID int64) ([]service.WebChatMessage, error) {
-	return r.listMessages(ctx, `SELECT `+webChatMessageColumns+` FROM web_chat_messages m WHERE m.session_id=$2 AND m.user_id=$1 AND m.deleted_at IS NULL AND m.logical_id=(SELECT logical_id FROM web_chat_messages WHERE id=$3 AND session_id=$2 AND user_id=$1 AND deleted_at IS NULL) ORDER BY m.version_index,m.id`, userID, sessionID, messageID)
+	items, err := r.listMessages(ctx, `SELECT `+webChatMessageColumns+` FROM web_chat_messages m WHERE m.session_id=$2 AND m.user_id=$1 AND m.deleted_at IS NULL AND m.logical_id=(SELECT logical_id FROM web_chat_messages WHERE id=$3 AND session_id=$2 AND user_id=$1 AND deleted_at IS NULL) ORDER BY m.version_index,m.id`, userID, sessionID, messageID)
+	if err != nil {
+		return nil, err
+	}
+	return items, r.enrichWebChatBilling(ctx, userID, items)
+}
+
+// Only user-facing history reads join billing. Context construction and the
+// first-token path never wait for asynchronous usage logging to settle.
+func (r *webChatRepository) enrichWebChatBilling(ctx context.Context, userID int64, items []service.WebChatMessage) error {
+	ids := []int64{}
+	index := map[int64]int{}
+	for i, m := range items {
+		if m.Role == service.WebChatMessageRoleAssistant {
+			ids = append(ids, m.ID)
+			index[m.ID] = i
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := r.sql.QueryContext(ctx, `SELECT m.id,m.model,m.platform,(SELECT SUM(u.actual_cost) FROM usage_logs u WHERE u.request_id=NULLIF(m.request_id,'') AND u.user_id=m.user_id AND u.group_id=m.group_id) FROM web_chat_messages m WHERE m.user_id=$1 AND m.id=ANY($2) AND m.deleted_at IS NULL`, userID, pq.Array(ids))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var model, platform string
+		var cost *float64
+		if err := rows.Scan(&id, &model, &platform, &cost); err != nil {
+			return err
+		}
+		i, ok := index[id]
+		if !ok {
+			continue
+		}
+		items[i].Model = model
+		items[i].Platform = platform
+		items[i].ActualCost = cost
+	}
+	return rows.Err()
 }
 func (r *webChatRepository) ActivateMessageVersion(ctx context.Context, userID, sessionID, messageID int64) error {
 	tx, err := r.begin(ctx)
@@ -477,9 +532,24 @@ func ensureWebChatGenerationAvailable(ctx context.Context, tx *sql.Tx, userID, s
 	}
 	return nil
 }
+
+// Called only after the session lock and busy check. A losing request cannot
+// change the next turn's route, including regenerate/edit branches.
+func applyWebChatTarget(ctx context.Context, tx *sql.Tx, userID, sessionID int64, targets []service.WebChatTarget) error {
+	if len(targets) == 0 {
+		return nil
+	}
+	target := targets[0]
+	if target.GroupID <= 0 || target.Model == "" {
+		return service.ErrWebChatInvalidModel
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE web_chat_sessions SET group_id=$3,model=$4,updated_at=now() WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL`, sessionID, userID, target.GroupID, target.Model)
+	return err
+}
+
 func insertWebChatMessage(ctx context.Context, tx *sql.Tx, userID, sessionID int64, role, content, status string, parent *int64, logical *int64, version int, reason string, templateID *int64) (*service.WebChatMessage, error) {
 	var id int64
-	err := tx.QueryRowContext(ctx, `WITH next AS (SELECT nextval(pg_get_serial_sequence('web_chat_messages','id')) AS id) INSERT INTO web_chat_messages(id,session_id,user_id,role,content,status,logical_id,parent_message_id,version_index,version_reason,template_id,created_at,updated_at) SELECT id,$1,$2,$3,$4,$5,COALESCE($7,id),$6,$8,$9,$10,now(),now() FROM next RETURNING id`, sessionID, userID, role, content, status, parent, logical, version, reason, templateID).Scan(&id)
+	err := tx.QueryRowContext(ctx, `WITH next AS (SELECT nextval(pg_get_serial_sequence('web_chat_messages','id')) AS id) INSERT INTO web_chat_messages(id,session_id,user_id,role,content,status,logical_id,parent_message_id,version_index,version_reason,template_id,created_at,updated_at,model,platform,group_id) SELECT next.id,$1,$2,$3,$4,$5,COALESCE($7,next.id),$6,$8,$9,$10,now(),now(),s.model,COALESCE(g.platform,''),s.group_id FROM next CROSS JOIN web_chat_sessions s LEFT JOIN groups g ON g.id=s.group_id WHERE s.id=$1 AND s.user_id=$2 AND s.deleted_at IS NULL RETURNING id`, sessionID, userID, role, content, status, parent, logical, version, reason, templateID).Scan(&id)
 	if err != nil {
 		return nil, err
 	}

@@ -43,7 +43,7 @@
           <div class="wc-head-acts">
             <button v-if="workspaceSection==='chat'" class="wc-tb wc-tb-o" :aria-pressed="focusMode" :title="focusMode ? t('workspace.exitFocus') : t('workspace.focus')" @click="toggleFocusMode"><Icon :name="focusMode ? 'arrowsPointingIn' : 'arrowsPointingOut'" size="sm" /><span>{{ focusMode ? t('workspace.exitFocus') : t('workspace.focus') }}</span></button>
             <button v-if="workspaceSection==='chat'&&agent.artifacts.value.length" class="wc-tb wc-tb-o" @click="inspectArtifact(agent.artifacts.value[0]!.id)"><Icon name="layers" size="sm" /><span>{{ t('webAgent.files') }} · {{ agent.artifacts.value.length }}</span></button>
-            <button v-if="workspaceSection==='chat'" class="wc-tb wc-tb-o" :aria-pressed="contextOpen" :title="t('webChat.modelSettings')" @click="contextOpen=true"><Icon name="sparkles" size="sm" /><span>{{ selectedModelOption?.display_name || selectedModel || t('webChat.selectModel') }}</span><Icon name="chevronDown" size="xs" /></button>
+            <button v-if="workspaceSection==='chat'" class="wc-tb wc-tb-o" :aria-pressed="contextOpen" :title="t('webChat.modelSettings')" @click="contextOpen=true"><Icon name="sparkles" size="sm" /><span>{{ t('workspace.modelSettings') }}</span></button>
             <details v-if="activeSession&&workspaceSection==='chat'" class="header-menu wc-menu-wrap"><summary class="wc-tb wc-tb-o" :aria-label="t('workspace.actions')"><Icon name="download" size="sm" /><span>{{ t('webChat.export') }}</span></summary><div class="wc-menu">
               <button @click="exportConversation('markdown')"><Icon name="document" size="xs" />{{ t('webChat.exportMarkdown') }}</button>
               <button @click="exportConversation('json')"><Icon name="terminal" size="xs" />{{ t('webChat.exportJson') }}</button>
@@ -53,6 +53,7 @@
             <button v-if="workspaceSection==='chat'" class="wc-ib wc-pane-toggle" :aria-label="t('webChat.toggleInspector')" :aria-pressed="artifactPaneOpen" :title="t('webChat.toggleInspector')" @click="artifactPaneOpen=!artifactPaneOpen"><Icon name="viewColumns" size="sm" /></button>
           </div>
         </header>
+        <p v-if="activeSession&&!selectedModelOption&&hasUsableModel" class="wc-notice warn">{{ catalogText.reselect }}</p>
         <div v-if="operationError" role="alert" class="workspace-error">{{ operationError }} <button @click="operationError=''">{{ t('common.close') }}</button></div>
 
         <div v-if="taskMode!=='chat'&&workspaceSection==='chat'" class="task-context">
@@ -87,7 +88,7 @@
           <div class="wc-chat-body"><section ref="messageListRef" class="message-list wc-scroll" @scroll="onMessageScroll"><div class="wc-colw">
             <div v-if="loading || messagesLoading" class="empty-state" role="status"><Icon name="refresh" size="lg" class="animate-spin" /><h2>{{ t('common.loading') }}</h2></div>
             <div v-else-if="!enabled" class="empty-state"><Icon name="lock" size="lg" /><h2>{{ t('webChat.disabledTitle') }}</h2><p>{{ t('webChat.disabledDescription') }}</p><button v-if="operationError" @click="loadInitial">{{ t('workspace.retry') }}</button></div>
-            <div v-else-if="!hasUsableModel" class="empty-state"><h2>{{ t('webChat.noGroupsTitle') }}</h2><p>{{ t('webChat.noGroupsDescription') }}</p></div>
+            <div v-else-if="!hasUsableModel" class="empty-state wc-empty"><span class="wc-empty-ic"><Icon name="inbox" size="lg" /></span><h2>{{ catalogText.empty }}</h2><p>{{ catalogText.contact }}</p></div>
             <div v-else-if="messages.length===0" class="empty-state"><h2>{{ t('workspace.startTitle') }}</h2></div>
             <template v-for="message in messages" :key="message.id">
               <article class="message-row wc-turn" :class="message.role">
@@ -106,11 +107,13 @@
                   <div v-else class="message-bubble assistant wc-md"><WebChatMessageContent :content="message.content" markdown /><p v-if="message.status==='error'||message.status==='partial'" class="message-error wc-msg-error">{{ message.error_message || t('webChat.streamError') }}</p></div>
                   <WebChatSources :sources="message.sources || []" />
                   <div class="wc-tele message-footer">
+                    <span v-if="message.model"><em class="lbl">{{ t('webChat.model') }}</em>{{ messageModelLabel(message) }}</span>
                     <template v-if="message.role==='assistant'&&hasUsage(message)">
                       <span title="输入 token"><Icon name="arrowUp" size="xs" />{{ formatTokens(message.input_tokens) }}</span>
                       <span title="输出 token"><Icon name="arrowDown" size="xs" />{{ formatTokens(message.output_tokens) }}</span>
                       <span v-if="message.cache_read_tokens"><em class="lbl">cache</em>{{ formatTokens(message.cache_read_tokens) }}</span>
                     </template>
+                    <span v-if="message.actual_cost != null" class="wc-cost" :title="catalogText.usageHint">${{ message.actual_cost.toFixed(6) }}</span>
                     <span v-if="message.request_id" :title="message.request_id"><em class="lbl">ID</em>{{ shortRequestID(message.request_id) }}</span>
                   </div>
                   <div class="message-actions wc-acts">
@@ -132,19 +135,20 @@
             </article>
           </div></section></div>
           </template>
-          <div v-if="canCompose" class="composer-dock wc-compose"><WebChatComposer v-model="draft" :modes="taskModes" :mode="taskMode" :mode-disabled="sending||agent.creating.value" :allow-modes="workspaceSection==='chat'" @update:mode="setTaskMode" :disabled="!canCompose||agent.creating.value" :can-send="canSend&&Boolean(draft.trim())" :sending="sending" :files-enabled="options.files_enabled" :templates-enabled="options.templates_enabled" :template-name="activeTemplateName" :documents="pendingDocuments" :failed-attachments="failedAttachments" :attachment-state="attachmentState" @submit="send" @stop="stopGeneration" @open-template="templateDialogOpen=true" @files="uploadTemporaryDocuments" @remove-document="removePendingDocument" @retry-attachment="retryFailedAttachment" @remove-failed-attachment="removeFailedAttachment"/></div>
+          <div v-if="canCompose" class="composer-dock wc-compose"><WebChatComposer v-model="draft" :modes="taskModes" :mode="taskMode" :mode-disabled="sending||agent.creating.value" :allow-modes="workspaceSection==='chat'" @update:mode="setTaskMode" :disabled="!canCompose||agent.creating.value" :can-send="canSend&&Boolean(draft.trim())" :sending="sending" :files-enabled="options.files_enabled" :templates-enabled="options.templates_enabled" :template-name="activeTemplateName" :documents="pendingDocuments" :failed-attachments="failedAttachments" :attachment-state="attachmentState" @submit="send" @stop="stopGeneration" @open-template="templateDialogOpen=true" @files="uploadTemporaryDocuments" @remove-document="removePendingDocument" @retry-attachment="retryFailedAttachment" @remove-failed-attachment="removeFailedAttachment">
+            <template #model><WebChatModelPicker v-model="selectedChatModelId" :models="asArray(options.models)" :disabled="sending||creatingSession||agent.creating.value" /></template>
+          </WebChatComposer></div>
         </template>
       </main>
       <WebAgentArtifactPane v-if="selectedArtifact&&workspaceSection!=='projects'" class="wc-pane" :class="{ 'is-open': artifactPaneOpen }" :artifact="selectedArtifact" :files="workspaceSection==='files'?libraryFiles:agent.artifacts.value" :can-revise="Boolean(options.tasks_enabled)&&!sending&&!agent.creating.value" @close="selectedArtifact=null" @select="inspectArtifact" @revise="reviseArtifact" @deleted="artifactDeleted" />
     </div>
     <BaseDialog :show="contextOpen" :title="t('workspace.modelSettings')" @close="contextOpen=false">
       <div class="context-card">
-        <label>{{ t('webChat.group') }}<select v-model.number="selectedGroupId" class="input" :disabled="sending"><option v-for="group in options.groups" :key="group.id" :value="group.id">{{ groupOptionLabel(group) }}</option></select></label>
-        <label>{{ t('webChat.model') }}<select v-model="selectedModel" class="input" :disabled="sending"><option v-for="model in selectedGroupModels" :key="model.name" :value="model.name">{{ model.display_name || modelDisplayName(model.name,selectedGroup?.platform) }}</option></select></label>
+        <div class="wc-card"><p class="wc-card-t">{{ t('webChat.model') }}</p><p class="text-[13px] font-semibold" style="color:var(--wc-ink)">{{ selectedModelOption?.name || t('webChat.selectModel') }}</p><p>{{ selectedModelOption?.description || catalogText.pickInComposer }}</p></div>
         <label v-if="options.projects_enabled&&activeSession">{{ t('webChat.project') }}<select :value="activeSession.project_id||''" class="input" :disabled="sending" @change="moveActiveSession"><option value="">{{ t('webChat.uncategorized') }}</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></label>
         <label v-if="options.files_enabled&&activeSession" class="knowledge-toggle"><span>{{ t('webChat.useProjectKnowledge') }}</span><input type="checkbox" :checked="activeSession.knowledge_enabled" :disabled="sending" @change="toggleKnowledge" /></label>
         <details class="advanced-settings"><summary>{{ t('webChat.advanced') }}</summary><label>{{ t('webChat.systemPrompt') }}<textarea v-model="systemPrompt" rows="5" maxlength="8000" class="input" :disabled="sending" /></label><label>{{ t('webChat.temperature') }}<input v-model="temperatureInput" type="number" class="input" min="0" max="2" step=".1" :disabled="sending" /></label><label>{{ t('webChat.maxOutputTokens') }}<input v-model.number="maxOutputTokens" type="number" class="input" min="1" max="32768" :disabled="sending" /></label><button class="new-chat" :disabled="!activeSession||savingSettings||sending" @click="saveAdvancedSettings">{{ t('common.save') }}</button></details>
-        <div class="pricing-card"><h3>{{ t('webChat.priceHint') }}</h3><div v-for="item in pricingItems" :key="item.label"><span>{{ item.label }}</span><strong>{{ item.value }}</strong></div></div>
+        <div class="pricing-card"><h3>{{ t('webChat.priceHint') }}</h3><p>{{ selectedModelOption?.billing_type==='subscription' ? catalogText.subscription : catalogText.balance }}</p></div>
       </div>
     </BaseDialog>
     <button v-if="sessionsOpen" class="panel-scrim" :aria-label="t('common.close')" @click="sessionsOpen=false" />
@@ -167,6 +171,7 @@ import WebChatTemplateDialog from '@/components/web-chat/WebChatTemplateDialog.v
 import WebChatKnowledgeLibrary from '@/components/web-chat/WebChatKnowledgeLibrary.vue'
 import WebChatSources from '@/components/web-chat/WebChatSources.vue'
 import WebChatComposer from '@/components/web-chat/WebChatComposer.vue'
+import WebChatModelPicker from '@/components/web-chat/WebChatModelPicker.vue'
 import WebAgentTaskFeed from '@/components/web-chat/WebAgentTaskFeed.vue'
 import WebAgentArtifactPane from '@/components/web-chat/WebAgentArtifactPane.vue'
 import WebAgentArtifactLibrary from '@/components/web-chat/WebAgentArtifactLibrary.vue'
@@ -175,8 +180,6 @@ import { getArtifact, listArtifacts, type WebAgentArtifact, type WebAgentTask } 
 import webChatAPI, { type WebChatMessage, type WebChatOptions, type WebChatProject, type WebChatSession, type WebChatSource, type WebChatStreamHandlers, type WebChatTemplate } from '@/api/webChat'
 import { useAuthStore } from '@/stores/auth'
 import { extractApiErrorMessage } from '@/utils/apiError'
-import { platformLabel } from '@/utils/platformColors'
-import { formatScaled } from '@/utils/pricing'
 import { selectLocalizedWebChatTemplates } from '@/utils/webChatTemplates'
 import { formatTokens } from '@/utils/webChatTokens'
 import '@/styles/web-chat.css'
@@ -198,7 +201,7 @@ const projectDialogOpen=ref(false),templateDialogOpen=ref(false),editingProject=
 const knowledgeLibraryOpen=ref(false),knowledgeProject=ref<WebChatProject|null>(null),streamingSources=ref<WebChatSource[]>([])
 const options=ref<WebChatOptions>({enabled:false,groups:[],projects_enabled:false,templates_enabled:false,history_enabled:false,files_enabled:false,file_limits:{max_file_bytes:20*1024*1024,max_files_per_project:50,max_bytes_per_user:500*1024*1024}}), sessions=ref<WebChatSession[]>([]), messages=ref<WebChatMessage[]>([]),projects=ref<WebChatProject[]>([]),templates=ref<WebChatTemplate[]>([])
 const activeTemplateId=ref<number|null>(null)
-const activeSessionId=ref<number|null>(null), selectedGroupId=ref<number|null>(null), selectedModel=ref(''), draft=ref(''), streamingText=ref(''), sessionQuery=ref('')
+const activeSessionId=ref<number|null>(null), selectedChatModelId=ref(''), selectedGroupId=ref<number|null>(null), selectedModel=ref(''), draft=ref(''), streamingText=ref(''), sessionQuery=ref('')
 const taskModes=['chat','slides','spreadsheet','document'] as const
 type TaskMode=typeof taskModes[number]
 const taskMode=ref<TaskMode>('chat'),selectedArtifact=ref<WebAgentArtifact|null>(null),sourceArtifact=ref<WebAgentArtifact|null>(null)
@@ -206,6 +209,9 @@ const artifactLibrary=ref<InstanceType<typeof WebAgentArtifactLibrary>>(),librar
 const artifactsEnabled=computed(()=>agent.artifacts.value.length>0||Boolean(options.value.tasks_enabled)||['starting','ready','unavailable'].includes(options.value.task_status||''))
 const artifactPaneOpen=ref(true)
 const focusMode=ref(localStorage.getItem('subapis.webChat.focus')==='1')
+const catalogText=computed(()=>locale.value.startsWith('zh')
+  ? {empty:'暂无可用模型',contact:'请联系管理员配置模型或开通对应权限。',reselect:'原模型不可用或配置已更新，请在输入框重新选择模型后继续。',subscription:'使用订阅额度',balance:'使用余额 · 按量计费',pickInComposer:'在输入框左侧选择模型。',usageHint:'显示已落账的本次用量；订阅消耗额度，按量模式扣除余额。未落账时不估算。'}
+  : {empty:'No models available',contact:'Contact your administrator for model access.',reselect:'The previous model is unavailable or has changed. Pick a model in the composer to continue.',subscription:'Subscription quota',balance:'Balance · pay as you go',pickInComposer:'Pick a model from the composer.',usageHint:'Shows recorded usage: quota for subscriptions, balance for pay as you go. Pending usage is not estimated.'})
 const balanceLabel=computed(()=>{const raw=(authStore.user as {balance?:number}|null)?.balance;return typeof raw==='number'?`$${raw.toFixed(2)}`:''})
 const activeSessionProject=computed(()=>asArray(projects.value).find(project=>project.id===activeSession.value?.project_id)||null)
 const uncategorizedCount=computed(()=>asArray(sessions.value).filter(session=>!session.project_id).length)
@@ -231,8 +237,8 @@ const {pendingDocuments,failedAttachments,attachmentState,uploadTemporaryDocumen
 const activeSession=computed(()=>sessions.value.find(item=>item.id===activeSessionId.value)||null)
 const selectedGroup=computed(()=>asArray(options.value.groups).find(group=>group.id===selectedGroupId.value)||null)
 const selectedGroupModels=computed(()=>asArray(selectedGroup.value?.models))
-const selectedModelOption=computed(()=>selectedGroupModels.value.find(model=>model.name===selectedModel.value)||null)
-const hasUsableModel=computed(()=>asArray(options.value.groups).some(group=>asArray(group.models).length>0))
+const selectedModelOption=computed(()=>asArray(options.value.models).find(model=>model.id===selectedChatModelId.value)||null)
+const hasUsableModel=computed(()=>asArray(options.value.models).length>0)
 const displayedSessions=computed(()=>{
   const startToday=new Date().setHours(0,0,0,0)
   const rank=(session:WebChatSession)=>{ if(session.pinned_at)return 0; const ts=new Date(session.updated_at||session.created_at).getTime(); if(Number.isNaN(ts)||ts>=startToday)return 1; if(ts>=startToday-DAY)return 2; return 3 }
@@ -242,10 +248,7 @@ const selectedProject=computed(()=>typeof projectFilter.value==='number'?asArray
 const activeTemplateName=computed(()=>asArray(templates.value).find(x=>x.id===activeTemplateId.value)?.name||'')
 const localizedTemplates=computed(()=>selectLocalizedWebChatTemplates(templates.value,locale.value))
 const canCompose=computed(()=>enabled.value&&hasUsableModel.value&&!creatingSession.value)
-const canSend=computed(()=>canCompose.value&&!messagesLoading.value&&!sending.value&&!agent.creating.value&&(taskMode.value==='chat'||(Boolean(options.value.tasks_enabled)&&!attachmentState.value&&!failedAttachments.value.length&&pendingDocuments.value.every(d=>d.status==='ready')))&&Boolean(selectedGroup.value&&selectedModel.value)&&draft.value.length<=20000)
-const pricingItems=computed(()=>{const p=selectedModelOption.value?.pricing;if(!p)return[];if(p.billing_mode==='per_request')return[{label:t('webChat.perRequest'),value:formatScaled(p.per_request_price??null,1)}];return[
-  {label:t('webChat.inputPrice'),value:formatScaled(p.input_price??null,1_000_000)},{label:t('webChat.outputPrice'),value:formatScaled(p.output_price??null,1_000_000)},
-  {label:t('webChat.cacheWritePrice'),value:formatScaled(p.cache_write_price??null,1_000_000)},{label:t('webChat.cacheReadPrice'),value:formatScaled(p.cache_read_price??null,1_000_000)}].filter(i=>i.value!=='-')})
+const canSend=computed(()=>canCompose.value&&!messagesLoading.value&&!sending.value&&!agent.creating.value&&(taskMode.value==='chat'||(Boolean(options.value.tasks_enabled)&&!attachmentState.value&&!failedAttachments.value.length&&pendingDocuments.value.every(d=>d.status==='ready')))&&Boolean(selectedModelOption.value)&&draft.value.length<=20000)
 
 function modelDisplayName(model: string, platform?: string): string {
   const name = (model || '').trim()
@@ -258,13 +261,6 @@ function modelDisplayName(model: string, platform?: string): string {
   return name
 }
 
-function groupOptionLabel(group: WebChatOptions['groups'][number]): string {
-  const name = (group.name || '').trim()
-  // Claude-AWS is already an explicit user-facing channel name; appending
-  // "· Kiro" only exposes the internal provider classification twice.
-  if (group.platform.trim().toLowerCase() === 'kiro' && /(?:aws|kiro)/i.test(name)) return name
-  return `${name} · ${platformLabel(group.platform)}`
-}
 
 const DAY=86_400_000
 const sessionGroups=computed(()=>{
@@ -291,13 +287,26 @@ function relativeTime(value: string): string {
 function formatMessageTime(value: string): string { const date=new Date(value); return Number.isNaN(date.getTime())?'':new Intl.DateTimeFormat(locale.value,{hour:'2-digit',minute:'2-digit'}).format(date) }
 function shortRequestID(id: string): string { return id.length>16?`${id.slice(0,8)}…${id.slice(-6)}`:id }
 
+function messageModelLabel(message: WebChatMessage): string {
+  const fromCatalog=asArray(options.value.models).find(model=>model.model===message.model)?.name
+  return fromCatalog||modelDisplayName(message.model||'',message.platform)
+}
+
 function sessionModelLabel(session: WebChatSession): string {
+  const fromCatalog = asArray(options.value.models).find(model => model.id === session.chat_model_id)?.name
+  if (fromCatalog) return fromCatalog
   const platform = session.platform || asArray(options.value.groups).find(group => group.id === session.group_id)?.platform
   const option = asArray(options.value.groups).find(group => group.id === session.group_id)?.models?.find(model => model.name === session.model)
   return option?.display_name || modelDisplayName(session.model, platform)
 }
 
 watch(selectedGroupId,()=>{if(!selectedGroupModels.value.some(m=>m.name===selectedModel.value))selectedModel.value=selectedGroupModels.value[0]?.name||''})
+watch(selectedChatModelId,id=>{if(id)localStorage.setItem(`subapis.webChat.model.${authStore.user?.id}`,id)})
+function defaultModelSelection(opts:WebChatOptions):string{
+  const models=asArray(opts.models)
+  const saved=localStorage.getItem(`subapis.webChat.model.${authStore.user?.id}`)
+  return models.find(m=>m.id===saved)?.id||models.find(m=>m.recommended)?.id||models[0]?.id||''
+}
 watch(draft,value=>localStorage.setItem(draftKey(activeSessionId.value),value))
 watch(activeSessionId,id=>{draft.value=localStorage.getItem(draftKey(id))||''})
 watch(()=>options.value.task_status,status=>{
@@ -315,7 +324,8 @@ async function loadInitial(){
  try{
   const[opts,list]=await Promise.all([webChatAPI.getOptions(),webChatAPI.listSessions()])
   options.value={...opts,groups:asArray(opts.groups)};enabled.value=opts.enabled;sessions.value=asArray(list)
-  selectedGroupId.value=opts.default_group_id??opts.groups[0]?.id??null;selectedModel.value=opts.default_model||opts.groups[0]?.models[0]?.name||''
+  selectedGroupId.value=opts.default_group_id??asArray(opts.groups)[0]?.id??null;selectedModel.value=opts.default_model||asArray(asArray(opts.groups)[0]?.models)[0]?.name||''
+  selectedChatModelId.value=defaultModelSelection(opts)
   await Promise.all([opts.projects_enabled?loadProjects():Promise.resolve(),opts.templates_enabled?loadTemplates():Promise.resolve(),loadOwnedArtifacts()])
   const requested=Number(route.query.session)
   if(intent===selectionVersion&&Number.isSafeInteger(requested)&&requested>0){
@@ -340,14 +350,14 @@ function openKnowledgeLibrary(project:WebChatProject){knowledgeProject.value=pro
 function onProjectSaved(project:WebChatProject){const index=projects.value.findIndex(p=>p.id===project.id);if(index>=0)projects.value[index]=project;else projects.value.push(project);projects.value.sort((a,b)=>a.sort_order-b.sort_order);projectDialogOpen.value=false;projectFilter.value=project.id}
 function onProjectDeleted(id:number){projects.value=projects.value.filter(p=>p.id!==id);sessions.value.forEach(s=>{if(s.project_id===id){s.project_id=null;s.project_name=''}});if(projectFilter.value===id)projectFilter.value=null;projectDialogOpen.value=false}
 function applyTemplate(content:string,templateID:number){draft.value=content;activeTemplateId.value=templateID;templateDialogOpen.value=false;void nextTick(()=>document.querySelector<HTMLTextAreaElement>('.composer-input')?.focus())}
-async function startDraftSession(){if(sending.value||agent.creating.value)return;selectionVersion++;messagesLoading.value=false;operationError.value='';if(agent.pending.value)clearPendingDocuments();else await discardPendingDocuments();await router.replace({query:{...route.query,session:undefined}});activeSessionId.value=null;messages.value=[];streamingText.value='';streamingSources.value=[];sessionsOpen.value=false;const p=selectedProject.value;if(p?.default_group_id)selectedGroupId.value=p.default_group_id;if(p?.default_model)selectedModel.value=p.default_model;activeTemplateId.value=p?.default_template_id??null}
+async function startDraftSession(){if(sending.value||agent.creating.value)return;selectionVersion++;messagesLoading.value=false;operationError.value='';if(agent.pending.value)clearPendingDocuments();else await discardPendingDocuments();await router.replace({query:{...route.query,session:undefined}});activeSessionId.value=null;messages.value=[];streamingText.value='';streamingSources.value=[];sessionsOpen.value=false;const p=selectedProject.value;selectedChatModelId.value=p?.default_chat_model_id||defaultModelSelection(options.value);activeTemplateId.value=p?.default_template_id??null}
 async function createSessionForCurrentSelection():Promise<WebChatSession|null>{
  if(pendingSession)return pendingSession
- if(!selectedGroupId.value||!selectedModel.value)return null
- const groupID=selectedGroupId.value,model=selectedModel.value
+ if(!selectedModelOption.value)return null
+ const chatModelID=selectedChatModelId.value
  creatingSession.value=true
  pendingSession=(async()=>{
-  const session=await webChatAPI.createSession({group_id:groupID,model,project_id:selectedProject.value?.id??null,default_template_id:activeTemplateId.value})
+  const session=await webChatAPI.createSession({chat_model_id:chatModelID,project_id:selectedProject.value?.id??null,default_template_id:activeTemplateId.value})
   localStorage.setItem(draftKey(session.id),draft.value)
   localStorage.removeItem(draftKey(activeSessionId.value))
   sessions.value=[session,...sessions.value];activeSessionId.value=session.id
@@ -366,7 +376,7 @@ async function selectSession(session:WebChatSession){
  try{
   if(activeSessionId.value!==session.id){if(agent.pending.value)clearPendingDocuments();else await discardPendingDocuments()}
   if(version!==selectionVersion)return
-  activeSessionId.value=session.id;messages.value=[];selectedGroupId.value=session.group_id;selectedModel.value=session.model
+  activeSessionId.value=session.id;messages.value=[];selectedChatModelId.value=session.chat_model_id||'';selectedGroupId.value=session.group_id;selectedModel.value=session.model
   activeTemplateId.value=session.default_template_id??null;applySessionSettings(session);sessionsOpen.value=false
   await router.replace({query:{...route.query,session:String(session.id)}})
   const loaded=asArray(await webChatAPI.listMessages(session.id))
@@ -400,7 +410,7 @@ async function send(){
   if(!session)return
   const templateID=activeTemplateId.value
   const documentIDs=pendingDocuments.value.map(d=>d.id)
-  await runGeneration(handlers=>webChatAPI.streamMessage(session.id,{content,group_id:selectedGroupId.value,model:selectedModel.value,template_id:templateID,knowledge_enabled:session.knowledge_enabled,document_ids:documentIDs},handlers),{role:'user',content},()=>{
+  await runGeneration(handlers=>webChatAPI.streamMessage(session.id,{content,chat_model_id:selectedChatModelId.value,template_id:templateID,knowledge_enabled:session.knowledge_enabled,document_ids:documentIDs},handlers),{role:'user',content},()=>{
    if(draft.value.trim()===content)draft.value=''
    activeTemplateId.value=null
    clearPendingDocuments()
@@ -439,8 +449,8 @@ async function createFileTask(content:string){
 async function retryTaskSubmission(){try{acceptFileTask(await agent.retryPending())}catch(e){operationError.value=extractApiErrorMessage(e)}}
 async function cancelFileTask(id:number){try{await agent.cancel(id)}catch(e){operationError.value=extractApiErrorMessage(e)}}
 async function loadTaskDetails(id:number){try{await agent.loadEvents(id)}catch(e){operationError.value=extractApiErrorMessage(e)}}
-async function regenerateMessage(message:WebChatMessage){const s=activeSession.value;if(!s)return;await runGeneration(handlers=>webChatAPI.regenerateMessage(s.id,message.id,handlers))}
-async function reviseMessage(message:WebChatMessage){const content=window.prompt(t('webChat.revisePrompt'),message.content)?.trim();const s=activeSession.value;if(!s||!content||content===message.content)return;await runGeneration(handlers=>webChatAPI.reviseMessage(s.id,message.id,content,handlers))}
+async function regenerateMessage(message:WebChatMessage){const s=activeSession.value;if(!s)return;await runGeneration(handlers=>webChatAPI.regenerateMessage(s.id,message.id,handlers,selectedChatModelId.value))}
+async function reviseMessage(message:WebChatMessage){const content=window.prompt(t('webChat.revisePrompt'),message.content)?.trim();const s=activeSession.value;if(!s||!content||content===message.content)return;await runGeneration(handlers=>webChatAPI.reviseMessage(s.id,message.id,content,handlers,selectedChatModelId.value))}
 async function switchVersion(message:WebChatMessage,direction:-1|1){const s=activeSession.value;if(!s||sending.value)return;const versions=asArray(await webChatAPI.listMessageVersions(s.id,message.id));const current=versions.findIndex(v=>v.id===message.id);const target=versions[current+direction];if(!target)return;messages.value=asArray(await webChatAPI.activateMessageVersion(s.id,target.id));await scrollToBottom()}
 function versionReason(reason:WebChatMessage['version_reason']){return reason==='regenerate'?t('webChat.versionRegenerated'):reason==='edit'?t('webChat.versionEdited'):t('webChat.versionOriginal')}
 async function runGeneration(request:(handlers:WebChatStreamHandlers)=>Promise<void>,optimistic?:{role:'user';content:string},onAccepted?:()=>void){

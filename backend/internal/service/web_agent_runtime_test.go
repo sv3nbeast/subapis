@@ -130,7 +130,7 @@ func TestWebAgentApplicationConfigurationStartsAndStopsRuntime(t *testing.T) {
 }
 func TestWebAgentInvalidConfigurationDoesNotDisableOrdinaryChat(t *testing.T) {
 	cfg := &config.Config{WebAgent: config.WebAgentConfig{Enabled: true}}
-	chat := ProvideWebChatService(agentChatStub{}, agentPlannerKeyRepo{}, &agentPlannerKeys{}, agentCatalogStub{}, agentRuntimeStub{}, nil, cfg)
+	chat := ProvideWebChatService(agentChatStub{}, agentPlannerKeyRepo{}, &agentPlannerKeys{}, agentCatalogStub{}, agentRuntimeStub{}, nil, nil, cfg)
 	require.True(t, chat.FeatureEnabled(context.Background()))
 	require.False(t, chat.Agent().Ready(context.Background()))
 }

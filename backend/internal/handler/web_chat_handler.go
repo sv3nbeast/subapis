@@ -40,6 +40,7 @@ func NewWebChatHandler(webChatService *service.WebChatService, documents *servic
 }
 
 type webChatCreateSessionRequest struct {
+	ChatModelID       string `json:"chat_model_id"`
 	GroupID           int64  `json:"group_id"`
 	Model             string `json:"model"`
 	ProjectID         *int64 `json:"project_id"`
@@ -47,6 +48,7 @@ type webChatCreateSessionRequest struct {
 }
 
 type webChatSendMessageRequest struct {
+	ChatModelID      string  `json:"chat_model_id"`
 	Content          string  `json:"content" binding:"required"`
 	GroupID          int64   `json:"group_id"`
 	Model            string  `json:"model"`
@@ -56,7 +58,8 @@ type webChatSendMessageRequest struct {
 }
 
 type webChatReviseMessageRequest struct {
-	Content string `json:"content" binding:"required"`
+	ChatModelID string `json:"chat_model_id"`
+	Content     string `json:"content" binding:"required"`
 }
 
 type webChatStreamResult struct {
@@ -210,6 +213,7 @@ func (h *WebChatHandler) CreateSession(c *gin.Context) {
 		return
 	}
 	session, err := h.webChatService.CreateSession(c.Request.Context(), subject.UserID, service.WebChatCreateSessionRequest{
+		ChatModelID:       req.ChatModelID,
 		GroupID:           req.GroupID,
 		Model:             req.Model,
 		ProjectID:         req.ProjectID,
@@ -259,6 +263,7 @@ func (h *WebChatHandler) SendMessage(c *gin.Context) {
 	}
 
 	generation, err := h.webChatService.PrepareSend(c.Request.Context(), subject.UserID, sessionID, service.WebChatSendMessageRequest{
+		ChatModelID:      req.ChatModelID,
 		Content:          req.Content,
 		GroupID:          req.GroupID,
 		Model:            req.Model,
@@ -284,7 +289,16 @@ func (h *WebChatHandler) RegenerateMessage(c *gin.Context) {
 		response.BadRequest(c, "Invalid message ID")
 		return
 	}
-	generation, err := h.webChatService.PrepareRegenerate(c.Request.Context(), subject.UserID, sessionID, messageID)
+	var req struct {
+		ChatModelID string `json:"chat_model_id"`
+	}
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			response.BadRequest(c, "Invalid request")
+			return
+		}
+	}
+	generation, err := h.webChatService.PrepareRegenerate(c.Request.Context(), subject.UserID, sessionID, messageID, req.ChatModelID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -307,7 +321,7 @@ func (h *WebChatHandler) ReviseMessage(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	generation, err := h.webChatService.PrepareRevise(c.Request.Context(), subject.UserID, sessionID, messageID, req.Content)
+	generation, err := h.webChatService.PrepareRevise(c.Request.Context(), subject.UserID, sessionID, messageID, req.Content, req.ChatModelID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -784,6 +798,10 @@ func (h *WebChatHandler) streamGeneration(c *gin.Context, userID int64, generati
 	}
 
 	result, streamErr := h.forwardStreamingChat(c.Request.Context(), c.Writer, managedKey.Key, session, messages)
+	// Snapshot the route actually used, never the session's later selection.
+	result.Usage.Model = session.Model
+	result.Usage.Platform = session.Platform
+	result.Usage.GroupID = session.GroupID
 	if streamErr != nil {
 		errMsg := streamErr.Error()
 		if errors.Is(streamErr, context.Canceled) || errors.Is(c.Request.Context().Err(), context.Canceled) {

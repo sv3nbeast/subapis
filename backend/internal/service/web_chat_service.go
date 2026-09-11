@@ -50,9 +50,9 @@ type WebChatRepository interface {
 	UpdateSession(ctx context.Context, userID, sessionID int64, req WebChatPatchSessionRequest) (*WebChatSession, error)
 	UpdateSessionTarget(ctx context.Context, userID, sessionID, groupID int64, model string) error
 	DeleteSession(ctx context.Context, userID, sessionID int64) error
-	CreateTurn(ctx context.Context, userID, sessionID int64, content, title string, templateID *int64) (*WebChatMessage, *WebChatMessage, error)
-	RegenerateTurn(ctx context.Context, userID, sessionID, messageID int64) (*WebChatMessage, error)
-	ReviseTurn(ctx context.Context, userID, sessionID, messageID int64, content, title string) (*WebChatMessage, *WebChatMessage, error)
+	CreateTurn(ctx context.Context, userID, sessionID int64, content, title string, templateID *int64, target ...WebChatTarget) (*WebChatMessage, *WebChatMessage, error)
+	RegenerateTurn(ctx context.Context, userID, sessionID, messageID int64, target ...WebChatTarget) (*WebChatMessage, error)
+	ReviseTurn(ctx context.Context, userID, sessionID, messageID int64, content, title string, target ...WebChatTarget) (*WebChatMessage, *WebChatMessage, error)
 	UpdateMessageResult(ctx context.Context, userID, messageID int64, content, status, errorMessage, requestID string, usage WebChatUsage) (*WebChatMessage, error)
 	ListMessages(ctx context.Context, userID, sessionID int64) ([]WebChatMessage, error)
 	RecentMessages(ctx context.Context, userID, sessionID int64, limit int) ([]WebChatMessage, error)
@@ -88,6 +88,7 @@ type webChatRuntimeReader interface {
 }
 
 type WebChatService struct {
+	catalogGroups  GroupRepository
 	repo           WebChatRepository
 	webChatKeyRepo WebChatAPIKeyRepository
 	apiKeyService  webChatAPIKeyManager
@@ -141,6 +142,9 @@ func (s *WebChatService) Artifacts() *WebAgentArtifactService {
 }
 
 func (s *WebChatService) runtime(ctx context.Context) WebChatRuntime {
+	if runtime, ok := ctx.Value(webChatRuntimeContextKey{}).(WebChatRuntime); ok {
+		return runtime
+	}
 	if s == nil || s.settingService == nil {
 		return WebChatRuntime{}
 	}
@@ -155,6 +159,7 @@ func (s *WebChatService) FeatureEnabled(ctx context.Context) bool {
 }
 
 func (s *WebChatService) Options(ctx context.Context, userID int64) (*WebChatOptions, error) {
+	ctx = s.withRuntime(ctx)
 	runtime := s.runtime(ctx)
 	if !runtime.Enabled {
 		return &WebChatOptions{Enabled: false, Groups: []WebChatGroupOption{}}, nil
@@ -165,6 +170,7 @@ func (s *WebChatService) Options(ctx context.Context, userID int64) (*WebChatOpt
 		return nil, err
 	}
 	options := &WebChatOptions{
+		Models:           catalogOptions(runtime.Catalog, groups),
 		Enabled:          true,
 		TasksEnabled:     s.agent.Ready(ctx),
 		TaskStatus:       s.agent.Availability(ctx),
@@ -192,6 +198,7 @@ func (s *WebChatService) Options(ctx context.Context, userID int64) (*WebChatOpt
 }
 
 func (s *WebChatService) CreateSession(ctx context.Context, userID int64, req WebChatCreateSessionRequest) (*WebChatSession, error) {
+	ctx = s.withRuntime(ctx)
 	if !s.FeatureEnabled(ctx) {
 		return nil, ErrWebChatDisabled
 	}
@@ -218,12 +225,20 @@ func (s *WebChatService) CreateSession(ctx context.Context, userID int64, req We
 			return nil, err
 		}
 	}
+	if req.ChatModelID != "" {
+		var err error
+		req.GroupID, req.Model, err = s.resolveCatalogSelection(ctx, req.ChatModelID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	group, model, err := s.validateGroupModel(ctx, userID, req.GroupID, req.Model)
 	if err != nil {
 		return nil, err
 	}
 
 	session := &WebChatSession{
+		ChatModelID:       req.ChatModelID,
 		UserID:            userID,
 		GroupID:           group.ID,
 		Model:             model.Name,
@@ -242,10 +257,16 @@ func (s *WebChatService) CreateSession(ctx context.Context, userID int64, req We
 }
 
 func (s *WebChatService) ListSessions(ctx context.Context, userID int64, query string) ([]WebChatSession, error) {
+	ctx = s.withRuntime(ctx)
 	if !s.FeatureEnabled(ctx) {
 		return nil, ErrWebChatDisabled
 	}
-	return s.repo.ListSessions(ctx, userID, strings.TrimSpace(query))
+	items, err := s.repo.ListSessions(ctx, userID, strings.TrimSpace(query))
+	cfg := s.runtime(ctx).Catalog
+	for i := range items {
+		items[i].ChatModelID = catalogTargetID(cfg, items[i].GroupID, items[i].Model)
+	}
+	return items, err
 }
 
 func (s *WebChatService) UpdateSession(ctx context.Context, userID, sessionID int64, req WebChatPatchSessionRequest) (*WebChatSession, error) {
@@ -323,6 +344,7 @@ func (s *WebChatService) ListMessages(ctx context.Context, userID, sessionID int
 }
 
 func (s *WebChatService) PrepareSend(ctx context.Context, userID, sessionID int64, req WebChatSendMessageRequest) (*WebChatGeneration, error) {
+	ctx = s.withRuntime(ctx)
 	if !s.FeatureEnabled(ctx) {
 		return nil, ErrWebChatDisabled
 	}
@@ -346,15 +368,18 @@ func (s *WebChatService) PrepareSend(ctx context.Context, userID, sessionID int6
 	if modelName == "" {
 		modelName = session.Model
 	}
+	if req.ChatModelID != "" {
+		groupID, modelName, err = s.resolveCatalogSelection(ctx, req.ChatModelID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	group, model, err := s.validateGroupModel(ctx, userID, groupID, modelName)
 	if err != nil {
 		return nil, err
 	}
 
 	if group.ID != session.GroupID || model.Name != session.Model {
-		if err := s.repo.UpdateSessionTarget(ctx, userID, session.ID, group.ID, model.Name); err != nil {
-			return nil, fmt.Errorf("update web chat session target: %w", err)
-		}
 		session.GroupID = group.ID
 		session.Model = model.Name
 	}
@@ -368,7 +393,7 @@ func (s *WebChatService) PrepareSend(ctx context.Context, userID, sessionID int6
 			return nil, err
 		}
 	}
-	userMessage, assistantMessage, err := s.repo.CreateTurn(ctx, userID, session.ID, content, buildWebChatTitle(content), req.TemplateID)
+	userMessage, assistantMessage, err := s.repo.CreateTurn(ctx, userID, session.ID, content, buildWebChatTitle(content), req.TemplateID, WebChatTarget{GroupID: group.ID, Model: model.Name})
 	if err != nil {
 		return nil, err
 	}
@@ -411,11 +436,11 @@ func (s *WebChatService) FailAssistantMessage(ctx context.Context, userID, messa
 	return s.repo.UpdateMessageResult(ctx, userID, messageID, content, status, errorMessage, requestID, usage)
 }
 
-func (s *WebChatService) PrepareRegenerate(ctx context.Context, userID, sessionID, messageID int64) (*WebChatGeneration, error) {
-	return s.prepareBranchGeneration(ctx, userID, sessionID, messageID, "", false)
+func (s *WebChatService) PrepareRegenerate(ctx context.Context, userID, sessionID, messageID int64, selection ...string) (*WebChatGeneration, error) {
+	return s.prepareBranchGeneration(ctx, userID, sessionID, messageID, "", false, selection...)
 }
 
-func (s *WebChatService) PrepareRevise(ctx context.Context, userID, sessionID, messageID int64, content string) (*WebChatGeneration, error) {
+func (s *WebChatService) PrepareRevise(ctx context.Context, userID, sessionID, messageID int64, content string, selection ...string) (*WebChatGeneration, error) {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return nil, ErrWebChatEmptyMessage
@@ -423,10 +448,11 @@ func (s *WebChatService) PrepareRevise(ctx context.Context, userID, sessionID, m
 	if utf8.RuneCountInString(content) > webChatMessageMaxChars {
 		return nil, ErrWebChatMessageTooLong
 	}
-	return s.prepareBranchGeneration(ctx, userID, sessionID, messageID, content, true)
+	return s.prepareBranchGeneration(ctx, userID, sessionID, messageID, content, true, selection...)
 }
 
-func (s *WebChatService) prepareBranchGeneration(ctx context.Context, userID, sessionID, messageID int64, content string, revise bool) (*WebChatGeneration, error) {
+func (s *WebChatService) prepareBranchGeneration(ctx context.Context, userID, sessionID, messageID int64, content string, revise bool, selection ...string) (*WebChatGeneration, error) {
+	ctx = s.withRuntime(ctx)
 	if !s.FeatureEnabled(ctx) {
 		return nil, ErrWebChatDisabled
 	}
@@ -434,10 +460,23 @@ func (s *WebChatService) prepareBranchGeneration(ctx context.Context, userID, se
 	if err != nil {
 		return nil, err
 	}
-	group, _, err := s.validateGroupModel(ctx, userID, session.GroupID, session.Model)
+	groupID, modelName := session.GroupID, session.Model
+	if len(selection) > 0 && selection[0] != "" {
+		groupID, modelName, err = s.resolveCatalogSelection(ctx, selection[0])
+		if err != nil {
+			return nil, err
+		}
+	}
+	group, _, err := s.validateGroupModel(ctx, userID, groupID, modelName)
 	if err != nil {
 		return nil, err
 	}
+	if groupID != session.GroupID || modelName != session.Model {
+		session.GroupID = groupID
+		session.Model = modelName
+	}
+	session.Platform = group.Platform
+	session.GroupName = group.Name
 	key, err := s.ensureManagedKey(ctx, userID, group)
 	if err != nil {
 		return nil, err
@@ -452,9 +491,9 @@ func (s *WebChatService) prepareBranchGeneration(ctx context.Context, userID, se
 		}
 	}
 	if revise {
-		revisedUser, assistant, err = s.repo.ReviseTurn(ctx, userID, sessionID, messageID, content, buildWebChatTitle(content))
+		revisedUser, assistant, err = s.repo.ReviseTurn(ctx, userID, sessionID, messageID, content, buildWebChatTitle(content), WebChatTarget{GroupID: groupID, Model: modelName})
 	} else {
-		assistant, err = s.repo.RegenerateTurn(ctx, userID, sessionID, messageID)
+		assistant, err = s.repo.RegenerateTurn(ctx, userID, sessionID, messageID, WebChatTarget{GroupID: groupID, Model: modelName})
 	}
 	if err != nil {
 		return nil, err
@@ -521,20 +560,29 @@ func (s *WebChatService) ActivateMessageVersion(ctx context.Context, userID, ses
 }
 
 func (s *WebChatService) ListProjects(ctx context.Context, userID int64) ([]WebChatProject, error) {
+	ctx = s.withRuntime(ctx)
 	if !s.runtime(ctx).ProjectsEnabled {
 		return nil, ErrWebChatProjectsDisabled
 	}
-	return s.repo.ListProjects(ctx, userID)
+	items, err := s.repo.ListProjects(ctx, userID)
+	cfg := s.runtime(ctx).Catalog
+	for i := range items {
+		if items[i].DefaultGroupID != nil {
+			items[i].DefaultChatModelID = catalogTargetID(cfg, *items[i].DefaultGroupID, items[i].DefaultModel)
+		}
+	}
+	return items, err
 }
 
 func (s *WebChatService) CreateProject(ctx context.Context, userID int64, input WebChatProjectInput) (*WebChatProject, error) {
+	ctx = s.withRuntime(ctx)
 	if !s.runtime(ctx).ProjectsEnabled {
 		return nil, ErrWebChatProjectsDisabled
 	}
 	if err := s.validateProjectInput(ctx, userID, &input); err != nil {
 		return nil, err
 	}
-	project := &WebChatProject{UserID: userID, Name: input.Name, Description: input.Description, Color: input.Color, SortOrder: input.SortOrder, DefaultGroupID: input.DefaultGroupID, DefaultModel: input.DefaultModel, DefaultTemplateID: input.DefaultTemplateID}
+	project := &WebChatProject{DefaultChatModelID: input.DefaultChatModelID, UserID: userID, Name: input.Name, Description: input.Description, Color: input.Color, SortOrder: input.SortOrder, DefaultGroupID: input.DefaultGroupID, DefaultModel: input.DefaultModel, DefaultTemplateID: input.DefaultTemplateID}
 	if err := s.repo.CreateProject(ctx, project); err != nil {
 		return nil, err
 	}
@@ -542,6 +590,7 @@ func (s *WebChatService) CreateProject(ctx context.Context, userID int64, input 
 }
 
 func (s *WebChatService) UpdateProject(ctx context.Context, userID, projectID int64, input WebChatProjectInput) (*WebChatProject, error) {
+	ctx = s.withRuntime(ctx)
 	if !s.runtime(ctx).ProjectsEnabled {
 		return nil, ErrWebChatProjectsDisabled
 	}
@@ -551,7 +600,11 @@ func (s *WebChatService) UpdateProject(ctx context.Context, userID, projectID in
 	if err := s.validateProjectInput(ctx, userID, &input); err != nil {
 		return nil, err
 	}
-	return s.repo.UpdateProject(ctx, userID, projectID, input)
+	project, err := s.repo.UpdateProject(ctx, userID, projectID, input)
+	if project != nil {
+		project.DefaultChatModelID = input.DefaultChatModelID
+	}
+	return project, err
 }
 
 func (s *WebChatService) DeleteProject(ctx context.Context, userID, projectID int64) error {
@@ -578,6 +631,14 @@ func (s *WebChatService) projectByID(ctx context.Context, userID, projectID int6
 }
 
 func (s *WebChatService) validateProjectInput(ctx context.Context, userID int64, input *WebChatProjectInput) error {
+	if input.DefaultChatModelID != "" {
+		groupID, model, err := s.resolveCatalogSelection(ctx, input.DefaultChatModelID)
+		if err != nil {
+			return err
+		}
+		input.DefaultGroupID = &groupID
+		input.DefaultModel = model
+	}
 	input.Name = strings.TrimSpace(input.Name)
 	input.Description = strings.TrimSpace(input.Description)
 	input.DefaultModel = strings.TrimSpace(input.DefaultModel)
@@ -787,6 +848,9 @@ func webChatModelDisplayName(model, platform string) string {
 
 func (s *WebChatService) validateGroupModel(ctx context.Context, userID, groupID int64, model string) (*WebChatGroupOption, *WebChatModelOption, error) {
 	model = strings.TrimSpace(model)
+	if !catalogAllows(s.runtime(ctx).Catalog, groupID, model) {
+		return nil, nil, ErrWebChatInvalidModel
+	}
 	if groupID <= 0 {
 		return nil, nil, ErrWebChatInvalidGroup
 	}

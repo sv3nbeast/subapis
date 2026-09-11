@@ -48,22 +48,24 @@ type WebChatGroupOption struct {
 }
 
 type WebChatOptions struct {
-	TaskStatus       string                `json:"task_status,omitempty"`
-	TaskLimits       *WebAgentLimits       `json:"task_limits,omitempty"`
-	TasksEnabled     bool                  `json:"tasks_enabled"`
-	Enabled          bool                  `json:"enabled"`
-	Groups           []WebChatGroupOption  `json:"groups"`
-	DefaultGroupID   *int64                `json:"default_group_id,omitempty"`
-	DefaultModel     string                `json:"default_model,omitempty"`
-	ProjectsEnabled  bool                  `json:"projects_enabled"`
-	TemplatesEnabled bool                  `json:"templates_enabled"`
-	HistoryEnabled   bool                  `json:"history_enabled"`
-	FilesEnabled     bool                  `json:"files_enabled"`
-	FileFormats      []string              `json:"file_formats,omitempty"`
-	FileLimits       WebChatDocumentLimits `json:"file_limits"`
+	Models           []WebChatCatalogOption `json:"models"`
+	TaskStatus       string                 `json:"task_status,omitempty"`
+	TaskLimits       *WebAgentLimits        `json:"task_limits,omitempty"`
+	TasksEnabled     bool                   `json:"tasks_enabled"`
+	Enabled          bool                   `json:"enabled"`
+	Groups           []WebChatGroupOption   `json:"groups"`
+	DefaultGroupID   *int64                 `json:"default_group_id,omitempty"`
+	DefaultModel     string                 `json:"default_model,omitempty"`
+	ProjectsEnabled  bool                   `json:"projects_enabled"`
+	TemplatesEnabled bool                   `json:"templates_enabled"`
+	HistoryEnabled   bool                   `json:"history_enabled"`
+	FilesEnabled     bool                   `json:"files_enabled"`
+	FileFormats      []string               `json:"file_formats,omitempty"`
+	FileLimits       WebChatDocumentLimits  `json:"file_limits"`
 }
 
 type WebChatSession struct {
+	ChatModelID         string     `json:"chat_model_id,omitempty"`
 	ID                  int64      `json:"id"`
 	UserID              int64      `json:"user_id"`
 	GroupID             int64      `json:"group_id"`
@@ -86,6 +88,9 @@ type WebChatSession struct {
 }
 
 type WebChatMessage struct {
+	Model               string          `json:"model,omitempty"`
+	Platform            string          `json:"platform,omitempty"`
+	ActualCost          *float64        `json:"actual_cost,omitempty"`
 	ID                  int64           `json:"id"`
 	SessionID           int64           `json:"session_id"`
 	UserID              int64           `json:"user_id"`
@@ -110,6 +115,7 @@ type WebChatMessage struct {
 }
 
 type WebChatCreateSessionRequest struct {
+	ChatModelID       string
 	GroupID           int64
 	Model             string
 	ProjectID         *int64
@@ -117,6 +123,7 @@ type WebChatCreateSessionRequest struct {
 }
 
 type WebChatSendMessageRequest struct {
+	ChatModelID      string
 	Content          string
 	GroupID          int64
 	Model            string
@@ -140,28 +147,30 @@ type WebChatPatchSessionRequest struct {
 }
 
 type WebChatProject struct {
-	ID                int64     `json:"id"`
-	UserID            int64     `json:"user_id"`
-	Name              string    `json:"name"`
-	Description       string    `json:"description"`
-	Color             string    `json:"color"`
-	SortOrder         int       `json:"sort_order"`
-	DefaultGroupID    *int64    `json:"default_group_id,omitempty"`
-	DefaultModel      string    `json:"default_model,omitempty"`
-	DefaultTemplateID *int64    `json:"default_template_id,omitempty"`
-	SessionCount      int       `json:"session_count"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	DefaultChatModelID string    `json:"default_chat_model_id,omitempty"`
+	ID                 int64     `json:"id"`
+	UserID             int64     `json:"user_id"`
+	Name               string    `json:"name"`
+	Description        string    `json:"description"`
+	Color              string    `json:"color"`
+	SortOrder          int       `json:"sort_order"`
+	DefaultGroupID     *int64    `json:"default_group_id,omitempty"`
+	DefaultModel       string    `json:"default_model,omitempty"`
+	DefaultTemplateID  *int64    `json:"default_template_id,omitempty"`
+	SessionCount       int       `json:"session_count"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type WebChatProjectInput struct {
-	Name              string `json:"name"`
-	Description       string `json:"description"`
-	Color             string `json:"color"`
-	SortOrder         int    `json:"sort_order"`
-	DefaultGroupID    *int64 `json:"default_group_id"`
-	DefaultModel      string `json:"default_model"`
-	DefaultTemplateID *int64 `json:"default_template_id"`
+	DefaultChatModelID string `json:"default_chat_model_id"`
+	Name               string `json:"name"`
+	Description        string `json:"description"`
+	Color              string `json:"color"`
+	SortOrder          int    `json:"sort_order"`
+	DefaultGroupID     *int64 `json:"default_group_id"`
+	DefaultModel       string `json:"default_model"`
+	DefaultTemplateID  *int64 `json:"default_template_id"`
 }
 
 type WebChatTemplateVariable struct {
@@ -201,10 +210,13 @@ type WebChatTemplateInput struct {
 }
 
 type WebChatUsage struct {
-	InputTokens         int64 `json:"input_tokens"`
-	OutputTokens        int64 `json:"output_tokens"`
-	CacheReadTokens     int64 `json:"cache_read_tokens"`
-	CacheCreationTokens int64 `json:"cache_creation_tokens"`
+	Model               string `json:"-"`
+	Platform            string `json:"-"`
+	GroupID             int64  `json:"-"`
+	InputTokens         int64  `json:"input_tokens"`
+	OutputTokens        int64  `json:"output_tokens"`
+	CacheReadTokens     int64  `json:"cache_read_tokens"`
+	CacheCreationTokens int64  `json:"cache_creation_tokens"`
 }
 
 type WebChatGeneration struct {
@@ -213,4 +225,9 @@ type WebChatGeneration struct {
 	Messages         []OpenAIChatMessage
 	AssistantMessage *WebChatMessage
 	Sources          []WebChatSource
+}
+
+type WebChatTarget struct {
+	GroupID int64
+	Model   string
 }

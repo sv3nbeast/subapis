@@ -106,7 +106,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	webChatDocumentRepository := repository.NewWebChatDocumentRepository(db)
 	webChatDocumentStoreFactory := repository.NewWebChatDocumentStoreFactory()
 	webChatDocumentService := service.ProvideWebChatDocumentService(webChatDocumentRepository, settingRepository, secretEncryptor, webChatDocumentStoreFactory)
-	webChatService := service.ProvideWebChatService(webChatRepository, webChatAPIKeyRepository, apiKeyService, channelService, settingService, webChatDocumentService, configConfig)
+	webChatService := service.ProvideWebChatService(webChatRepository, webChatAPIKeyRepository, apiKeyService, channelService, settingService, webChatDocumentService, groupRepository, configConfig)
 	webChatHandler := handler.NewWebChatHandler(webChatService, webChatDocumentService, configConfig)
 	usageLogRepository := repository.NewUsageLogRepository(client, db)
 	usageService := service.NewUsageService(usageLogRepository, userRepository, client, apiKeyAuthCacheInvalidator)

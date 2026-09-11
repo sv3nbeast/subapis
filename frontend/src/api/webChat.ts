@@ -1,5 +1,12 @@
 import { apiClient } from './client'
 
+export interface WebChatCatalogOption { id:string; name:string; brand:string; description:string; model:string; billing_type:string; recommended:boolean }
+export interface WebChatCatalogEntry { id:string; name:string; brand:string; description:string; group_id:number; model:string; enabled:boolean; recommended:boolean; sort_order:number }
+export interface WebChatCatalogConfig { entries:WebChatCatalogEntry[] }
+export async function getModelCatalog():Promise<WebChatCatalogConfig> { return (await apiClient.get('/admin/settings/web-chat-models')).data }
+export async function saveModelCatalog(config:WebChatCatalogConfig):Promise<WebChatCatalogConfig> { return (await apiClient.put('/admin/settings/web-chat-models',config)).data }
+export async function validateModelCatalog(config:WebChatCatalogConfig):Promise<{valid:boolean}> { return (await apiClient.post('/admin/settings/web-chat-models/validate',config)).data }
+
 export interface WebChatPricingInterval {
   min_tokens: number
   max_tokens: number | null
@@ -42,6 +49,7 @@ export interface WebChatGroupOption {
 }
 
 export interface WebChatOptions {
+  models?: WebChatCatalogOption[]
   tasks_enabled?: boolean
   task_status?: 'ready' | 'starting' | 'unavailable' | 'disabled' | 'not_configured'
   task_limits?: { max_active_tasks: number; max_model_calls: number; max_input_bytes: number; max_output_tokens: number; max_artifact_bytes: number; deadline_seconds: number }
@@ -58,6 +66,7 @@ export interface WebChatOptions {
 }
 
 export interface WebChatSession {
+  chat_model_id?: string
   id: number
   user_id: number
   group_id: number
@@ -79,6 +88,9 @@ export interface WebChatSession {
 }
 
 export interface WebChatMessage {
+  model?: string
+  platform?: string
+  actual_cost?: number | null
   id: number
   session_id: number
   user_id: number
@@ -150,6 +162,7 @@ export interface WebChatDocumentS3Config { endpoint:string;region:string;bucket:
 export interface WebChatDocumentAdminConfig { enabled:boolean;limits:WebChatDocumentLimits;s3:WebChatDocumentS3Config }
 
 export interface WebChatProject {
+  default_chat_model_id?: string
   id: number
   user_id: number
   name: string
@@ -221,7 +234,7 @@ export async function getSession(sessionID: number): Promise<WebChatSession> {
   return data
 }
 
-export async function createSession(payload: { group_id?: number; model?: string; project_id?: number | null; default_template_id?: number | null }): Promise<WebChatSession> {
+export async function createSession(payload: { chat_model_id?: string; group_id?: number; model?: string; project_id?: number | null; default_template_id?: number | null }): Promise<WebChatSession> {
   const { data } = await apiClient.post<WebChatSession>('/web-chat/sessions', payload)
   return data
 }
@@ -237,18 +250,18 @@ export async function deleteSession(sessionID: number): Promise<void> {
 
 export async function streamMessage(
   sessionID: number,
-  payload: { content: string; group_id?: number | null; model?: string; template_id?: number | null; knowledge_enabled?:boolean; document_ids?:number[] },
+  payload: { content: string; chat_model_id?: string; group_id?: number | null; model?: string; template_id?: number | null; knowledge_enabled?:boolean; document_ids?:number[] },
   handlers: WebChatStreamHandlers = {},
 ): Promise<void> {
 	return streamRequest(`/web-chat/sessions/${sessionID}/messages`, payload, handlers)
 }
 
-export async function regenerateMessage(sessionID: number, messageID: number, handlers: WebChatStreamHandlers = {}): Promise<void> {
-  return streamRequest(`/web-chat/sessions/${sessionID}/messages/${messageID}/regenerate`, {}, handlers)
+export async function regenerateMessage(sessionID: number, messageID: number, handlers: WebChatStreamHandlers = {}, chatModelId?: string): Promise<void> {
+  return streamRequest(`/web-chat/sessions/${sessionID}/messages/${messageID}/regenerate`, { chat_model_id: chatModelId }, handlers)
 }
 
-export async function reviseMessage(sessionID: number, messageID: number, content: string, handlers: WebChatStreamHandlers = {}): Promise<void> {
-  return streamRequest(`/web-chat/sessions/${sessionID}/messages/${messageID}/revise`, { content }, handlers)
+export async function reviseMessage(sessionID: number, messageID: number, content: string, handlers: WebChatStreamHandlers = {}, chatModelId?: string): Promise<void> {
+  return streamRequest(`/web-chat/sessions/${sessionID}/messages/${messageID}/revise`, { content, chat_model_id: chatModelId }, handlers)
 }
 
 export async function listProjects(): Promise<WebChatProject[]> { const { data } = await apiClient.get<WebChatProject[]>('/web-chat/projects'); return data }

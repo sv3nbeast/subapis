@@ -29,6 +29,7 @@
       @keydown="handleKeydown"
     />
     <div class="composer-bottom wc-cbar">
+      <slot name="model" />
       <div v-if="allowModes && modes.length" class="task-modebar wc-seg wc-modes" :aria-label="t('webAgent.mode')">
         <button v-for="item in modes" :key="item" type="button" :aria-pressed="mode === item" :disabled="modeDisabled" @click="emit('update:mode', item)">
           <Icon :name="modeIcon[item]" size="xs" /><span class="label">{{ t(`webAgent.${item}`) }}</span>

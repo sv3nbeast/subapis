@@ -1601,6 +1601,7 @@ func (s *SettingService) GetPublicModelMarketRuntime(ctx context.Context) Public
 
 // WebChatRuntime is the lightweight view of the web-chat feature switch.
 type WebChatRuntime struct {
+	Catalog          *WebChatCatalogConfig
 	Enabled          bool
 	ProjectsEnabled  bool
 	TemplatesEnabled bool
@@ -1612,11 +1613,19 @@ type WebChatRuntime struct {
 // settings store. Fail-closed: unknown state must not expose chat or create
 // managed hidden keys.
 func (s *SettingService) GetWebChatRuntime(ctx context.Context) WebChatRuntime {
-	vals, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeyWebChatEnabled, SettingKeyWebChatProjectsEnabled, SettingKeyWebChatTemplatesEnabled, SettingKeyWebChatHistoryEnabled, SettingKeyWebChatFilesEnabled})
+	vals, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeyWebChatEnabled, SettingKeyWebChatProjectsEnabled, SettingKeyWebChatTemplatesEnabled, SettingKeyWebChatHistoryEnabled, SettingKeyWebChatFilesEnabled, webChatCatalogKey})
 	if err != nil {
 		return WebChatRuntime{Enabled: false}
 	}
+	var catalog *WebChatCatalogConfig
+	if raw := vals[webChatCatalogKey]; raw != "" {
+		catalog = &WebChatCatalogConfig{}
+		if json.Unmarshal([]byte(raw), catalog) != nil {
+			return WebChatRuntime{Enabled: false, Catalog: catalog}
+		}
+	}
 	return WebChatRuntime{
+		Catalog:          catalog,
 		Enabled:          vals[SettingKeyWebChatEnabled] == "true",
 		ProjectsEnabled:  vals[SettingKeyWebChatProjectsEnabled] == "true",
 		TemplatesEnabled: vals[SettingKeyWebChatTemplatesEnabled] == "true",

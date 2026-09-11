@@ -36,7 +36,7 @@ beforeEach(()=>{
  mocks.agent.listArtifacts.mockResolvedValue({items:[],next_before:0})
  mocks.agent.getTaskEvents.mockResolvedValue({items:[],next_after:0})
  mocks.query={}
- mocks.api.getOptions.mockResolvedValue({enabled:true,groups:[{id:1,name:'test',platform:'openai',models:[{name:'test-model'}]}],projects_enabled:true,files_enabled:true,templates_enabled:true,history_enabled:true,task_status:'ready',tasks_enabled:true,file_limits:{}})
+ mocks.api.getOptions.mockResolvedValue({enabled:true,models:[{id:'route-1',name:'Test Model',brand:'OpenAI',description:'',model:'test-model',billing_type:'standard',recommended:true}],groups:[{id:1,name:'test',platform:'openai',models:[{name:'test-model'}]}],projects_enabled:true,files_enabled:true,templates_enabled:true,history_enabled:true,task_status:'ready',tasks_enabled:true,file_limits:{}})
  mocks.api.listSessions.mockResolvedValue([session(1),session(2)])
  mocks.api.listProjects.mockResolvedValue([])
  mocks.api.listTemplates.mockResolvedValue([])
@@ -53,7 +53,7 @@ describe('MONO workspace real entry',()=>{
   wrapper.unmount()
  })
  it('hides the artifact library entry when Agent is not configured',async()=>{
-  mocks.api.getOptions.mockResolvedValue({enabled:true,groups:[{id:1,name:'test',platform:'openai',models:[{name:'test-model'}]}],projects_enabled:false,files_enabled:false,templates_enabled:false,history_enabled:true,task_status:'not_configured',tasks_enabled:false,file_limits:{}})
+  mocks.api.getOptions.mockResolvedValue({enabled:true,models:[{id:'route-1',name:'Test Model',brand:'OpenAI',description:'',model:'test-model',billing_type:'standard',recommended:true}],groups:[{id:1,name:'test',platform:'openai',models:[{name:'test-model'}]}],projects_enabled:false,files_enabled:false,templates_enabled:false,history_enabled:true,task_status:'not_configured',tasks_enabled:false,file_limits:{}})
   const wrapper=render();await flushPromises()
   expect(wrapper.findAll('.workbench-bar nav button').some(button=>button.text()==='workspace.files')).toBe(false)
   wrapper.unmount()
@@ -99,6 +99,18 @@ describe('MONO workspace real entry',()=>{
   expect(mocks.agent.createTask).toHaveBeenCalledWith(3,expect.objectContaining({kind:'document',prompt:'create my document',group_id:1,model:'test-model'}))
   expect((wrapper.find('.composer-input').element as HTMLTextAreaElement).value).toBe('')
   expect(wrapper.text()).toContain('webAgent.queued')
+  wrapper.unmount()
+ })
+ it('sends only the catalog selection and never leaks the internal group',async()=>{
+  mocks.api.getOptions.mockResolvedValue({enabled:true,models:[{id:'route-1',name:'Test Model',brand:'OpenAI',description:'',model:'test-model',billing_type:'standard',recommended:true}],groups:[{id:1,name:'INTERNAL-GROUP',platform:'openai',models:[{name:'test-model'}]}],projects_enabled:false,files_enabled:false,templates_enabled:false,history_enabled:true,task_status:'not_configured',tasks_enabled:false,file_limits:{}})
+  const wrapper=render();await flushPromises()
+  await wrapper.find('.composer-input').setValue('hello')
+  await wrapper.find('.composer').trigger('submit');await flushPromises()
+  expect(mocks.api.createSession).toHaveBeenCalledWith(expect.objectContaining({chat_model_id:'route-1'}))
+  expect(mocks.api.createSession.mock.calls[0][0]).not.toHaveProperty('group_id')
+  expect(mocks.api.streamMessage.mock.calls[0][1]).toMatchObject({chat_model_id:'route-1',content:'hello'})
+  expect(mocks.api.streamMessage.mock.calls[0][1]).not.toHaveProperty('group_id')
+  expect(wrapper.text()).not.toContain('INTERNAL-GROUP')
   wrapper.unmount()
  })
  it('opens artifacts without reference storage and returns to their original conversation',async()=>{
