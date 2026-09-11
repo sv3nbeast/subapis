@@ -2727,19 +2727,29 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			}
 			statusCode := openAIWSErrorHTTPStatusFromRaw(errCodeRaw, errTypeRaw)
 			setOpsUpstreamError(c, statusCode, errMsg, "")
+			terminal := newOpenAIWSUpstreamTerminalError(statusCode, errMsg, message)
 			if reqStream && !clientDisconnected {
 				flushBufferedStreamEvents("error_event")
-				emitStreamMessage(message, true)
+				// Relay the provider's own error event, but with the fatal capacity
+				// code rewritten to the retryable server_error and the provider
+				// attribution in its message, so SDKs that stop at the first error
+				// event still learn that OpenAI itself is overloaded.
+				outbound := message
+				if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(message); changed {
+					outbound = rewritten
+				}
+				emitStreamMessage(outbound, true)
 			}
 			if !reqStream {
-				c.JSON(statusCode, gin.H{
-					"error": gin.H{
-						"type":    "upstream_error",
-						"message": errMsg,
-					},
-				})
+				// Non-streaming clients get their single JSON envelope here and the
+				// response is marked committed, so no handler fallback appends the
+				// stray SSE frame that used to follow it.
+				terminal.writeJSONEnvelope(c)
 			}
-			return nil, fmt.Errorf("openai ws error event: %s", errMsg)
+			// For streaming clients the inbound handler renders the one
+			// protocol-correct terminal (response.failed / error event) from this
+			// classified error instead of a generic "Upstream request failed".
+			return nil, terminal
 		}
 
 		if nativeCompactionStream {

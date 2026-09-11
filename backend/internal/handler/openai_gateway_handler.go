@@ -1029,6 +1029,22 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					return
 				}
 				h.gatewayService.ReportOpenAIAccountScheduleResult(account, account.GetMappedModel(reqModel), false, nil)
+				var upstreamTerminalErr *service.OpenAIUpstreamTerminalError
+				if errors.As(err, &upstreamTerminalErr) {
+					if !upstreamTerminalErr.Rendered {
+						h.renderOpenAIUpstreamTerminalError(c, upstreamTerminalErr, streamStarted)
+					}
+					submitResponsesUsage(result)
+					reqLog.Warn("openai.forward_failed",
+						zap.Int64("account_id", account.ID),
+						zap.Int("upstream_status", upstreamTerminalErr.UpstreamStatus),
+						zap.Int("client_status", upstreamTerminalErr.ClientStatus),
+						zap.String("client_error_type", upstreamTerminalErr.ErrType),
+						zap.String("client_error_code", upstreamTerminalErr.Code),
+						zap.Error(err),
+					)
+					return
+				}
 				upstreamErrorAlreadyCommunicated := openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
 				wroteFallback := false
 				if !upstreamErrorAlreadyCommunicated {
@@ -3576,6 +3592,13 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 	upstreamMsg := service.ExtractUpstreamErrorMessage(responseBody)
 	service.SetOpsUpstreamError(c, statusCode, upstreamMsg, string(responseBody))
 
+	// A capacity shed that reached exhaustion without the request-scoped
+	// marker is still OpenAI's overload, not a platform fault.
+	if service.IsOpenAIUpstreamCapacityShedBody(responseBody) {
+		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "server_error", service.OpenAIUpstreamCapacityClientMessage(upstreamMsg), streamStarted)
+		return
+	}
+
 	// 使用默认的错误映射
 	status, errType, errMsg := h.mapUpstreamError(statusCode)
 	h.handleStreamingAwareError(c, status, errType, errMsg, streamStarted)
@@ -3758,6 +3781,12 @@ func openAIForwardErrorAlreadyCommunicated(c *gin.Context, writerSizeBeforeForwa
 	// fallback —— 否则在已写出的完整响应尾部追加 SSE（responses 端点尾随
 	// response.failed、chat 端点尾随 event:error），污染响应体。Size 已变化证明响应确已写出。
 	if service.GetOpsCyberPolicy(c) != nil {
+		return true
+	}
+	// A classified upstream terminal that the service already rendered as the
+	// single JSON envelope must not receive a second frame either.
+	var upstreamTerminalErr *service.OpenAIUpstreamTerminalError
+	if errors.As(err, &upstreamTerminalErr) && upstreamTerminalErr.Rendered {
 		return true
 	}
 

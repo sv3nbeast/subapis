@@ -426,6 +426,22 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					continue
 				}
 				h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, reqModel, false, nil), false, nil, err)
+				var upstreamTerminalErr *service.OpenAIUpstreamTerminalError
+				if errors.As(err, &upstreamTerminalErr) {
+					if !upstreamTerminalErr.Rendered {
+						h.renderOpenAIUpstreamTerminalError(c, upstreamTerminalErr, streamStarted)
+					}
+					reqLog.Warn("openai_chat_completions.forward_failed",
+						zap.Int64("account_id", account.ID),
+						zap.Int("upstream_status", upstreamTerminalErr.UpstreamStatus),
+						zap.Int("client_status", upstreamTerminalErr.ClientStatus),
+						zap.String("client_error_type", upstreamTerminalErr.ErrType),
+						zap.String("client_error_code", upstreamTerminalErr.Code),
+						zap.Error(err),
+					)
+					submitChatUsage(result)
+					return
+				}
 				upstreamErrorAlreadyCommunicated := openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
 				wroteFallback := false
 				if !upstreamErrorAlreadyCommunicated {

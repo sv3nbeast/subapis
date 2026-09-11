@@ -403,3 +403,17 @@ func removeOpenAIResponsesRejectedNamespaceAtIndex(body []byte, index int) ([]by
 	}
 	return retryBody, "indexed namespace parameter rejection", true, nil
 }
+
+// appendOpenAIRejectedFieldRetryOps records the explicit upstream field
+// rejection that triggered a same-account retry, so the recovered attempt stays
+// visible in ops telemetry with its original upstream message.
+func (s *OpenAIGatewayService) appendOpenAIRejectedFieldRetryOps(
+	c *gin.Context,
+	account *Account,
+	resp *http.Response,
+	payload []byte,
+	message string,
+	passthrough bool,
+) {
+	s.appendOpenAIRetryAttemptOps(c, account, resp, payload, message, "rejected_field", passthrough)
+}

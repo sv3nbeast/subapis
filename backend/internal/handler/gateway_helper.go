@@ -267,10 +267,9 @@ func applyFailoverRetryAfter(c *gin.Context, failoverErr *service.UpstreamFailov
 
 func resolveModelCapacityFailover(c *gin.Context, failoverErr *service.UpstreamFailoverError) (int, string, string, bool) {
 	if failoverErr != nil && failoverErr.IsOpenAICapacityShed() {
-		message := strings.TrimSpace(failoverErr.ClientMessage)
-		if message == "" {
-			message = "Upstream service is temporarily overloaded, please retry later"
-		}
+		// Every account was shed by OpenAI: tell the client the provider is
+		// overloaded (quoting its own wording) instead of a generic gateway failure.
+		message := service.OpenAIUpstreamCapacityClientMessage(failoverErr.ClientMessage)
 		service.SetOpsUpstreamError(c, failoverErr.StatusCode, service.ExtractUpstreamErrorMessage(failoverErr.ResponseBody), string(failoverErr.ResponseBody))
 		return http.StatusServiceUnavailable, "server_error", sanitizeClientErrorMessage(http.StatusServiceUnavailable, message), true
 	}

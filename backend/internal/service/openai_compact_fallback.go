@@ -197,6 +197,21 @@ func (s *OpenAIGatewayService) appendOpenAICompactFallbackRetryOps(
 	message string,
 	passthrough bool,
 ) {
+	s.appendOpenAIRetryAttemptOps(c, account, resp, payload, message, "compact_model_fallback", passthrough)
+}
+
+// appendOpenAIRetryAttemptOps records an upstream failure that was recovered by
+// a same-account retry, so the attempt remains visible in ops telemetry instead
+// of vanishing behind the eventual success. reason names the retry rule.
+func (s *OpenAIGatewayService) appendOpenAIRetryAttemptOps(
+	c *gin.Context,
+	account *Account,
+	resp *http.Response,
+	payload []byte,
+	message string,
+	reason string,
+	passthrough bool,
+) {
 	if account == nil {
 		return
 	}
@@ -224,7 +239,7 @@ func (s *OpenAIGatewayService) appendOpenAICompactFallbackRetryOps(
 		UpstreamRequestID:    requestID,
 		Passthrough:          passthrough,
 		Kind:                 "retry",
-		Reason:               "compact_model_fallback",
+		Reason:               reason,
 		Message:              sanitizeUpstreamErrorMessage(strings.TrimSpace(message)),
 		Detail:               detail,
 		UpstreamResponseBody: detail,

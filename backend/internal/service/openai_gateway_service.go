@@ -1654,10 +1654,10 @@ func openAICapacityShedClientMessage(upstreamMsg string, body []byte) string {
 	} {
 		candidate = sanitizeUpstreamErrorMessage(strings.TrimSpace(candidate))
 		if candidate != "" && isOpenAICapacityShedMessage(candidate) {
-			return candidate
+			return OpenAIUpstreamCapacityClientMessage(candidate)
 		}
 	}
-	return "Upstream service is temporarily overloaded, please retry later"
+	return OpenAIUpstreamCapacityClientMessage("")
 }
 
 // IsOpenAIRequestBodyTooLarge reports whether another account may accept the
@@ -4797,6 +4797,10 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	upstreamPassthroughModel := ""
+	// Pin the client's stream preference for the whole passthrough attempt
+	// chain: same-account retries re-enter this function with a body whose
+	// stream flag already describes the upstream transport, not the client.
+	clientStream := resolveOpenAIPassthroughClientStream(c, reqStream)
 	if isOpenAIResponsesCompactPath(c) {
 		compactMappedModel := resolveOpenAICompactForwardModel(account, reqModel)
 		if compactMappedModel != "" && compactMappedModel != reqModel {
@@ -4838,7 +4842,13 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		if normalized {
 			body = normalizedBody
 		}
-		reqStream = gjson.GetBytes(body, "stream").Bool()
+		// The ChatGPT backend only serves SSE, so the normalized body always
+		// asks the upstream to stream (compact deletes the flag instead). Keep
+		// that transport decision separate from what the client asked for: a
+		// non-streaming client must still receive the SSE aggregated into one
+		// JSON document by handleNonStreamingResponsePassthrough.
+		upstreamStream := gjson.GetBytes(body, "stream").Bool()
+		reqStream = upstreamStream && clientStream
 
 		accountScopedBody, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(body, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
 		if scopeErr != nil {
@@ -5027,6 +5037,20 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			}
 			ctx = markAgentIdentityTaskRecoveryTried(ctx)
 			return s.forwardOpenAIPassthrough(ctx, c, account, body, canonicalImageIntentBody, reqModel, attemptImageIntentInvalidated, reasoningEffort, reqStream, startTime)
+		}
+		// Passthrough forwards the client body verbatim, so a Responses-native
+		// field the ChatGPT backend does not accept (e.g. max_output_tokens from
+		// a non-Codex client) comes back as an explicit 400 field rejection.
+		// Nothing has been written downstream yet, so mirror the non-passthrough
+		// path: drop only the rejected field and retry on the same account within
+		// the request-scoped retry budget. Any other 400 is returned unchanged.
+		if retryBody, retryReason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, responseBody); retryErr != nil {
+			return nil, fmt.Errorf("normalize rejected passthrough field retry body: %w", retryErr)
+		} else if changed && openAIResponsesRejectedFieldRetryStateForRequest(c, body).Allow(retryBody) {
+			s.appendOpenAIRejectedFieldRetryOps(c, account, resp, responseBody, upstreamMsg, true)
+			_ = resp.Body.Close()
+			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Retrying passthrough request after %s (account: %s)", retryReason, account.Name)
+			return s.forwardOpenAIPassthrough(ctx, c, account, retryBody, canonicalImageIntentBody, reqModel, attemptImageIntentInvalidated, reasoningEffort, reqStream, startTime)
 		}
 		if shouldFailoverOpenAIPassthroughResponse(account, resp.StatusCode, responseBody) {
 			return nil, s.handleFailoverErrorResponsePassthrough(ctx, resp, c, account, body, responseBody)
@@ -5573,9 +5597,14 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 	// Context-window limits are deterministic request failures. Preserve the
 	// sanitized actionable message inside our local envelope; all other upstream
 	// error details stay internal to ops/audit only.
-	if isOpenAIContextWindowError(upstreamMsg, body) && upstreamMsg != "" {
+	switch {
+	case isOpenAIRequestScopedCapacityShed(upstreamMsg, body):
+		// Provider capacity shed: tell the client that OpenAI itself is
+		// overloaded (retryable 503) instead of a generic gateway failure.
+		writeOpenAIPassthroughErrorEnvelope(c, http.StatusServiceUnavailable, resp.Header, openAICapacityShedClientMessage(upstreamMsg, body))
+	case isOpenAIContextWindowError(upstreamMsg, body) && upstreamMsg != "":
 		writeOpenAIPassthroughErrorEnvelope(c, resp.StatusCode, resp.Header, upstreamMsg)
-	} else {
+	default:
 		writeSanitizedOpenAIPassthroughError(c, resp.StatusCode, resp.Header)
 	}
 
@@ -5708,26 +5737,39 @@ func isOpenAIUpstreamCapacityShedEvent(payload []byte) bool {
 
 const openAICapacityShedRetryableClientCode = "server_error"
 
+// sanitizeOpenAICapacityShedErrorCodeForClient rewrites a relayed OpenAI
+// capacity-shed error/response.failed event for the client: the fatal
+// server_is_overloaded / slow_down code becomes the retryable server_error, and
+// the message gains the provider attribution so users learn that OpenAI itself
+// is overloaded rather than the platform. Other error codes are left untouched.
 func sanitizeOpenAICapacityShedErrorCodeForClient(payload []byte) ([]byte, bool) {
 	if len(payload) == 0 || !gjson.ValidBytes(payload) || !isOpenAIUpstreamCapacityShedEvent(payload) {
 		return payload, false
 	}
 	updated := payload
 	changed := false
-	for _, path := range []string{"response.error.code", "error.code"} {
-		parent := strings.TrimSuffix(path, ".code")
+	for _, parent := range []string{"response.error", "error"} {
 		if !gjson.GetBytes(updated, parent).Exists() {
 			continue
 		}
-		code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(updated, path).String()))
-		if code != "" && code != "server_is_overloaded" && code != "slow_down" {
-			continue
+		codePath := parent + ".code"
+		code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(updated, codePath).String()))
+		if code == "" || code == "server_is_overloaded" || code == "slow_down" {
+			next, err := sjson.SetBytes(updated, codePath, openAICapacityShedRetryableClientCode)
+			if err != nil {
+				return payload, false
+			}
+			updated, changed = next, true
 		}
-		next, err := sjson.SetBytes(updated, path, openAICapacityShedRetryableClientCode)
-		if err != nil {
-			return payload, false
+		messagePath := parent + ".message"
+		current := gjson.GetBytes(updated, messagePath).String()
+		if attributed := OpenAIUpstreamCapacityClientMessage(current); attributed != current {
+			next, err := sjson.SetBytes(updated, messagePath, attributed)
+			if err != nil {
+				return payload, false
+			}
+			updated, changed = next, true
 		}
-		updated, changed = next, true
 	}
 	return updated, changed
 }
@@ -6687,6 +6729,10 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		}
 	}
 	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
+		// writeOpenAIPassthroughResponseHeaders already copied the upstream
+		// Content-Type (text/event-stream) and gin's c.Data never overrides an
+		// existing header, so the folded JSON document must relabel itself.
+		c.Writer.Header().Set("Content-Type", contentType)
 		c.Data(resp.StatusCode, contentType, body)
 	}
 
@@ -7100,6 +7146,21 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 	}
 
 	MarkResponseCommitted(c)
+
+	// A capacity shed is a provider-side condition whatever HTTP status the
+	// ChatGPT backend used for it (it has returned 400 for server_is_overloaded).
+	// Surface it as a retryable 503 with the provider attribution instead of a
+	// generic gateway failure.
+	if isOpenAIRequestScopedCapacityShed(upstreamMsg, body) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": gin.H{
+				"type":    "server_error",
+				"code":    openAICapacityShedRetryableClientCode,
+				"message": openAICapacityShedClientMessage(upstreamMsg, body),
+			},
+		})
+		return nil, fmt.Errorf("upstream error: %d (capacity shed) message=%s", resp.StatusCode, upstreamMsg)
+	}
 
 	// Deterministic client errors must retain the upstream 4xx contract. They
 	// are not gateway failures and must not be normalized into a retryable 502.
@@ -8953,6 +9014,10 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		}
 	}
 	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
+		// WriteFilteredHeaders may already have copied the upstream Content-Type
+		// (text/event-stream) and gin's c.Data never overrides an existing
+		// header, so the folded JSON document must relabel itself.
+		c.Writer.Header().Set("Content-Type", contentType)
 		c.Data(resp.StatusCode, contentType, body)
 	}
 

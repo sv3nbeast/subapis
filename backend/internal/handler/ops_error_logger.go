@@ -1341,15 +1341,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 		}
 		applyOpsLatencyFieldsFromContext(c, entry)
 		applyOpsUpstreamFieldsFromContext(c, entry)
-		if parsed.StreamFailure {
-			if message := strings.TrimSpace(parsed.Message); message != "" {
-				entry.UpstreamErrorMessage = &message
-			}
-			if status >= 400 {
-				finalStatus := status
-				entry.UpstreamStatusCode = &finalStatus
-			}
-		}
+		applyOpsStreamFailureFields(entry, parsed, status)
 		suppressOpsUpstreamAttributionForLocalModelConfiguration(c, entry)
 
 		if apiKey != nil {
@@ -2129,6 +2121,25 @@ func inferResponsesFailedOpsErrorType(code string) string {
 		return "authentication_error"
 	default:
 		return ""
+	}
+}
+
+// applyOpsStreamFailureFields fills the upstream fields from a stream-failure
+// terminal. The terminal is often gateway-synthesized (a generic
+// response.failed after an upstream error event), so the provider message the
+// service already recorded in the context wins; the terminal text is only a
+// fallback when nothing better is known.
+func applyOpsStreamFailureFields(entry *service.OpsInsertErrorLogInput, parsed parsedOpsError, status int) {
+	if entry == nil || !parsed.StreamFailure {
+		return
+	}
+	if message := strings.TrimSpace(parsed.Message); message != "" &&
+		(entry.UpstreamErrorMessage == nil || strings.TrimSpace(*entry.UpstreamErrorMessage) == "") {
+		entry.UpstreamErrorMessage = &message
+	}
+	if status >= 400 {
+		finalStatus := status
+		entry.UpstreamStatusCode = &finalStatus
 	}
 }
 
