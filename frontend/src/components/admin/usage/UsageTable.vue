@@ -212,11 +212,13 @@
               <span
                 v-if="row.long_context_billing_applied"
                 data-testid="long-context-billing-marker"
+                :title="t('usage.longContextBillingApplied')"
                 class="inline-flex items-center rounded px-1 py-px text-[10px] font-semibold leading-tight bg-amber-100 text-amber-700 ring-1 ring-inset ring-amber-200 dark:bg-amber-500/20 dark:text-amber-300 dark:ring-amber-500/30"
-              >x2</span>
+              >{{ t('usage.longContextBillingBadge') }}</span>
               <!-- Cost Detail Tooltip -->
               <div
                 class="group relative"
+                data-testid="cost-tooltip-trigger"
                 @mouseenter="showTooltip($event, row)"
                 @mouseleave="hideTooltip"
               >
@@ -379,6 +381,7 @@
   <Teleport to="body">
     <div
       v-if="tooltipVisible"
+      data-testid="cost-tooltip"
       class="fixed z-[9999] pointer-events-none -translate-y-1/2"
       :style="{
         left: tooltipPosition.x + 'px',
@@ -390,6 +393,19 @@
           <!-- Cost Breakdown -->
           <div class="mb-2 border-b border-gray-700 pb-1.5">
             <div class="text-xs font-semibold text-gray-300 mb-1">{{ t('usage.costDetails') }}</div>
+            <!-- 长上下文计价说明：用户看到的单价变高时，这里给出原因，避免误认为计费异常 -->
+            <template v-if="tooltipData?.long_context_billing_applied">
+              <div class="mb-1.5 rounded bg-amber-500/15 px-2 py-1.5 ring-1 ring-inset ring-amber-500/30">
+                <div class="font-semibold text-amber-300">{{ t('usage.longContextBilling') }}</div>
+                <div class="mt-0.5 whitespace-normal text-[11px] leading-snug text-amber-100/90">
+                  {{ t('usage.longContextBillingHint', { input: LONG_CONTEXT_INPUT_MULTIPLIER, output: LONG_CONTEXT_OUTPUT_MULTIPLIER }) }}
+                </div>
+                <div class="mt-1 flex items-center justify-between gap-4">
+                  <span class="text-amber-200/80">{{ t('usage.longContextBillingContext') }}</span>
+                  <span class="font-medium text-amber-100">{{ longContextTokens(tooltipData).toLocaleString() }}</span>
+                </div>
+              </div>
+            </template>
             <div v-if="tooltipData && tooltipData.input_cost > 0" class="flex items-center justify-between gap-4">
               <span class="text-gray-400">{{ t('admin.usage.inputCost') }}</span>
               <span class="font-medium text-white">${{ tooltipData.input_cost.toFixed(6) }}</span>
@@ -668,6 +684,17 @@ const copyRequestId = async (requestId: string) => {
 
 // Tooltip state - cost
 const tooltipVisible = ref(false)
+
+// 官方长上下文档倍率（输入 ×2、输出 ×1.5）。仅用于向用户解释账单，
+// 不参与任何金额计算——实际价格始终来自后端返回的分项费用。
+const LONG_CONTEXT_INPUT_MULTIPLIER = 2
+const LONG_CONTEXT_OUTPUT_MULTIPLIER = 1.5
+
+/** 触发长上下文计价的请求，其上下文总量（输入 + 缓存读 + 缓存创建）。 */
+const longContextTokens = (row: Pick<AdminUsageLog, 'input_tokens' | 'cache_read_tokens' | 'cache_creation_tokens'> | null | undefined): number => {
+  if (!row) return 0
+  return (row.input_tokens ?? 0) + (row.cache_read_tokens ?? 0) + (row.cache_creation_tokens ?? 0)
+}
 const tooltipPosition = ref({ x: 0, y: 0 })
 const tooltipData = ref<AdminUsageLog | null>(null)
 

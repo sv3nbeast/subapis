@@ -4386,6 +4386,7 @@ import {
   normalizeGroupOpenAIFast,
   supportsGroupOpenAIFast,
 } from "./groupsOpenAIFast";
+import { groupOpenAIFastFormState } from "./groupsOpenAIFastForm";
 import {
   buildModelsListConfig,
   createModelsListState,
@@ -5948,6 +5949,8 @@ const handleEdit = async (group: AdminGroup) => {
     : createVideoModelPricesForm();
   editForm.model_pricing = groupPricingFromAPI(group.model_pricing);
   editForm.long_context_pricing_enabled = group.long_context_pricing_enabled ?? false;
+  // OpenAI Fast 开关必须随被编辑的分组回填，否则弹窗永远显示默认值，保存时还会把默认值写回
+  Object.assign(editForm, groupOpenAIFastFormState(group));
   editForm.search_price_per_1k = group.search_price_per_1k ?? null;
   editForm.audio_realtime_price_per_min = group.audio_realtime_price_per_min ?? null;
   editForm.audio_tts_price_per_million_chars = group.audio_tts_price_per_million_chars ?? null;

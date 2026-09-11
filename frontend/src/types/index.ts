@@ -1883,6 +1883,9 @@ export interface UsageLog {
   // 计费模式
   billing_mode?: string | null
 
+  // 本行是否因上下文超过长上下文阈值而按长上下文档计价（整次请求提价）
+  long_context_billing_applied?: boolean
+
   created_at: string
 
   user?: User

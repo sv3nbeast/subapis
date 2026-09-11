@@ -199,3 +199,68 @@ func TestPricingOverride_DisablesGPT55LadderOnDefaultCatalog(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 272000, pricing.LongContextInputThreshold, "其他模型的目录阶梯不受影响")
 }
+
+// deployModelPricingOverridesPath 是随仓库发布的生产 override 补丁；部署时拷到
+// /app/data/model_pricing_overrides.json 并由 config.yaml 的 pricing.override_file 指向。
+const deployModelPricingOverridesPath = "../../../deploy/model_pricing_overrides.json"
+
+// staleRemoteSolCatalogJSON 镜像远程目录中滞后的 Sol 条目：$5/$30 基础价 + above_272k 绝对价。
+const staleRemoteSolCatalogJSON = `{
+	"gpt-5.6-sol": {"litellm_provider": "openai", "mode": "chat", "supports_service_tier": true,
+		"input_cost_per_token": 5e-06, "input_cost_per_token_priority": 1e-05,
+		"output_cost_per_token": 3e-05, "output_cost_per_token_priority": 6e-05,
+		"cache_read_input_token_cost": 5e-07, "cache_read_input_token_cost_priority": 1e-06,
+		"cache_creation_input_token_cost": 6.25e-06, "cache_creation_input_token_cost_priority": 1.25e-05,
+		"input_cost_per_token_above_272k_tokens": 1e-05, "input_cost_per_token_above_272k_tokens_priority": 2e-05,
+		"output_cost_per_token_above_272k_tokens": 4.5e-05, "output_cost_per_token_above_272k_tokens_priority": 9e-05,
+		"cache_read_input_token_cost_above_272k_tokens": 1e-06, "cache_read_input_token_cost_above_272k_tokens_priority": 2e-06,
+		"cache_creation_input_token_cost_above_272k_tokens": 1.25e-05, "cache_creation_input_token_cost_above_272k_tokens_priority": 2.5e-05}
+}`
+
+// 生产 override 补丁必须把滞后的远程 Sol 条目压到官方现行价（2026-11-21 前 $4/$20，
+// Fast 2x，缓存读 $0.40、缓存写 $5），且 272K 阶梯（输入/缓存 2x、输出 1.5x）保持不变。
+func TestPricingOverride_DeployFilePinsSolOfficialPricingOverStaleRemote(t *testing.T) {
+	svc := &PricingService{cfg: &config.Config{}}
+	svc.cfg.Pricing.OverrideFile = deployModelPricingOverridesPath
+	data, err := svc.parsePricingData([]byte(staleRemoteSolCatalogJSON))
+	require.NoError(t, err)
+
+	sol := data["gpt-5.6-sol"]
+	require.NotNil(t, sol)
+	require.InDelta(t, 4e-6, sol.InputCostPerToken, 1e-12)
+	require.InDelta(t, 8e-6, sol.InputCostPerTokenPriority, 1e-12)
+	require.InDelta(t, 2e-5, sol.OutputCostPerToken, 1e-12)
+	require.InDelta(t, 4e-5, sol.OutputCostPerTokenPriority, 1e-12)
+	require.InDelta(t, 4e-7, sol.CacheReadInputTokenCost, 1e-12)
+	require.InDelta(t, 8e-7, sol.CacheReadInputTokenCostPriority, 1e-12)
+	require.InDelta(t, 5e-6, sol.CacheCreationInputTokenCost, 1e-12)
+	require.InDelta(t, 1e-5, sol.CacheCreationInputTokenCostPriority, 1e-12)
+	require.Equal(t, 272000, sol.LongContextInputTokenThreshold)
+	require.InDelta(t, 2.0, sol.LongContextInputCostMultiplier, 1e-12)
+	require.InDelta(t, 1.5, sol.LongContextOutputCostMultiplier, 1e-12)
+
+	svc.pricingData = data
+	billing := NewBillingService(&config.Config{}, svc)
+
+	standard, err := billing.CalculateCost("gpt-5.6-sol", UsageTokens{InputTokens: 1000, CacheReadTokens: 1000, CacheCreationTokens: 1000, OutputTokens: 1000}, 1)
+	require.NoError(t, err)
+	require.False(t, standard.LongContextBillingApplied)
+	require.InDelta(t, 1000*4e-6, standard.InputCost, 1e-12)
+	require.InDelta(t, 1000*0.4e-6, standard.CacheReadCost, 1e-12)
+	require.InDelta(t, 1000*5e-6, standard.CacheCreationCost, 1e-12)
+	require.InDelta(t, 1000*20e-6, standard.OutputCost, 1e-12)
+
+	longCtx, err := billing.CalculateCost("gpt-5.6-sol", UsageTokens{InputTokens: 300000, CacheReadTokens: 10000, CacheCreationTokens: 1000, OutputTokens: 1000}, 1)
+	require.NoError(t, err)
+	require.True(t, longCtx.LongContextBillingApplied)
+	require.InDelta(t, 300000*8e-6, longCtx.InputCost, 1e-9, "长上下文输入 $8")
+	require.InDelta(t, 10000*0.8e-6, longCtx.CacheReadCost, 1e-9, "长上下文缓存读 $0.80")
+	require.InDelta(t, 1000*10e-6, longCtx.CacheCreationCost, 1e-9, "长上下文缓存写 $10")
+	require.InDelta(t, 1000*30e-6, longCtx.OutputCost, 1e-9, "长上下文输出 $30")
+
+	fast, err := billing.CalculateCostWithServiceTier("gpt-5.6-sol", UsageTokens{InputTokens: 1000, CacheReadTokens: 1000, OutputTokens: 1000}, 1, "priority")
+	require.NoError(t, err)
+	require.InDelta(t, 1000*8e-6, fast.InputCost, 1e-12, "Fast 输入 $8")
+	require.InDelta(t, 1000*0.8e-6, fast.CacheReadCost, 1e-12, "Fast 缓存读 $0.80")
+	require.InDelta(t, 1000*40e-6, fast.OutputCost, 1e-12, "Fast 输出 $40")
+}

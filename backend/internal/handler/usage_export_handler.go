@@ -171,8 +171,11 @@ type usageExportLabels struct {
 	time, apiKey, model, reasoningEffort, inboundEndpoint, ipAddress, requestType string
 	billingMode, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens  string
 	rate, userBilled, original, firstToken, duration                              string
-	requestTypes                                                                  map[string]string
-	billingModes                                                                  map[string]string
+	// longContext explains a higher-than-usual unit price in the exported sheet,
+	// mirroring the badge the usage table shows for the same row.
+	longContext  string
+	requestTypes map[string]string
+	billingModes map[string]string
 }
 
 var usageExportLabelsEN = usageExportLabels{
@@ -182,6 +185,7 @@ var usageExportLabelsEN = usageExportLabels{
 	cacheReadTokens: "Cache Read Tokens", cacheCreationTokens: "Cache Creation Tokens",
 	rate: "Rate", userBilled: "User billed", original: "Original",
 	firstToken: "First Token (ms)", duration: "Duration (ms)",
+	longContext: "Long Context",
 	requestTypes: map[string]string{
 		"sync": "Sync", "stream": "Stream", "ws_v2": "WS", "cyber": "Cyber", "live": "Live", "unknown": "Unknown",
 	},
@@ -200,6 +204,7 @@ var usageExportLabelsZH = usageExportLabels{
 	cacheReadTokens: "缓存读取 Token", cacheCreationTokens: "缓存创建 Token",
 	rate: "倍率", userBilled: "用户扣费", original: "原始",
 	firstToken: "首 Token (ms)", duration: "耗时 (ms)",
+	longContext: "长上下文计价",
 	requestTypes: map[string]string{
 		"sync": "同步", "stream": "流式", "ws_v2": "WS", "cyber": "安全策略", "live": "Live", "unknown": "未知",
 	},
@@ -229,7 +234,7 @@ func (l usageExportLabels) header(loc *time.Location) []string {
 		l.time + " (" + loc.String() + ")",
 		l.apiKey, l.model, l.reasoningEffort, l.inboundEndpoint, l.ipAddress, l.requestType,
 		l.billingMode, l.inputTokens, l.outputTokens, l.cacheReadTokens, l.cacheCreationTokens,
-		l.rate, l.userBilled, l.original, l.firstToken, l.duration,
+		l.rate, l.userBilled, l.original, l.firstToken, l.duration, l.longContext,
 	}
 }
 
@@ -381,6 +386,7 @@ func (w *usageCSVWriter) record(row *dto.UsageLog) []string {
 		strconv.FormatFloat(row.TotalCost, 'f', 8, 64),
 		formatOptionalInt(row.FirstTokenMs),
 		formatOptionalInt(row.DurationMs),
+		formatLongContextMarker(row.LongContextBillingApplied),
 	}
 }
 
@@ -424,6 +430,16 @@ func formatReasoningEffortLabel(effort string) string {
 		return strings.ToUpper(raw[:1]) + raw[1:]
 	}
 	return strings.ToUpper(raw)
+}
+
+// formatLongContextMarker renders the long-context billing flag as a stable token so
+// downstream spreadsheets can filter on it. Empty for ordinary requests keeps the
+// common case (the vast majority of rows) visually clean.
+func formatLongContextMarker(applied bool) string {
+	if !applied {
+		return ""
+	}
+	return "long-context"
 }
 
 // guardCSVCell neutralizes spreadsheet formula injection for free-text cells by

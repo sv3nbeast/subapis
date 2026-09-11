@@ -194,8 +194,8 @@ func exportSampleRows(n int) []service.UsageLog {
 }
 
 const (
-	exportExpectedHeaderEN = "Time (UTC),API Key,Model,Reasoning Effort,Inbound Endpoint,IP,Type,Billing Mode,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Rate,User billed,Original,First Token (ms),Duration (ms)"
-	exportExpectedRowUTC   = "2026-03-08 00:00:00,demo-key,gpt-5.4,XHigh,/v1/chat/completions,203.0.113.10,Sync,Token,4057,101,278272,4,1,0.09288300,0.09288300,12,345"
+	exportExpectedHeaderEN = "Time (UTC),API Key,Model,Reasoning Effort,Inbound Endpoint,IP,Type,Billing Mode,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Rate,User billed,Original,First Token (ms),Duration (ms),Long Context"
+	exportExpectedRowUTC   = "2026-03-08 00:00:00,demo-key,gpt-5.4,XHigh,/v1/chat/completions,203.0.113.10,Sync,Token,4057,101,278272,4,1,0.09288300,0.09288300,12,345,"
 )
 
 func exportCSVLines(t *testing.T, body []byte) []string {
@@ -297,8 +297,8 @@ func TestUserUsageExport_LocalizesHeadersAndTimezone(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	lines := exportCSVLines(t, rec.Body.Bytes())
 	require.Len(t, lines, 2)
-	require.Equal(t, "时间 (Asia/Shanghai),API 密钥,模型,推理强度,入站端点,IP,类型,计费模式,输入 Token,输出 Token,缓存读取 Token,缓存创建 Token,倍率,用户扣费,原始,首 Token (ms),耗时 (ms)", lines[0])
-	require.Equal(t, "2026-03-08 08:00:00,demo-key,gpt-5.4,XHigh,/v1/chat/completions,203.0.113.10,同步,按量,4057,101,278272,4,1,0.09288300,0.09288300,12,345", lines[1])
+	require.Equal(t, "时间 (Asia/Shanghai),API 密钥,模型,推理强度,入站端点,IP,类型,计费模式,输入 Token,输出 Token,缓存读取 Token,缓存创建 Token,倍率,用户扣费,原始,首 Token (ms),耗时 (ms),长上下文计价", lines[0])
+	require.Equal(t, "2026-03-08 08:00:00,demo-key,gpt-5.4,XHigh,/v1/chat/completions,203.0.113.10,同步,按量,4057,101,278272,4,1,0.09288300,0.09288300,12,345,", lines[1])
 }
 
 func TestUserUsageExport_RejectsOversizedExportBeforeStreaming(t *testing.T) {
@@ -513,7 +513,7 @@ func TestUserUsageExport_GuardsSpreadsheetFormulaCells(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	lines := exportCSVLines(t, rec.Body.Bytes())
 	require.Len(t, lines, 2)
-	require.Equal(t, `2026-03-08 00:00:00,"'=HYPERLINK(""http://evil"")",'-evil-model,-,'@cmd,'+1234,Sync,Token,4057,101,278272,4,1,0.09288300,0.09288300,12,345`, lines[1])
+	require.Equal(t, `2026-03-08 00:00:00,"'=HYPERLINK(""http://evil"")",'-evil-model,-,'@cmd,'+1234,Sync,Token,4057,101,278272,4,1,0.09288300,0.09288300,12,345,`, lines[1])
 }
 
 func TestGuardCSVCell(t *testing.T) {
@@ -645,4 +645,9 @@ func TestUserUsageExport_SuccessfulRealConnectionCompletesCleanly(t *testing.T) 
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.Len(t, exportCSVLines(t, body), 2501)
+}
+
+func TestFormatLongContextMarker(t *testing.T) {
+	require.Equal(t, "", formatLongContextMarker(false), "ordinary rows must stay blank")
+	require.Equal(t, "long-context", formatLongContextMarker(true))
 }

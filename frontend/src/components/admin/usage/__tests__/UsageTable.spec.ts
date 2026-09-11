@@ -169,7 +169,59 @@ describe('admin UsageTable tooltip', () => {
     })
 
     expect(wrapper.findAll('[data-testid="long-context-billing-marker"]')).toHaveLength(1)
-    expect(wrapper.get('[data-testid="long-context-billing-marker"]').text()).toBe('x2')
+    // 标记必须自解释：用户看到的不再是一个含义不明的 "x2"
+    expect(wrapper.get('[data-testid="long-context-billing-marker"]').text()).toBe(
+      'usage.longContextBillingBadge'
+    )
+    expect(wrapper.get('[data-testid="long-context-billing-marker"]').attributes('title')).toBe(
+      'usage.longContextBillingApplied'
+    )
+  })
+
+  it('explains long-context pricing and the triggering context size in the cost tooltip', async () => {
+    const DataTableTooltipStub = {
+      props: ['data'],
+      template: `
+        <div>
+          <div v-for="row in data" :key="row.request_id">
+            <slot name="cell-cost" :row="row" />
+          </div>
+        </div>
+      `,
+    }
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [
+          {
+            ...baseImageRow,
+            request_id: 'req-long-context-tooltip',
+            actual_cost: 2.8143,
+            total_cost: 7.035752,
+            long_context_billing_applied: true,
+            billing_mode: 'token',
+            image_count: 0,
+            input_tokens: 343_496,
+            output_tokens: 1_780,
+            cache_read_tokens: 2_816,
+            cache_creation_tokens: 0,
+          },
+        ],
+        loading: false,
+        columns: [],
+      },
+      global: {
+        stubs: { DataTable: DataTableTooltipStub, EmptyState: true, Icon: true, Teleport: true },
+      },
+    })
+
+    await wrapper.get('[data-testid="cost-tooltip-trigger"]').trigger('mouseenter')
+    await nextTick()
+
+    const tooltip = wrapper.get('[data-testid="cost-tooltip"]')
+    expect(tooltip.text()).toContain('usage.longContextBilling')
+    // 触发本次计价的上下文规模必须可见，用户才能对上自己的用量
+    // 343,496 input + 2,816 cache read + 0 cache creation
+    expect(tooltip.text()).toContain('346,312')
   })
 
   it('keeps the request type badge and adds a separate badge only for native compaction rows', () => {
