@@ -20,11 +20,47 @@ import (
 	"github.com/google/uuid"
 )
 
+// Capture limits. The defaults keep a capture small enough to be a safe
+// accident: a short incident window that cannot fill the disk. A long hunt for
+// a rare failure needs a bigger budget, so one capture config may raise its own
+// request/byte allowance up to the hard ceilings below. The ceilings, the
+// per-record cap and the maximum lifetime are not configurable.
+const (
+	kiroWireCaptureDefaultMaxRequests = 20
+	kiroWireCaptureDefaultMaxBytes    = 64 << 20
+	kiroWireCaptureMaxRequestsCeiling = 5000
+	kiroWireCaptureMaxBytesCeiling    = 4 << 30
+	kiroWireCaptureMaxRecordBytes     = 8 << 20
+	kiroWireCaptureMaxTTL             = 24 * time.Hour
+)
+
 type kiroWireCaptureConfig struct {
 	UserID    int64     `json:"user_id"`
 	KeyID     int64     `json:"key_id"`
 	GroupID   int64     `json:"group_id"`
 	ExpiresAt time.Time `json:"expires_at"`
+	// MaxRequests and MaxBytes are optional. Zero keeps the default; a positive
+	// value is honored only up to the matching ceiling, which
+	// validKiroWireCaptureConfig enforces before the capture is ever armed.
+	MaxRequests int64 `json:"max_requests,omitempty"`
+	MaxBytes    int64 `json:"max_bytes,omitempty"`
+}
+
+// maxRequests is the number of matching requests this capture may trace.
+func (c kiroWireCaptureConfig) maxRequests() int64 {
+	if c.MaxRequests > 0 {
+		return c.MaxRequests
+	}
+	return kiroWireCaptureDefaultMaxRequests
+}
+
+// maxBytes is the total payload this capture may copy across every request and
+// stage. Exhausting it loses diagnostics, never client output.
+func (c kiroWireCaptureConfig) maxBytes() int64 {
+	if c.MaxBytes > 0 {
+		return c.MaxBytes
+	}
+	return kiroWireCaptureDefaultMaxBytes
 }
 
 type kiroWireCaptureRecord struct {
@@ -64,7 +100,9 @@ var activeKiroWireCapture = loadKiroWireCapture("/app/data/kiro-wire-capture.jso
 
 func validKiroWireCaptureConfig(c kiroWireCaptureConfig, now time.Time) bool {
 	return c.UserID > 0 && c.KeyID > 0 && c.GroupID > 0 &&
-		c.ExpiresAt.After(now) && !c.ExpiresAt.After(now.Add(2*time.Hour))
+		c.ExpiresAt.After(now) && !c.ExpiresAt.After(now.Add(kiroWireCaptureMaxTTL)) &&
+		c.MaxRequests >= 0 && c.MaxRequests <= kiroWireCaptureMaxRequestsCeiling &&
+		c.MaxBytes >= 0 && c.MaxBytes <= kiroWireCaptureMaxBytesCeiling
 }
 
 func loadKiroWireCapture(path string) *kiroWireCapture {
@@ -134,9 +172,8 @@ func (t *kiroWireTrace) record(stage string, attempt int64, data []byte, outcome
 		return
 	}
 	c := t.capture
-	// Hard lifetime bound: <=64 MiB copied across every request and stage.
 	// Queue saturation/budget exhaustion loses diagnostics, never client output.
-	if c.bytes.Add(int64(len(data))) > 64<<20 || len(data) > 8<<20 {
+	if c.bytes.Add(int64(len(data))) > c.config.maxBytes() || len(data) > kiroWireCaptureMaxRecordBytes {
 		c.dropped.Add(1)
 		return
 	}
@@ -165,7 +202,8 @@ func beginKiroWireCapture(ctx context.Context, c *gin.Context, parsed *ParsedReq
 	}
 	value, _ := c.Get(ginContextKeyAPIKey)
 	key, _ := value.(*APIKey)
-	if !activeKiroWireCapture.matches(key, parsed.GroupID) || activeKiroWireCapture.requests.Add(1) > 20 {
+	if !activeKiroWireCapture.matches(key, parsed.GroupID) ||
+		activeKiroWireCapture.requests.Add(1) > activeKiroWireCapture.config.maxRequests() {
 		return ctx, func() {}
 	}
 	t := &kiroWireTrace{capture: activeKiroWireCapture, id: uuid.NewString(), clientID: c.Request.Header.Get("X-Client-Request-Id"), accountID: account.ID}
