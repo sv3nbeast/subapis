@@ -26,6 +26,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/anthropictokenizer"
 	"github.com/google/uuid"
+	pdf "github.com/ledongthuc/pdf"
 	"github.com/tidwall/gjson"
 )
 
@@ -3740,18 +3741,82 @@ func buildDocumentTextFallback(part gjson.Result) string {
 	if err != nil || len(raw) == 0 {
 		return ""
 	}
-	text := strings.TrimSpace(extractPDFTextLite(raw))
-	if text == "" {
-		return ""
-	}
-	if utf8.RuneCountInString(text) > 6000 {
-		text = truncateUTF8(text, 6000) + "\n[PDF text truncated]"
-	}
 	sum := sha256.Sum256(raw)
 	if name == "" {
 		name = "document.pdf"
 	}
-	return fmt.Sprintf("[Attached PDF document: %s, bytes=%d, sha256=%x]\n[Extracted PDF text]\n%s\n[/Extracted PDF text]", name, len(raw), sum[:8], text)
+	header := fmt.Sprintf("[Attached PDF document: %s, bytes=%d, sha256=%x]", name, len(raw), sum[:8])
+
+	// 先走结构化解析（按内容流与字体编码还原文本，中文 PDF 也能正确还原）；
+	// 只有结构化失败时才退回正则粗提取，且粗提取结果必须通过可读性校验，
+	// 避免把压缩流解出的二进制垃圾当成正文塞给模型（issue: Kiro 分组读不了 PDF）。
+	text, reason := extractPDFTextStructured(raw)
+	if text == "" {
+		if lite := strings.TrimSpace(extractPDFTextLite(raw)); lite != "" {
+			text = lite
+		}
+	}
+	if text == "" {
+		// 提取不到正文时给出明确说明，而不是静默丢弃整个附件：
+		// 模型据此可以主动告知用户换一种方式提供内容，而不是误以为文档是空的。
+		return fmt.Sprintf("%s\n[PDF text extraction unavailable: %s. This upstream cannot read PDF attachments directly; ask the user to supply the content as text or images.]", header, reason)
+	}
+	if utf8.RuneCountInString(text) > 6000 {
+		text = truncateUTF8(text, 6000) + "\n[PDF text truncated]"
+	}
+	return fmt.Sprintf("%s\n[Extracted PDF text]\n%s\n[/Extracted PDF text]", header, text)
+}
+
+// kiroPDFMaxPages 限制结构化解析的页数，避免超大 PDF 拖慢网关热路径。
+// 单页文本仍受 buildDocumentTextFallback 的 6000 字符上限约束。
+const kiroPDFMaxPages = 50
+
+// extractPDFTextStructured 用 PDF 内容流解析还原正文。
+// 返回 (文本, 失败原因)：文本非空时原因为空。
+// 该函数位于网关热路径，第三方解析器对畸形 PDF 可能 panic，必须就地兜住。
+func extractPDFTextStructured(raw []byte) (text string, reason string) {
+	defer func() {
+		if r := recover(); r != nil {
+			text = ""
+			reason = "the PDF could not be parsed (malformed structure)"
+		}
+	}()
+
+	reader, err := pdf.NewReader(bytes.NewReader(raw), int64(len(raw)))
+	if err != nil {
+		return "", "the PDF is encrypted or damaged"
+	}
+	pages := reader.NumPage()
+	if pages > kiroPDFMaxPages {
+		pages = kiroPDFMaxPages
+	}
+	var builder strings.Builder
+	for i := 1; i <= pages; i++ {
+		page := reader.Page(i)
+		if page.V.IsNull() {
+			continue
+		}
+		pageText, err := page.GetPlainText(nil)
+		if err != nil {
+			continue
+		}
+		pageText = strings.TrimSpace(strings.Join(strings.Fields(pageText), " "))
+		if pageText == "" {
+			continue
+		}
+		if builder.Len() > 0 {
+			_, _ = builder.WriteString("\n")
+		}
+		_, _ = builder.WriteString(pageText)
+		if utf8.RuneCountInString(builder.String()) > 6000 {
+			break
+		}
+	}
+	out := strings.TrimSpace(builder.String())
+	if out == "" {
+		return "", "the PDF has no embedded text layer (it is likely a scan or image-only document)"
+	}
+	return out, ""
 }
 
 func extractPDFTextLite(data []byte) string {
@@ -3919,18 +3984,51 @@ func decodePDFTextBytes(data []byte) string {
 	return strings.ToValidUTF8(string(data), "")
 }
 
+// looksLikeReadableText 判断一段从 PDF 里抠出来的字符串是否像真正的正文。
+//
+// 注意不能用 unicode.IsLetter 做可读性判据：它对任意 Unicode 字母都为真，
+// 而把压缩流的随机字节按 UTF-8 解码后，大量码点会落进希腊/西里尔/阿拉伯等字母区间，
+// 于是整段二进制垃圾也能轻松越过阈值（实测一份中文发票因此产出 1.4 万字节乱码）。
+// 这里改为只认常见正文脚本，并对控制字符、替换符、私用区码点单独设一道更严的红线，
+// 因为它们几乎只出现在误解码的二进制里。
 func looksLikeReadableText(text string) bool {
 	runes := []rune(text)
 	if len(runes) < 2 {
 		return false
 	}
 	readable := 0
+	suspicious := 0
 	for _, r := range runes {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsSpace(r) || strings.ContainsRune(".,;:!?，。；：！？()[]{}+-_/@#$%&*='\"<>", r) {
+		switch {
+		case isReadableTextRune(r):
 			readable++
+		case r == utf8.RuneError, unicode.Is(unicode.Co, r), unicode.Is(unicode.Cs, r):
+			suspicious++
+		case r < 0x20 && r != '\n' && r != '\r' && r != '\t':
+			suspicious++
 		}
 	}
+	// 正常正文几乎不含控制字符/私用区码点，出现即强烈提示是误解码的二进制。
+	if suspicious*100/len(runes) >= 2 {
+		return false
+	}
 	return readable*100/len(runes) >= 70
+}
+
+// isReadableTextRune 报告 r 是否属于常见正文字符（ASCII 字母数字、CJK、日文假名、
+// 空白与常用中英标点）。刻意不覆盖全部 Unicode 字母，理由见 looksLikeReadableText。
+func isReadableTextRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return true
+	case unicode.IsSpace(r):
+		return true
+	case strings.ContainsRune(".,;:!?，。；：！？()[]{}+-_/@#$%&*='\"<>、《》（）【】〔〕—…·￥¥°", r):
+		return true
+	case unicode.Is(unicode.Han, r), unicode.Is(unicode.Hiragana, r), unicode.Is(unicode.Katakana, r):
+		return true
+	}
+	return false
 }
 
 func kiroDocumentFormat(mediaType string) string {
