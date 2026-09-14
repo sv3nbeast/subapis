@@ -1986,7 +1986,9 @@ func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *
 func defaultCodexModelIDsForPlatform(platform string) []string {
 	switch platform {
 	case service.PlatformDeepseek:
-		return []string{"deepseek-v4-pro", "deepseek-v4-flash"}
+		// deepseek-flash 是官方现行 Flash ID（V4.1-Flash，2026-09-10 起）；
+		// deepseek-v4-flash 已退役但保留，兼容仍按旧 ID 请求的客户端。
+		return []string{"deepseek-v4-pro", "deepseek-flash", "deepseek-v4-flash"}
 	default:
 		return defaultModelIDsForPlatform(platform)
 	}

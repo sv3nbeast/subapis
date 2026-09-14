@@ -146,7 +146,9 @@ const qwenModels = [
 
 // DeepSeek
 const deepseekModels = [
-  'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp',
+  'deepseek-v4-pro', 'deepseek-flash',
+  // 2026-09-10 起由 deepseek-flash（V4.1-Flash）承接，保留旧 ID 以兼容存量配置
+  'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp',
   'deepseek-coder',
   'deepseek-v3', 'deepseek-v3-0324',
   'deepseek-r1', 'deepseek-r1-0528',

@@ -11967,7 +11967,10 @@ func supportsOpenAIReasoningEffortMax(model string) bool {
 	}
 	normalized := strings.ToLower(lastOpenAIModelSegment(model))
 	normalized = strings.ReplaceAll(normalized, "_", "-")
-	return strings.HasPrefix(normalized, "deepseek-v4") || strings.HasPrefix(normalized, "glm-") ||
+	// deepseek-flash 是官方现行 Flash ID（V4.1-Flash，2026-09-10 起接替 deepseek-v4-flash），
+	// 与 deepseek-v4* 同属 V4 代，同样支持 max 推理强度。
+	return strings.HasPrefix(normalized, "deepseek-v4") || strings.HasPrefix(normalized, "deepseek-flash") ||
+		strings.HasPrefix(normalized, "glm-") ||
 		strings.HasPrefix(normalized, "kimi-") || strings.HasPrefix(normalized, "moonshot-") ||
 		normalized == "k3" || strings.HasPrefix(normalized, "k3-")
 }

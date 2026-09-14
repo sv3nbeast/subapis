@@ -652,6 +652,8 @@ func deepSeekCodexDisplayName(modelID string) string {
 	switch strings.ToLower(strings.TrimSpace(modelID)) {
 	case "deepseek-v4-pro", "deepseek-4-pro":
 		return "DeepSeek V4 Pro"
+	case "deepseek-flash":
+		return "DeepSeek Flash"
 	case "deepseek-v4-flash", "deepseek-4-flash":
 		return "DeepSeek V4 Flash"
 	default:
