@@ -63,6 +63,7 @@ func RegisterAdminRoutes(
 
 		// Droid OAuth
 		registerDroidOAuthRoutes(admin, h)
+		registerCursorOAuthRoutes(admin, h)
 		// Grok OAuth
 		registerGrokOAuthRoutes(admin, h)
 
@@ -502,6 +503,14 @@ func registerDroidOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	{
 		droid.POST("/oauth/auth-url", h.Admin.DroidOAuth.GenerateAuthURL)
 		droid.POST("/oauth/exchange-code", h.Admin.DroidOAuth.ExchangeCode)
+	}
+}
+
+func registerCursorOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	cursor := admin.Group("/cursor")
+	{
+		cursor.POST("/oauth/auth-url", h.Admin.CursorOAuth.GenerateAuthURL)
+		cursor.POST("/oauth/poll", h.Admin.CursorOAuth.Poll)
 	}
 }
 

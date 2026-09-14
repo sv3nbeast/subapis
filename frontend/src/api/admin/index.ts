@@ -19,6 +19,7 @@ import geminiAPI from './gemini'
 import antigravityAPI from './antigravity'
 import kiroAPI from './kiro'
 import droidAPI from './droid'
+import cursorAPI from './cursor'
 import grokAPI from './grok'
 import cnProvidersAPI from './cnProviders'
 import userAttributesAPI from './userAttributes'
@@ -59,6 +60,7 @@ export const adminAPI = {
   antigravity: antigravityAPI,
   kiro: kiroAPI,
   droid: droidAPI,
+  cursor: cursorAPI,
   grok: grokAPI,
   cnProviders: cnProvidersAPI,
   userAttributes: userAttributesAPI,
@@ -97,6 +99,7 @@ export {
   antigravityAPI,
   kiroAPI,
   droidAPI,
+  cursorAPI,
   grokAPI,
   cnProvidersAPI,
   userAttributesAPI,

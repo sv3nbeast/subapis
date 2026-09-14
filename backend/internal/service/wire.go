@@ -1050,6 +1050,7 @@ var ProviderSet = wire.NewSet(
 	ProvideKiroOAuthEngineService,
 	wire.Bind(new(KiroOAuthOperations), new(*KiroOAuthEngineService)),
 	NewDroidOAuthService,
+	NewCursorOAuthService,
 	ProvideOAuthRefreshAPI,
 	ProvideGeminiTokenProvider,
 	NewGeminiMessagesCompatService,

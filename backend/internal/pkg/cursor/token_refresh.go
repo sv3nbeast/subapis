@@ -12,7 +12,12 @@ import (
 	"time"
 )
 
-var oauthTokenURL = BaseURLAPI + EndpointToken
+var (
+	oauthTokenURL = BaseURLAPI + EndpointToken
+	// exchangeTokenURL 是 Cursor CLI 登录体系使用的刷新端点：Bearer 上
+	// refresh_token，空 JSON body。
+	exchangeTokenURL = BaseURLAPI + "/auth/exchange_user_api_key"
+)
 
 type tokenRefreshRequest struct {
 	GrantType    string `json:"grant_type"`
@@ -60,6 +65,9 @@ func RefreshSessionViaProxy(ctx context.Context, refreshToken, proxyURL string) 
 	return refreshTokenImpl(ctx, httpClient, refreshToken)
 }
 
+// refreshTokenImpl 依次尝试两个刷新端点。凭证有两种来源：浏览器登录拿到的
+// CLI 体系 token 走 /auth/exchange_user_api_key，从 IDE storage.json 手工导入的
+// 走 /oauth/token。先试前者，它明确失败时再退到后者，这样两种来源都能续期。
 func refreshTokenImpl(ctx context.Context, httpClient *http.Client, refreshToken string) (*TokenRefreshResult, error) {
 	refreshToken = strings.TrimSpace(refreshToken)
 	if refreshToken == "" {
@@ -76,52 +84,96 @@ func refreshTokenImpl(ctx context.Context, httpClient *http.Client, refreshToken
 	ctx, cancel := context.WithTimeout(ctx, cursorUnaryTimeout)
 	defer cancel()
 
+	result, exchangeErr := refreshViaExchange(ctx, httpClient, refreshToken)
+	if exchangeErr == nil {
+		return result, nil
+	}
+	result, oauthErr := refreshViaOAuthToken(ctx, httpClient, refreshToken)
+	if oauthErr == nil {
+		return result, nil
+	}
+	return nil, fmt.Errorf("cursor: token refresh failed on both endpoints: %v; %v", exchangeErr, oauthErr)
+}
+
+// refreshViaExchange 走 CLI 登录体系：Authorization 带 refresh_token，body 为空对象。
+func refreshViaExchange(ctx context.Context, httpClient *http.Client, refreshToken string) (*TokenRefreshResult, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, exchangeTokenURL, strings.NewReader("{}"))
+	if err != nil {
+		return nil, fmt.Errorf("build exchange request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+refreshToken)
+
+	body, err := doRefreshRequest(httpClient, req, "exchange")
+	if err != nil {
+		return nil, err
+	}
+	// 该端点返回 camelCase 的 accessToken/refreshToken。
+	var parsed TokenResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("parse exchange response: %w", err)
+	}
+	accessToken := strings.TrimSpace(parsed.AccessToken)
+	if accessToken == "" {
+		return nil, fmt.Errorf("empty access token in exchange response")
+	}
+	rotated := strings.TrimSpace(parsed.RefreshToken)
+	if rotated == "" {
+		// 该端点不轮换 refresh token，沿用原值。
+		rotated = refreshToken
+	}
+	return &TokenRefreshResult{AccessToken: accessToken, RefreshToken: rotated}, nil
+}
+
+// refreshViaOAuthToken 走 IDE 体系的标准 OAuth refresh_token 授权。
+func refreshViaOAuthToken(ctx context.Context, httpClient *http.Client, refreshToken string) (*TokenRefreshResult, error) {
 	payload, err := json.Marshal(tokenRefreshRequest{
 		GrantType:    "refresh_token",
 		ClientID:     DefaultAuthClientID,
 		RefreshToken: refreshToken,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("cursor: encode refresh request: %w", err)
+		return nil, fmt.Errorf("encode refresh request: %w", err)
 	}
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, oauthTokenURL, bytes.NewReader(payload))
 	if err != nil {
-		return nil, fmt.Errorf("cursor: build refresh request: %w", err)
+		return nil, fmt.Errorf("build refresh request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := httpClient.Do(req)
+	body, err := doRefreshRequest(httpClient, req, "oauth")
 	if err != nil {
-		return nil, fmt.Errorf("cursor: token refresh: %w", err)
+		return nil, err
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, fmt.Errorf("cursor: read refresh response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		msg := strings.TrimSpace(string(body))
-		if len(msg) > 300 {
-			msg = msg[:300]
-		}
-		return nil, fmt.Errorf("cursor: token refresh status %d: %s", resp.StatusCode, msg)
-	}
-
 	var tr tokenResponse
 	if err := json.Unmarshal(body, &tr); err != nil {
-		return nil, fmt.Errorf("cursor: parse refresh response: %w", err)
+		return nil, fmt.Errorf("parse refresh response: %w", err)
 	}
 	if strings.TrimSpace(tr.AccessToken) == "" {
-		return nil, fmt.Errorf("cursor: empty access token in refresh response")
+		return nil, fmt.Errorf("empty access token in refresh response")
 	}
 	return &TokenRefreshResult{
 		AccessToken:  strings.TrimSpace(tr.AccessToken),
 		RefreshToken: strings.TrimSpace(tr.RefreshToken),
 		ExpiresIn:    tr.ExpiresIn,
 	}, nil
+}
+
+func doRefreshRequest(httpClient *http.Client, req *http.Request, label string) ([]byte, error) {
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%s request: %w", label, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read %s response: %w", label, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s status %d: %s", label, resp.StatusCode, truncateForError(body))
+	}
+	return body, nil
 }
 
 // AccessTokenExpiry reads exp from an unverified Cursor JWT.
