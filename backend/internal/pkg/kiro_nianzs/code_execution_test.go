@@ -58,8 +58,8 @@ func TestInjectCodeExecutionResultClaudeClosesUpstreamToolCycle(t *testing.T) {
 func TestGenerateLegacyCodeExecutionEventsUsesServerToolProtocol(t *testing.T) {
 	result := CodeExecutionResult{Stdout: "HELLO_CHECK\n", Stderr: "", ReturnCode: 0}
 	events := append(
-		GenerateCodeExecutionToolUseEvents("print('HELLO_CHECK')", "srvtoolu_test", 2),
-		GenerateCodeExecutionResultEvents("srvtoolu_test", result, 3)...,
+		GenerateCodeExecutionToolUseEvents("print('HELLO_CHECK')", "srvtoolu_test", 2, CodeExecutionToolLegacy),
+		GenerateCodeExecutionResultEvents("srvtoolu_test", result, 3, CodeExecutionToolLegacy)...,
 	)
 	wire := string(bytesJoin(events))
 	require.Contains(t, wire, `"type":"server_tool_use"`)
@@ -76,7 +76,7 @@ func TestInjectCodeExecutionIndicatorsInResponseAddsUsage(t *testing.T) {
 		ServerToolUseID: "srvtoolu_test",
 		Code:            "print('HELLO_CHECK')",
 		Result:          CodeExecutionResult{Stdout: "HELLO_CHECK\n"},
-	}})
+	}}, CodeExecutionToolLegacy)
 	require.NoError(t, err)
 	require.Equal(t, "server_tool_use", gjson.GetBytes(updated, "content.0.type").String())
 	require.Equal(t, "code_execution_tool_result", gjson.GetBytes(updated, "content.1.type").String())
@@ -97,7 +97,7 @@ func TestExtractCodeExecutionTurnPreservesIntermediateContentOrder(t *testing.T)
 		Result:          CodeExecutionResult{Stdout: "1\n"},
 		Before:          before,
 		After:           after,
-	}})
+	}}, CodeExecutionToolLegacy)
 	require.NoError(t, err)
 	require.Equal(t, "before", gjson.GetBytes(updated, "content.0.text").String())
 	require.Equal(t, "server_tool_use", gjson.GetBytes(updated, "content.1.type").String())
@@ -123,9 +123,51 @@ func bytesJoin(chunks [][]byte) []byte {
 	return []byte(builder.String())
 }
 
-func TestLegacyCodeExecutionResultContentIsJSONSerializable(t *testing.T) {
-	_, err := json.Marshal(legacyCodeExecutionResultContent(CodeExecutionResult{Stdout: "ok"}))
-	require.NoError(t, err)
+func TestCodeExecutionResultContentIsJSONSerializable(t *testing.T) {
+	for _, kind := range []CodeExecutionToolKind{CodeExecutionToolLegacy, CodeExecutionToolModern} {
+		_, err := json.Marshal(codeExecutionResultContent(CodeExecutionResult{Stdout: "ok"}, kind))
+		require.NoError(t, err)
+	}
+}
+
+// 20250825 起官方改用 bash_code_execution_* 形态；只认最老的 20250522 会让新版
+// 请求退化成普通客户端工具（返回 tool_use 而非 server_tool_use，且不在服务端执行）。
+func TestDetectCodeExecutionToolCoversEveryOfficialVersion(t *testing.T) {
+	build := func(toolType string) []byte {
+		return []byte(`{"tools":[{"type":"` + toolType + `","name":"code_execution"}]}`)
+	}
+	require.Equal(t, CodeExecutionToolLegacy, DetectCodeExecutionTool(build("code_execution_20250522")))
+	for _, modern := range []string{"code_execution_20250825", "code_execution_20260120", "code_execution_20260521"} {
+		require.Equal(t, CodeExecutionToolModern, DetectCodeExecutionTool(build(modern)), modern)
+	}
+	require.Equal(t, CodeExecutionToolNone, DetectCodeExecutionTool(build("code_execution_19700101")))
+	require.Equal(t, CodeExecutionToolNone, DetectCodeExecutionTool([]byte(`{"tools":[{"name":"get_weather"}]}`)))
+	// 混合 server/client 工具保持客户端驱动语义。
+	require.Equal(t, CodeExecutionToolNone, DetectCodeExecutionTool(
+		[]byte(`{"tools":[{"type":"code_execution_20260521","name":"code_execution"},{"name":"get_weather"}]}`)))
+}
+
+// 新版必须用官方的 bash_code_execution_* 名称与块类型回包。
+func TestModernCodeExecutionUsesOfficialBlockShapes(t *testing.T) {
+	wire := string(bytesJoin(append(
+		GenerateCodeExecutionToolUseEvents("echo hi", "srvtoolu_x", 0, CodeExecutionToolModern),
+		GenerateCodeExecutionResultEvents("srvtoolu_x", CodeExecutionResult{Stdout: "hi"}, 1, CodeExecutionToolModern)...,
+	)))
+	require.Contains(t, wire, `"name":"bash_code_execution"`)
+	require.Contains(t, wire, `"type":"server_tool_use"`)
+	require.Contains(t, wire, `"type":"bash_code_execution_tool_result"`)
+	require.Contains(t, wire, `"type":"bash_code_execution_result"`)
+	require.Contains(t, wire, `command`, "modern input carries the command field")
+	require.NotContains(t, wire, `"type":"code_execution_tool_result"`)
+
+	legacyWire := string(bytesJoin(append(
+		GenerateCodeExecutionToolUseEvents("print(1)", "srvtoolu_y", 0, CodeExecutionToolLegacy),
+		GenerateCodeExecutionResultEvents("srvtoolu_y", CodeExecutionResult{Stdout: "1"}, 1, CodeExecutionToolLegacy)...,
+	)))
+	require.Contains(t, legacyWire, `"name":"code_execution"`)
+	require.Contains(t, legacyWire, `"type":"code_execution_tool_result"`)
+	require.Contains(t, legacyWire, `"type":"code_execution_result"`)
+	require.NotContains(t, legacyWire, "bash_code_execution")
 }
 
 func TestKiroCompletionEvidenceRejectsBareEOFButAcceptsRuntimeBoundaries(t *testing.T) {

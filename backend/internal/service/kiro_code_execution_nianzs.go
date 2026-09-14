@@ -78,10 +78,13 @@ type nianzsKiroCodeExecutionTurnWriter struct {
 	executed       bool
 	sawMessageStop bool
 	maxIndex       int
+	// kind 决定写回客户端的 server tool 名与结果块形态（legacy 与 20250825+ 不同）。
+	kind nianzskiro.CodeExecutionToolKind
 }
 
-func newNianzsKiroCodeExecutionTurnWriter(ctx context.Context, out io.Writer, runner nianzsKiroCodeExecutionRunner, indexOffset, priorExecCount int, priorUsage nianzskiro.Usage, emitMessageStart bool) *nianzsKiroCodeExecutionTurnWriter {
+func newNianzsKiroCodeExecutionTurnWriter(ctx context.Context, out io.Writer, runner nianzsKiroCodeExecutionRunner, indexOffset, priorExecCount int, priorUsage nianzskiro.Usage, emitMessageStart bool, kind nianzskiro.CodeExecutionToolKind) *nianzsKiroCodeExecutionTurnWriter {
 	return &nianzsKiroCodeExecutionTurnWriter{
+		kind:             kind,
 		ctx:              ctx,
 		out:              out,
 		runner:           runner,
@@ -225,7 +228,7 @@ func (w *nianzsKiroCodeExecutionTurnWriter) handleContentBlockStart(event map[st
 	w.serverToolID = "srvtoolu_" + nianzskiro.GenerateToolUseID()
 	block["type"] = "server_tool_use"
 	block["id"] = w.serverToolID
-	block["name"] = "code_execution"
+	block["name"] = w.kind.ServerToolName()
 	block["input"] = map[string]any{}
 	// caller is part of Anthropic client tool_use blocks. Native server tools
 	// such as code_execution do not expose it on content_block_start.
@@ -281,7 +284,7 @@ func (w *nianzsKiroCodeExecutionTurnWriter) handleContentBlockStop(event map[str
 		w.call = nianzskiro.CodeExecutionCall{ToolUseID: w.toolUseID, Code: args.Code, Index: index}
 	}
 	resultIndex := adjusted + 1
-	if err := nianzsWriteSSEChunks(w.out, nianzskiro.GenerateCodeExecutionResultEvents(w.serverToolID, w.result, resultIndex)); err != nil {
+	if err := nianzsWriteSSEChunks(w.out, nianzskiro.GenerateCodeExecutionResultEvents(w.serverToolID, w.result, resultIndex, w.kind)); err != nil {
 		return err
 	}
 	w.observeIndex(resultIndex)
@@ -491,6 +494,8 @@ func (s *GatewayService) streamKiroCodeExecutionAsAnthropicNianzs(
 	initialResponse *http.Response,
 	initialRequestCtx nianzskiro.KiroRequestContext,
 ) error {
+	// 版本取自客户端原始声明：20250825 起官方用 bash_code_execution_* 形态回包。
+	kind := nianzskiro.DetectCodeExecutionTool(anthropicBody)
 	currentBody, err := nianzskiro.ReplaceLegacyCodeExecutionTool(anthropicBody)
 	if err != nil {
 		return nianzsErrKiroCodeExecutionFallback
@@ -524,7 +529,7 @@ func (s *GatewayService) streamKiroCodeExecutionAsAnthropicNianzs(
 		requestCtx.EstimatedInputTokens = inputTokens
 		requestCtx.RequireTerminalEvent = true
 		requestCtx.EmitProtocolPing = turn == 0 && requestCtx.EmitProtocolPing
-		turnWriter := newNianzsKiroCodeExecutionTurnWriter(ctx, w, runner, nextIndex, executionCount, priorUsage, turn == 0)
+		turnWriter := newNianzsKiroCodeExecutionTurnWriter(ctx, w, runner, nextIndex, executionCount, priorUsage, turn == 0, kind)
 		streamResult, streamErr := func() (*nianzskiro.StreamResult, error) {
 			defer func() { _ = resp.Body.Close() }()
 			return nianzskiro.StreamEventStreamAsAnthropicWithContext(
@@ -564,6 +569,7 @@ func (s *GatewayService) executeKiroCodeExecutionNianzs(
 	headers http.Header,
 	runner nianzsKiroCodeExecutionRunner,
 ) (*nianzsKiroCodeExecution, error) {
+	kind := nianzskiro.DetectCodeExecutionTool(anthropicBody)
 	currentBody, err := nianzskiro.ReplaceLegacyCodeExecutionTool(anthropicBody)
 	if err != nil {
 		return nil, nianzsErrKiroCodeExecutionFallback
@@ -606,7 +612,7 @@ func (s *GatewayService) executeKiroCodeExecutionNianzs(
 		call, before, after, hasCall := nianzskiro.ExtractCodeExecutionTurnFromResponse(parsedResponse.ResponseBody)
 		if !hasCall {
 			totalUsage := nianzsSumKiroUsage(priorUsage, parsedResponse.Usage)
-			finalBody, injectErr := nianzskiro.InjectCodeExecutionIndicatorsInResponse(parsedResponse.ResponseBody, indicators)
+			finalBody, injectErr := nianzskiro.InjectCodeExecutionIndicatorsInResponse(parsedResponse.ResponseBody, indicators, kind)
 			if injectErr != nil {
 				return nil, injectErr
 			}

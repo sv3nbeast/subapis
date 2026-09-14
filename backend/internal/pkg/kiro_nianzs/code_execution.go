@@ -11,7 +11,79 @@ import (
 const (
 	legacyCodeExecutionToolType = "code_execution_20250522"
 	codeExecutionToolName       = "code_execution"
+	// bashCodeExecutionToolName 是 20250825 起官方在响应里使用的 server tool 名，
+	// 对应的结果块也换成了 bash_code_execution_* 形态。
+	bashCodeExecutionToolName = "bash_code_execution"
 )
+
+// modernCodeExecutionToolTypes 是 20250522 之后的 code execution 版本。
+// 官方文档：每个受支持的模型都接受全部版本，客户端用哪个都得能用；
+// 只认最老的一个会让新版请求退化成普通客户端工具（返回 tool_use 而不是
+// server_tool_use，且不在服务端执行）。
+var modernCodeExecutionToolTypes = map[string]struct{}{
+	"code_execution_20250825": {},
+	"code_execution_20260120": {},
+	"code_execution_20260521": {},
+}
+
+// CodeExecutionToolKind 表示请求声明的 code execution 工具属于哪一代，
+// 它决定写回客户端的 server tool 名与结果块形态。
+type CodeExecutionToolKind int
+
+const (
+	CodeExecutionToolNone CodeExecutionToolKind = iota
+	CodeExecutionToolLegacy
+	CodeExecutionToolModern
+)
+
+func codeExecutionKindForType(toolType string) CodeExecutionToolKind {
+	normalized := strings.ToLower(strings.TrimSpace(toolType))
+	if normalized == legacyCodeExecutionToolType {
+		return CodeExecutionToolLegacy
+	}
+	if _, ok := modernCodeExecutionToolTypes[normalized]; ok {
+		return CodeExecutionToolModern
+	}
+	return CodeExecutionToolNone
+}
+
+// serverToolName 返回写给客户端的 server_tool_use.name。
+func (k CodeExecutionToolKind) ServerToolName() string {
+	if k == CodeExecutionToolModern {
+		return bashCodeExecutionToolName
+	}
+	return codeExecutionToolName
+}
+
+// resultBlockType 返回结果内容块的 type。
+func (k CodeExecutionToolKind) resultBlockType() string {
+	if k == CodeExecutionToolModern {
+		return "bash_code_execution_tool_result"
+	}
+	return "code_execution_tool_result"
+}
+
+func (k CodeExecutionToolKind) resultContentType() string {
+	if k == CodeExecutionToolModern {
+		return "bash_code_execution_result"
+	}
+	return "code_execution_result"
+}
+
+func (k CodeExecutionToolKind) errorContentType() string {
+	if k == CodeExecutionToolModern {
+		return "bash_code_execution_tool_result_error"
+	}
+	return "code_execution_tool_result_error"
+}
+
+// inputField 返回 server_tool_use.input 里承载程序文本的字段名。
+func (k CodeExecutionToolKind) inputField() string {
+	if k == CodeExecutionToolModern {
+		return "command"
+	}
+	return "code"
+}
 
 // CodeExecutionResult is the protocol-neutral result returned by the isolated
 // execution worker. The legacy Anthropic server tool exposes the same fields.
@@ -40,16 +112,25 @@ type CodeExecutionIndicator struct {
 // Python-only Anthropic server tool. Mixed server/client tool turns deliberately
 // keep their original client-driven semantics instead of being partially run.
 func IsOnlyLegacyCodeExecutionTool(body []byte) bool {
+	return DetectCodeExecutionTool(body) != CodeExecutionToolNone
+}
+
+// DetectCodeExecutionTool 报告请求是否只声明了 Anthropic 的 code execution
+// server tool，以及它属于哪一代。混合 server/client 工具的回合保持原有的
+// 客户端驱动语义，不做部分代执行。
+func DetectCodeExecutionTool(body []byte) CodeExecutionToolKind {
 	tools := gjson.GetBytes(body, "tools")
 	if !tools.IsArray() {
-		return false
+		return CodeExecutionToolNone
 	}
 	items := tools.Array()
 	if len(items) != 1 {
-		return false
+		return CodeExecutionToolNone
 	}
-	return strings.EqualFold(strings.TrimSpace(items[0].Get("type").String()), legacyCodeExecutionToolType) &&
-		strings.EqualFold(strings.TrimSpace(items[0].Get("name").String()), codeExecutionToolName)
+	if !strings.EqualFold(strings.TrimSpace(items[0].Get("name").String()), codeExecutionToolName) {
+		return CodeExecutionToolNone
+	}
+	return codeExecutionKindForType(items[0].Get("type").String())
 }
 
 // ReplaceLegacyCodeExecutionTool converts Anthropic's server-tool declaration
@@ -65,8 +146,8 @@ func ReplaceLegacyCodeExecutionTool(body []byte) ([]byte, error) {
 		return body, nil
 	}
 	tool, ok := rawTools[0].(map[string]any)
-	if !ok || !strings.EqualFold(getInterfaceString(tool["type"]), legacyCodeExecutionToolType) ||
-		!strings.EqualFold(getInterfaceString(tool["name"]), codeExecutionToolName) {
+	if !ok || !strings.EqualFold(getInterfaceString(tool["name"]), codeExecutionToolName) ||
+		codeExecutionKindForType(getInterfaceString(tool["type"])) == CodeExecutionToolNone {
 		return body, nil
 	}
 	payload["tools"] = []any{map[string]any{
@@ -228,14 +309,14 @@ func InjectCodeExecutionResultClaude(body []byte, call CodeExecutionCall, result
 	return json.Marshal(payload)
 }
 
-func GenerateCodeExecutionToolUseEvents(code, serverToolUseID string, index int) [][]byte {
-	inputJSON, _ := json.Marshal(map[string]string{"code": code})
+func GenerateCodeExecutionToolUseEvents(code, serverToolUseID string, index int, kind CodeExecutionToolKind) [][]byte {
+	inputJSON, _ := json.Marshal(map[string]string{kind.inputField(): code})
 	return marshalSSEEvents([]map[string]any{
 		{
 			"type": "content_block_start", "index": index,
 			"content_block": map[string]any{
 				"type": "server_tool_use", "id": serverToolUseID,
-				"name": codeExecutionToolName, "input": map[string]any{},
+				"name": kind.ServerToolName(), "input": map[string]any{},
 			},
 		},
 		{
@@ -246,13 +327,13 @@ func GenerateCodeExecutionToolUseEvents(code, serverToolUseID string, index int)
 	})
 }
 
-func GenerateCodeExecutionResultEvents(serverToolUseID string, result CodeExecutionResult, index int) [][]byte {
-	content := legacyCodeExecutionResultContent(result)
+func GenerateCodeExecutionResultEvents(serverToolUseID string, result CodeExecutionResult, index int, kind CodeExecutionToolKind) [][]byte {
+	content := codeExecutionResultContent(result, kind)
 	return marshalSSEEvents([]map[string]any{
 		{
 			"type": "content_block_start", "index": index,
 			"content_block": map[string]any{
-				"type": "code_execution_tool_result", "tool_use_id": serverToolUseID,
+				"type": kind.resultBlockType(), "tool_use_id": serverToolUseID,
 				"content": content,
 			},
 		},
@@ -260,7 +341,7 @@ func GenerateCodeExecutionResultEvents(serverToolUseID string, result CodeExecut
 	})
 }
 
-func InjectCodeExecutionIndicatorsInResponse(response []byte, indicators []CodeExecutionIndicator) ([]byte, error) {
+func InjectCodeExecutionIndicatorsInResponse(response []byte, indicators []CodeExecutionIndicator, kind CodeExecutionToolKind) ([]byte, error) {
 	if len(indicators) == 0 {
 		return response, nil
 	}
@@ -275,11 +356,11 @@ func InjectCodeExecutionIndicatorsInResponse(response []byte, indicators []CodeE
 		updated = append(updated,
 			map[string]any{
 				"type": "server_tool_use", "id": indicator.ServerToolUseID,
-				"name": codeExecutionToolName, "input": map[string]any{"code": indicator.Code},
+				"name": kind.ServerToolName(), "input": map[string]any{kind.inputField(): indicator.Code},
 			},
 			map[string]any{
-				"type": "code_execution_tool_result", "tool_use_id": indicator.ServerToolUseID,
-				"content": legacyCodeExecutionResultContent(indicator.Result),
+				"type": kind.resultBlockType(), "tool_use_id": indicator.ServerToolUseID,
+				"content": codeExecutionResultContent(indicator.Result, kind),
 			},
 		)
 		updated = append(updated, indicator.After...)
@@ -299,15 +380,15 @@ func InjectCodeExecutionIndicatorsInResponse(response []byte, indicators []CodeE
 	return json.Marshal(payload)
 }
 
-func legacyCodeExecutionResultContent(result CodeExecutionResult) map[string]any {
+func codeExecutionResultContent(result CodeExecutionResult, kind CodeExecutionToolKind) map[string]any {
 	if strings.TrimSpace(result.ErrorCode) != "" {
 		return map[string]any{
-			"type":       "code_execution_tool_result_error",
+			"type":       kind.errorContentType(),
 			"error_code": result.ErrorCode,
 		}
 	}
 	return map[string]any{
-		"type":        "code_execution_result",
+		"type":        kind.resultContentType(),
 		"stdout":      result.Stdout,
 		"stderr":      result.Stderr,
 		"return_code": result.ReturnCode,
