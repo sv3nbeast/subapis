@@ -3724,7 +3724,9 @@ func TestStreamEventStreamAsAnthropicHidesImplicitThinkingBeforeForcedTool(t *te
 	require.Equal(t, "message_start", events[0].Get("type").String())
 	require.Equal(t, "tool_use", events[1].Get("content_block.type").String())
 	require.Equal(t, int64(0), events[1].Get("index").Int())
-	require.Equal(t, "direct", events[1].Get("content_block.caller.type").String())
+	// Anthropic 只在 programmatic tool calling 下返回 caller；普通自定义工具不带该字段。
+	require.False(t, events[1].Get("content_block.caller").Exists(),
+		"a plain custom tool_use block must not carry a caller field")
 	require.NotContains(t, out.String(), "provider-only reasoning")
 	require.NotContains(t, out.String(), "hidden")
 	require.NotContains(t, out.String(), `"type":"thinking"`)
@@ -3783,7 +3785,9 @@ func TestParseNonStreamingEventStreamHidesImplicitThinkingBeforeForcedTool(t *te
 	response := gjson.ParseBytes(result.ResponseBody)
 	require.Equal(t, int64(1), response.Get("content.#").Int())
 	require.Equal(t, "tool_use", response.Get("content.0.type").String())
-	require.Equal(t, "direct", response.Get("content.0.caller.type").String())
+	// Anthropic 只在 programmatic tool calling 下返回 caller；普通自定义工具不带该字段。
+	require.False(t, response.Get("content.0.caller").Exists(),
+		"a plain custom tool_use block must not carry a caller field")
 	require.NotContains(t, string(result.ResponseBody), "provider-only reasoning")
 	require.NotContains(t, string(result.ResponseBody), `"type":"thinking"`)
 }

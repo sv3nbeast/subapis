@@ -1615,7 +1615,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			"index": contentBlockIndex,
 			"content_block": map[string]any{
 				"type":  "tool_use",
-				"id":    tool.ToolUseID,
+				"id":    normalizeAnthropicToolUseID(tool.ToolUseID),
 				"name":  restoreResponseToolName(tool.Name, requestCtx),
 				"input": map[string]any{},
 			},
@@ -4528,7 +4528,7 @@ func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, u
 		usableTools++
 		blocks = append(blocks, map[string]any{
 			"type":  "tool_use",
-			"id":    tool.ToolUseID,
+			"id":    normalizeAnthropicToolUseID(tool.ToolUseID),
 			"name":  restoreResponseToolName(tool.Name, requestCtx),
 			"input": tool.Input,
 		})
@@ -5159,6 +5159,20 @@ func skipHeaderValue(headers []byte, offset int, valueType byte) (int, bool) {
 	default:
 		return offset, false
 	}
+}
+
+// normalizeAnthropicToolUseID 把上游的 tool use ID 规范成 Anthropic 的 toolu_ 前缀。
+//
+// 官方 tool_use.id 形如 toolu_01A09q90qw90lq917835lq9，而 Kiro 返回 tooluse_xxx；
+// 原样透传会让响应一眼看出不是原生 Claude。只在写给客户端的响应上转换：客户端随后
+// 原样回传该 ID，我们据以重建的 history 用的也是同一个值，因此会话内自洽；上游接受
+// toolu_ 前缀本就有先例——网关自行合成 tool_use 时用的就是 "toolu_"+GenerateToolUseID()。
+func normalizeAnthropicToolUseID(id string) string {
+	rest := strings.TrimPrefix(id, "tooluse_")
+	if rest != id && rest != "" {
+		return "toolu_" + rest
+	}
+	return id
 }
 
 func processToolUseEvent(event map[string]any, currentTool *toolUseState, processedIDs map[string]bool) ([]KiroToolUse, *toolUseState) {
