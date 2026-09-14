@@ -1075,7 +1075,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 		}
 		payload := buildResult.Payload
 		requestCtx = buildResult.Context
-		nianzsLogKiroStatelessReplay(account, buildResult.Payload, endpoint.Name, flattenCompletedToolHistory, compactOldCompletedToolHistory)
+		nianzsLogKiroStatelessReplay(account, parsed, buildResult.Payload, endpoint.Name, flattenCompletedToolHistory, compactOldCompletedToolHistory, len(anthropicBody), buildResult.Context.DroppedHistoryImages)
 
 		for attempt := 0; attempt <= maxRetries; attempt++ {
 			req, err := nianzsNewKiroJSONRequest(ctx, endpoint.URL, payload, currentToken, accountKey, nianzsBuildKiroMachineID(account), endpoint.AmzTarget, account)
@@ -1210,7 +1210,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 						}
 						payload = buildResult.Payload
 						requestCtx = buildResult.Context
-						nianzsLogKiroStatelessReplay(account, buildResult.Payload, endpoint.Name, flattenCompletedToolHistory, compactOldCompletedToolHistory)
+						nianzsLogKiroStatelessReplay(account, parsed, buildResult.Payload, endpoint.Name, flattenCompletedToolHistory, compactOldCompletedToolHistory, len(anthropicBody), buildResult.Context.DroppedHistoryImages)
 						if sleepErr := nianzsSleepKiroRetry(ctx, attempt); sleepErr != nil {
 							return nil, requestCtx, sleepErr
 						}
@@ -1453,15 +1453,28 @@ func nianzsStableKiroConversationSeed(account *Account, parsed *ParsedRequest, a
 	return sb.String()
 }
 
-func nianzsLogKiroStatelessReplay(account *Account, payload []byte, endpointName string, flattenCompletedToolHistory, compactOldCompletedToolHistory bool) {
+// nianzsLogKiroStatelessReplay records safe request shape only. inboundBodyBytes
+// and droppedHistoryImages make the gap between what the client sent and what
+// Kiro receives visible without a wire capture: an image-heavy session shrinks
+// by an order of magnitude here, and that gap used to be billable but invisible.
+func nianzsLogKiroStatelessReplay(account *Account, parsed *ParsedRequest, payload []byte, endpointName string, flattenCompletedToolHistory, compactOldCompletedToolHistory bool, inboundBodyBytes, droppedHistoryImages int) {
 	if account == nil {
 		return
 	}
 	conversationID := gjson.GetBytes(payload, "conversationState.conversationId").String()
 	systemPrompt := gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String()
 	currentContent := gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String()
+	var userID, apiKeyID int64
+	if parsed != nil && parsed.SessionContext != nil {
+		userID = parsed.SessionContext.UserID
+		apiKeyID = parsed.SessionContext.APIKeyID
+	}
 	logger.L().Info("kiro.stateless_replay",
 		zap.Int64("selected_account_id", account.ID),
+		zap.Int64("user_id", userID),
+		zap.Int64("api_key_id", apiKeyID),
+		zap.Int("inbound_body_bytes", inboundBodyBytes),
+		zap.Int("dropped_history_images", droppedHistoryImages),
 		zap.String("endpoint_name", strings.TrimSpace(endpointName)),
 		zap.Bool("flatten_completed_tool_history", flattenCompletedToolHistory),
 		zap.Bool("compact_old_completed_tool_history", compactOldCompletedToolHistory),

@@ -291,6 +291,11 @@ type KiroRequestContext struct {
 	// OldCompletedToolHistoryCompacted marks age-bounded tool inputs/results.
 	// Natural conversation and the most recent tool window remain unchanged.
 	OldCompletedToolHistoryCompacted bool
+	// DroppedHistoryImages counts the images that history trimming replaced with
+	// a text placeholder. They never reach the provider, so billing estimation
+	// must not charge for them and operators need the count to spot sessions
+	// whose inbound body is dominated by images.
+	DroppedHistoryImages int
 	// EstimatedInputTokens 是调用方预估的输入 token 数，用于非流式路径兜底：
 	// Kiro 上游只上报 credits(meteringEvent),不发 tokenUsage,解析结果里的
 	// InputTokens 恒为 0。流式路径通过独立的 inputTokens 参数种入初值,非流式
@@ -3489,7 +3494,10 @@ func processMessages(messages []gjson.Result, modelID, origin string, requestCtx
 		switch role {
 		case "user":
 			keepImages := last || len(messagesArray)-1-i <= kiroHistoryImageKeepCount
-			userMsg, toolResults := buildUserMessageStruct(msg, modelID, origin, keepImages)
+			userMsg, toolResults, omittedImages := buildUserMessageStruct(msg, modelID, origin, keepImages)
+			if requestCtx != nil {
+				requestCtx.DroppedHistoryImages += omittedImages
+			}
 			if strings.TrimSpace(userMsg.Content) == "" {
 				if len(toolResults) > 0 {
 					userMsg.Content = "Tool results provided."
@@ -4228,7 +4236,7 @@ func deduplicateToolResults(toolResults []KiroToolResult) []KiroToolResult {
 	return out
 }
 
-func buildUserMessageStruct(msg gjson.Result, modelID, origin string, keepImages bool) (KiroUserInputMessage, []KiroToolResult) {
+func buildUserMessageStruct(msg gjson.Result, modelID, origin string, keepImages bool) (KiroUserInputMessage, []KiroToolResult, int) {
 	content := msg.Get("content")
 	var contentBuilder strings.Builder
 	var toolResults []KiroToolResult
@@ -4339,7 +4347,7 @@ func buildUserMessageStruct(msg gjson.Result, modelID, origin string, keepImages
 			userMsg.Content = " "
 		}
 	}
-	return userMsg, toolResults
+	return userMsg, toolResults, omittedImageCount
 }
 
 func buildKiroImage(mediaType, data string) (KiroImage, bool) {
@@ -4811,6 +4819,53 @@ func appendAssistantTextPart(text string, contentBuilder, thinkingBuilder *strin
 			pos += len("\n\n")
 		}
 	}
+}
+
+// mergedMessageIndexes maps every raw Anthropic message index to the index it
+// occupies after mergeAdjacentMessages. Merging only ever looks at roles, so
+// the role sequence is enough to reproduce it without re-parsing bodies.
+// TestMergedMessageIndexesMatchesMergeAdjacentMessages pins the two together.
+func mergedMessageIndexes(roles []string) []int {
+	indexes := make([]int, len(roles))
+	merged := 0
+	for i := 1; i < len(roles); i++ {
+		if roles[i] == "tool" || roles[i-1] == "tool" || roles[i] != roles[i-1] {
+			merged++
+		}
+		indexes[i] = merged
+	}
+	return indexes
+}
+
+// HistoryImageKeptByMessageIndex reports, for each raw Anthropic message index,
+// whether that message's images survive in the built payload. Input-token
+// estimation must not charge for the rest: they never reach the provider.
+//
+// Two rules, both mirroring processMessages:
+//   - Only a user turn can carry images at all. buildAssistantMessageStruct
+//     handles text, thinking and tool_use only, and any other role is dropped
+//     from history entirely, so their images never ship regardless of age.
+//   - Older user turns have their images replaced by an
+//     omittedHistoryImageFormat placeholder once they fall outside the recent
+//     window.
+//
+// Estimation deliberately does not add the placeholder's own tokens back: the
+// residual is a handful of tokens per trimmed turn and erring low keeps a
+// billing correction from ever charging above what shipped.
+func HistoryImageKeptByMessageIndex(roles []string) []bool {
+	kept := make([]bool, len(roles))
+	if len(roles) == 0 {
+		return kept
+	}
+	indexes := mergedMessageIndexes(roles)
+	lastMerged := indexes[len(indexes)-1]
+	for i, mergedIndex := range indexes {
+		if roles[i] != "user" {
+			continue
+		}
+		kept[i] = mergedIndex == lastMerged || lastMerged-mergedIndex <= kiroHistoryImageKeepCount
+	}
+	return kept
 }
 
 func mergeAdjacentMessages(messages []gjson.Result) []gjson.Result {

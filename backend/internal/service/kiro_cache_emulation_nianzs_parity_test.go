@@ -562,7 +562,7 @@ func TestNianzsModernClaudeHighEntropyMessageUsesProviderFraming(t *testing.T) {
 	modern := anthropictokenizer.EstimateModernClaudeTextTokens(string(canonical)) + imageTokens + nianzsKiroTokensPerMessage
 	require.Greater(t, modern, legacy*2)
 	want := max(nianzsScaleModernClaudeTokens(modern, nianzsModernClaudeHighEntropyScaleNum, nianzsModernClaudeHighEntropyScaleDen)-nianzsModernClaudeMessageFramingTokens, legacy)
-	require.Equal(t, want, nianzsCountModernClaudeMessagesTokens(context.Background(), messages))
+	require.Equal(t, want, nianzsCountModernClaudeMessagesTokens(context.Background(), messages, nianzsKiroHistoryImageKeep(messages)))
 }
 
 func TestNianzsModernClaudeCachedProtocolMetadataDoesNotLeakIntoInput(t *testing.T) {
@@ -694,7 +694,7 @@ func TestNianzsModernClaudeSystemBreakpointKeepsRealMessageTailAsInput(t *testin
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(body, &payload))
 	messages, _ := payload["messages"].([]any)
-	messageTokens := nianzsCountModernClaudeMessagesTokens(context.Background(), messages)
+	messageTokens := nianzsCountModernClaudeMessagesTokens(context.Background(), messages, nianzsKiroHistoryImageKeep(messages))
 	cacheTokens := profile.cacheTokensForBreakpoint(last.cumulativeTokens)
 	require.Equal(t, messageTokens, inputTokens-cacheTokens)
 	require.Greater(t, cacheTokens, nianzsKiroCacheMinTokensOpus)

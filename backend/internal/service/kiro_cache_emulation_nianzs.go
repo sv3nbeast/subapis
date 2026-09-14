@@ -1133,7 +1133,7 @@ func nianzsCountKiroInputTokensFromPayload(ctx context.Context, payload map[stri
 	}
 	messages, _ := payload["messages"].([]any)
 	if len(messages) > 0 {
-		sanitizedMessages, imageTokens := nianzsSanitizeKiroImagesForTokenEstimate(ctx, messages)
+		sanitizedMessages, imageTokens := nianzsSanitizeKiroMessagesForTokenEstimate(ctx, messages, nianzsKiroHistoryImageKeep(messages))
 		canonical, err := nianzsCanonicalJSON(sanitizedMessages)
 		if err == nil {
 			tokens += anthropictokenizer.CountTokens(string(canonical))
@@ -1233,6 +1233,14 @@ func nianzsCountModernClaudeToolDefinitionTokens(value any) int {
 }
 
 func nianzsCountModernClaudeMessageContentTokens(ctx context.Context, value any) int {
+	return nianzsCountModernClaudeMessageContentTokensWithImages(ctx, value, true)
+}
+
+// nianzsCountModernClaudeMessageContentTokensWithImages counts a content block.
+// countImages is false for messages whose images history trimming removed before
+// the upstream call: the provider never receives those bytes, so they must not
+// weigh on the cached-prefix split either.
+func nianzsCountModernClaudeMessageContentTokensWithImages(ctx context.Context, value any, countImages bool) int {
 	switch typed := value.(type) {
 	case nil:
 		return 0
@@ -1241,11 +1249,14 @@ func nianzsCountModernClaudeMessageContentTokens(ctx context.Context, value any)
 	case []any:
 		total := 0
 		for _, item := range typed {
-			total += nianzsCountModernClaudeMessageContentTokens(ctx, item)
+			total += nianzsCountModernClaudeMessageContentTokensWithImages(ctx, item, countImages)
 		}
 		return total
 	case map[string]any:
 		if mediaType, source, ok := nianzsKiroImageTokenSource(typed); ok {
+			if !countImages {
+				return 0
+			}
 			return nianzskiro.EstimateImageTokens(ctx, mediaType, source)
 		}
 		if text, ok := typed["text"].(string); ok {
@@ -1261,17 +1272,17 @@ func nianzsCountModernClaudeMessageContentTokens(ctx context.Context, value any)
 			}
 		}
 		if content, ok := typed["content"]; ok {
-			return nianzsCountModernClaudeMessageContentTokens(ctx, content)
+			return nianzsCountModernClaudeMessageContentTokensWithImages(ctx, content, countImages)
 		}
 	}
 	return 0
 }
 
-func nianzsCountModernClaudeMessagesTokens(ctx context.Context, messages []any) int {
+func nianzsCountModernClaudeMessagesTokens(ctx context.Context, messages []any, keepImages []bool) int {
 	if len(messages) == 0 {
 		return 0
 	}
-	sanitizedMessages, imageTokens := nianzsSanitizeKiroImagesForTokenEstimate(ctx, messages)
+	sanitizedMessages, imageTokens := nianzsSanitizeKiroMessagesForTokenEstimate(ctx, messages, keepImages)
 	canonical, err := nianzsCanonicalJSON(sanitizedMessages)
 	if err != nil {
 		return len(messages) * nianzsKiroTokensPerMessage
@@ -1304,7 +1315,7 @@ func nianzsCountModernClaudeInputTokensFromPayload(ctx context.Context, payload 
 		tokens += nianzsCountModernClaudeToolDefinitionTokens(tool)
 	}
 	messages, _ := payload["messages"].([]any)
-	tokens += nianzsCountModernClaudeMessagesTokens(ctx, messages)
+	tokens += nianzsCountModernClaudeMessagesTokens(ctx, messages, nianzsKiroHistoryImageKeep(messages))
 	tokens += nianzsModernClaudeCachedToolBoundaryTokens(payload, model)
 	return max(tokens, 1)
 }
@@ -1332,6 +1343,8 @@ func nianzsModernClaudeCachedToolBoundaryTokens(payload map[string]any, model st
 }
 
 func nianzsApplyModernClaudeCacheBlockTokens(ctx context.Context, payload map[string]any, model string, totalTokens int, blocks []nianzsKiroPendingBlock) {
+	messages, _ := payload["messages"].([]any)
+	keepImages := nianzsKiroHistoryImageKeep(messages)
 	messageBlockIndexes := make([]int, 0, len(blocks))
 	messageMetadataWeights := make([]int, 0, len(blocks))
 	toolBlockIndexes := make([]int, 0, len(blocks))
@@ -1346,7 +1359,9 @@ func nianzsApplyModernClaudeCacheBlockTokens(ctx context.Context, payload map[st
 			blocks[index].tokens = nianzsCountModernClaudeSystemBlockTokens(wrapper["block"])
 		case "message":
 			messageBlockIndexes = append(messageBlockIndexes, index)
-			blocks[index].tokens = nianzsCountModernClaudeMessageContentTokens(ctx, wrapper["block"])
+			blocks[index].tokens = nianzsCountModernClaudeMessageContentTokensWithImages(
+				ctx, wrapper["block"], !nianzsKiroImagesDroppedForBlock(wrapper, keepImages),
+			)
 			role, _ := wrapper["role"].(string)
 			messageMetadataWeights = append(messageMetadataWeights, nianzsClaudeMessageMetadataWeight(wrapper["block"])+len(role)+nianzsKiroTokensPerMessage)
 		}
@@ -1553,6 +1568,55 @@ func nianzsCountKiroMessageContentTokens(ctx context.Context, value any) int {
 	default:
 		return 0
 	}
+}
+
+// nianzsKiroHistoryImageKeep reports, per message index, whether that message's
+// images still reach Kiro. The translator replaces older history images with a
+// text placeholder before the upstream call, so an inbound body dominated by
+// screenshots is billed several times larger than what the model ever sees
+// unless estimation reproduces the same trimming. A nil result means every
+// image survives.
+func nianzsKiroHistoryImageKeep(messages []any) []bool {
+	if len(messages) == 0 {
+		return nil
+	}
+	roles := make([]string, len(messages))
+	for i, raw := range messages {
+		if message, ok := raw.(map[string]any); ok {
+			roles[i], _ = message["role"].(string)
+		}
+	}
+	return nianzskiro.HistoryImageKeptByMessageIndex(roles)
+}
+
+// nianzsKiroImagesDroppedForBlock reports whether a cache block belongs to a
+// message whose images history trimming removed.
+func nianzsKiroImagesDroppedForBlock(wrapper map[string]any, keepImages []bool) bool {
+	if len(keepImages) == 0 {
+		return false
+	}
+	index, ok := wrapper["message_index"].(int)
+	if !ok || index < 0 || index >= len(keepImages) {
+		return false
+	}
+	return !keepImages[index]
+}
+
+// nianzsSanitizeKiroMessagesForTokenEstimate strips image payloads out of the
+// canonical JSON and returns only the visual tokens that survive history
+// trimming. Dropped images never reach the provider, so charging for them bills
+// content the model cannot read.
+func nianzsSanitizeKiroMessagesForTokenEstimate(ctx context.Context, messages []any, keepImages []bool) (any, int) {
+	sanitized := make([]any, len(messages))
+	total := 0
+	for i, message := range messages {
+		cleaned, tokens := nianzsSanitizeKiroImagesForTokenEstimate(ctx, message)
+		sanitized[i] = cleaned
+		if len(keepImages) == 0 || (i < len(keepImages) && keepImages[i]) {
+			total += tokens
+		}
+	}
+	return sanitized, total
 }
 
 func nianzsSanitizeKiroImagesForTokenEstimate(ctx context.Context, value any) (any, int) {
