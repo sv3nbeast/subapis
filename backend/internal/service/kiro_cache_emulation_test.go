@@ -34,11 +34,11 @@ func TestKiroAnthropicFallbackLogicalUsageDoesNotDependOnProviderAccount(t *test
 	group := &Group{ID: 21, Platform: PlatformAnthropic, SubscriptionType: SubscriptionTypeSubscription, KiroAnthropicFallbackEnabled: true}
 	ctx := WithKiroCacheBillingIdentity(context.Background(), group.ID, 77, "logical-session")
 	body := kiroCacheRequestBody("fallback logical", false)
-	first := svc.BuildKiroAnthropicFallbackLogicalUsage(ctx, group, body, "claude-sonnet-4-6", 2000)
+	first := svc.BuildKiroAnthropicFallbackLogicalUsage(ctx, nil, group, body, "claude-sonnet-4-6", 2000)
 	if first == nil || first.CacheCreationTokens == 0 || first.CacheReadTokens != 0 {
 		t.Fatalf("unexpected first logical usage: %+v", first)
 	}
-	second := svc.BuildKiroAnthropicFallbackLogicalUsage(ctx, group, body, "claude-sonnet-4-6", 2000)
+	second := svc.BuildKiroAnthropicFallbackLogicalUsage(ctx, nil, group, body, "claude-sonnet-4-6", 2000)
 	if second == nil || second.CacheReadTokens == 0 || second.CacheCreationTokens != 0 {
 		t.Fatalf("unexpected second logical usage: %+v", second)
 	}
@@ -956,4 +956,104 @@ func kiroCacheToolContextBodyWithoutControl(prefixLabel, toolID, tailLabel strin
 		`{"role":"user","content":[{"type":"tool_result","tool_use_id":%q,"content":[{"type":"text","text":%q}]}]},`+
 		`{"role":"assistant","content":[{"type":"text","text":%q}]}`+
 		`]}`, prefix, toolID, toolID, toolResult, tail))
+}
+
+// TestKiroAnthropicFallbackLogicalUsageHonoursAccountRatio 复现生产缺陷：
+// 订阅分组（platform=anthropic）开启 Kiro->Anthropic 回退后，Kiro 账号上配置的
+// 95% 缓存模拟比例被回退视图按 1.0 重算并静默丢弃，导致 input_tokens 被压成 0。
+// 参照分组 subapis-Max 20x（fallback=on，in_pct=0%）与 Claude最新模型-AWS渠道
+// （fallback=off，in_pct=5%）在同一账号上的真实差异。
+func TestKiroAnthropicFallbackLogicalUsageHonoursAccountRatio(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	account := &Account{ID: 2643, Platform: PlatformKiro, Extra: map[string]any{
+		"kiro_cache_emulation_enabled": true,
+		"kiro_cache_emulation_ratio":   0.95,
+	}}
+	group := &Group{ID: 11, Platform: PlatformAnthropic, SubscriptionType: SubscriptionTypeSubscription, KiroAnthropicFallbackEnabled: true}
+	ctx := WithKiroCacheBillingIdentity(context.Background(), group.ID, account.ID, "max20x-session")
+	body := kiroCacheRequestBody("subscription ratio", false)
+
+	const inputTokens = 200000
+	first := svc.BuildKiroAnthropicFallbackLogicalUsage(ctx, account, group, body, "claude-sonnet-4-6", inputTokens)
+	if first == nil {
+		t.Fatal("first logical usage is nil")
+	}
+	if first.CacheReadTokens != 0 {
+		t.Fatalf("first request must be a cache miss, got read=%d", first.CacheReadTokens)
+	}
+	if first.CacheCreationTokens == 0 {
+		t.Fatal("first request must create cache")
+	}
+	// 5% 未缓存残差必须回到 input_tokens，而不是被吞成 0。
+	if first.InputTokens == 0 {
+		t.Fatalf("account ratio 0.95 was dropped: input=0, creation=%d", first.CacheCreationTokens)
+	}
+	if got := first.InputTokens + first.CacheReadTokens + first.CacheCreationTokens; got != inputTokens {
+		t.Fatalf("token split must be conservative: got %d, want %d", got, inputTokens)
+	}
+
+	second := svc.BuildKiroAnthropicFallbackLogicalUsage(ctx, account, group, body, "claude-sonnet-4-6", inputTokens)
+	if second == nil || second.CacheReadTokens == 0 {
+		t.Fatalf("second request must hit the simulated cache: %+v", second)
+	}
+	// 命中后同样只能按 95% 计入缓存读取，剩余 5% 仍走 input。
+	if second.InputTokens == 0 {
+		t.Fatalf("account ratio 0.95 was dropped on cache hit: %+v", second)
+	}
+	ratio := float64(second.CacheReadTokens) / float64(second.CacheReadTokens+second.InputTokens+second.CacheCreationTokens)
+	if ratio > 0.96 || ratio < 0.94 {
+		t.Fatalf("effective cache ratio = %.4f, want ~0.95 (%+v)", ratio, second)
+	}
+}
+
+// TestKiroAnthropicFallbackLogicalUsageAccountRatioIsOnlySource 锁定一个结构性事实：
+// 回退视图要求分组 platform=anthropic，而分组级 Kiro 缓存模拟要求 platform=kiro，
+// 两个前置条件互斥。因此在订阅分组里，账号级比例是唯一可用的缓存模拟来源——这正是
+// 本缺陷影响面覆盖全部订阅分组 Kiro 流量的原因。
+func TestKiroAnthropicFallbackLogicalUsageAccountRatioIsOnlySource(t *testing.T) {
+	group := &Group{
+		ID:                           11,
+		Platform:                     PlatformAnthropic,
+		SubscriptionType:             SubscriptionTypeSubscription,
+		KiroAnthropicFallbackEnabled: true,
+		KiroCacheEmulationEnabled:    true,
+		KiroCacheEmulationRatio:      0.5,
+	}
+	if !group.EffectiveKiroAnthropicFallbackEnabled() {
+		t.Fatal("fallback must be enabled for an anthropic subscription group")
+	}
+	if group.EffectiveKiroCacheEmulationEnabled() {
+		t.Fatal("group-level Kiro emulation must stay unreachable on an anthropic group")
+	}
+	if read, creation := kiroAnthropicFallbackEmulationRatios(nil, group); read != 1 || creation != 1 {
+		t.Fatalf("group-only config must not scale: read=%v creation=%v", read, creation)
+	}
+	account := &Account{ID: 2644, Platform: PlatformKiro, Extra: map[string]any{
+		"kiro_cache_emulation_enabled": true,
+		"kiro_cache_emulation_ratio":   0.95,
+	}}
+	read, creation := kiroAnthropicFallbackEmulationRatios(account, group)
+	if read != 0.95 || creation != 0.95 {
+		t.Fatalf("account ratio must win: read=%v creation=%v", read, creation)
+	}
+}
+
+// TestKiroAnthropicFallbackLogicalUsageWithoutEmulationKeepsFullCache 两级都未开启时
+// 不缩放，保持该回退视图引入时的原始行为。
+func TestKiroAnthropicFallbackLogicalUsageWithoutEmulationKeepsFullCache(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	account := &Account{ID: 2645, Platform: PlatformKiro}
+	group := &Group{ID: 9, Platform: PlatformAnthropic, SubscriptionType: SubscriptionTypeSubscription, KiroAnthropicFallbackEnabled: true}
+	ctx := WithKiroCacheBillingIdentity(context.Background(), group.ID, account.ID, "no-emulation-session")
+	body := kiroCacheRequestBody("no emulation", false)
+
+	usage := svc.BuildKiroAnthropicFallbackLogicalUsage(ctx, account, group, body, "claude-sonnet-4-6", 200000)
+	if usage == nil || usage.CacheCreationTokens == 0 {
+		t.Fatalf("unexpected usage: %+v", usage)
+	}
+	if usage.InputTokens != 200000-usage.CacheCreationTokens-usage.CacheReadTokens {
+		t.Fatalf("unscaled split broken: %+v", usage)
+	}
 }

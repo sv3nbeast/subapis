@@ -50,12 +50,28 @@ type kiroCacheIdentity struct {
 }
 
 type kiroCachePendingCommit struct {
-	once                 sync.Once
-	identities           []kiroCacheIdentity
-	profile              *kiroCacheProfile
-	inputTokens          int
+	once        sync.Once
+	identities  []kiroCacheIdentity
+	profile     *kiroCacheProfile
+	inputTokens int
+	// ratio 缩放缓存读取 token；creationRatio 缩放缓存创建 token。
+	// creationRatio <= 0 时回退到 ratio，保持 uniform 模式的既有行为。
 	ratio                float64
+	creationRatio        float64
 	initialMatchedTokens int
+}
+
+// effectiveRatios 返回 (读取比例, 创建比例)。独立模式下两者可以不同；
+// uniform 模式或未显式设置创建比例时，创建比例跟随读取比例。
+func (p *kiroCachePendingCommit) effectiveRatios() (float64, float64) {
+	if p == nil {
+		return 0, 0
+	}
+	creationRatio := p.creationRatio
+	if creationRatio <= 0 {
+		creationRatio = p.ratio
+	}
+	return p.ratio, creationRatio
 }
 
 type kiroCacheEntry struct {
@@ -155,10 +171,15 @@ func (s *GatewayService) buildKiroCacheEmulationUsageWithContext(ctx context.Con
 // response against the same logical prompt fingerprint used by Kiro. It does
 // not inspect or mutate either provider's real cache; it only provides the
 // single user-facing billing view for a Kiro->Claude fallback request.
-func (s *GatewayService) BuildKiroAnthropicFallbackLogicalUsage(ctx context.Context, group *Group, body []byte, model string, inputTokens int) *UsageTokens {
+//
+// 这条视图会覆盖 Kiro 主路径已经算好的计费用量，因此必须沿用同一套缓存模拟比例
+// （账号级优先、分组级兜底）。否则分组一旦开启 Kiro->Anthropic 回退，账号上配置的
+// 缓存模拟比例就会被这里按 1.0 重算并静默丢弃。
+func (s *GatewayService) BuildKiroAnthropicFallbackLogicalUsage(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *UsageTokens {
 	if group == nil || !group.EffectiveKiroAnthropicFallbackEnabled() || len(body) == 0 || inputTokens <= 0 {
 		return nil
 	}
+	readRatio, creationRatio := kiroAnthropicFallbackEmulationRatios(account, group)
 	profile, ok := buildKiroCacheProfile(body, model, inputTokens)
 	if !ok {
 		return nil
@@ -176,17 +197,20 @@ func (s *GatewayService) BuildKiroAnthropicFallbackLogicalUsage(ctx context.Cont
 	cacheable := min(last.cumulativeTokens, profile.totalInputTokens)
 	creation := max(cacheable-matchedTokens, 0)
 	creation5m, creation1h := profile.ttlBreakdown(matchedTokens)
+	scaledRead := scaleKiroCacheTokens(matchedTokens, readRatio)
+	scaledCreation := scaleKiroCacheTokens(creation, creationRatio)
 	usage := &kiroCacheEmulationUsage{
-		InputTokens:                max(inputTokens-matchedTokens-creation, 0),
-		CacheReadInputTokens:       matchedTokens,
-		CacheCreationInputTokens:   creation,
-		CacheCreation5mInputTokens: creation5m,
-		CacheCreation1hInputTokens: creation1h,
+		InputTokens:                max(inputTokens-scaledRead-scaledCreation, 0),
+		CacheReadInputTokens:       scaledRead,
+		CacheCreationInputTokens:   scaledCreation,
+		CacheCreation5mInputTokens: scaleKiroCacheTokens(creation5m, creationRatio),
+		CacheCreation1hInputTokens: scaleKiroCacheTokens(creation1h, creationRatio),
 		pendingCommit: &kiroCachePendingCommit{
 			identities:           []kiroCacheIdentity{identity},
 			profile:              profile,
 			inputTokens:          inputTokens,
-			ratio:                1,
+			ratio:                readRatio,
+			creationRatio:        creationRatio,
 			initialMatchedTokens: matchedTokens,
 		},
 	}
@@ -275,10 +299,11 @@ func (u *kiroCacheEmulationUsage) applyCommittedMatch(matchedTokens int) {
 	matchedTokens = min(max(matchedTokens, 0), min(lastBreakpoint.cumulativeTokens, profile.totalInputTokens))
 	creationTokens := max(min(lastBreakpoint.cumulativeTokens, profile.totalInputTokens)-matchedTokens, 0)
 	creation5mTokens, creation1hTokens := profile.ttlBreakdown(matchedTokens)
-	u.CacheReadInputTokens = scaleKiroCacheTokens(matchedTokens, pending.ratio)
-	u.CacheCreationInputTokens = scaleKiroCacheTokens(creationTokens, pending.ratio)
-	u.CacheCreation5mInputTokens = scaleKiroCacheTokens(creation5mTokens, pending.ratio)
-	u.CacheCreation1hInputTokens = scaleKiroCacheTokens(creation1hTokens, pending.ratio)
+	readRatio, creationRatio := pending.effectiveRatios()
+	u.CacheReadInputTokens = scaleKiroCacheTokens(matchedTokens, readRatio)
+	u.CacheCreationInputTokens = scaleKiroCacheTokens(creationTokens, creationRatio)
+	u.CacheCreation5mInputTokens = scaleKiroCacheTokens(creation5mTokens, creationRatio)
+	u.CacheCreation1hInputTokens = scaleKiroCacheTokens(creation1hTokens, creationRatio)
 	u.InputTokens = max(pending.inputTokens-u.CacheReadInputTokens-u.CacheCreationInputTokens, 0)
 }
 
@@ -373,6 +398,27 @@ func kiroGroupCacheEmulationFallback(group *Group) (bool, float64) {
 	}
 	ratio = normalizeKiroCacheEmulationRatio(ratio)
 	return ratio > 0, ratio
+}
+
+// kiroAnthropicFallbackEmulationRatios 解析 Kiro->Anthropic 回退视图应使用的缓存模拟
+// 比例，口径与 Kiro 主路径完全一致：账号级优先，未配置时回退分组级。两者都没有开启时
+// 返回 1，表示不缩放——即该回退视图只做逻辑缓存归类，不额外改变计费口径。
+//
+// 回退到 Anthropic 账号后 account.IsKiro() 为 false，此时只剩分组级可用；这是已知边界，
+// 与该函数引入前的行为保持一致。
+func kiroAnthropicFallbackEmulationRatios(account *Account, group *Group) (float64, float64) {
+	policy := resolveNianzsKiroCacheEmulationPolicy(account, group)
+	if !policy.enabled {
+		return 1, 1
+	}
+	readRatio, creationRatio := policy.readRatio, policy.creationRatio
+	if readRatio <= 0 {
+		readRatio = 1
+	}
+	if creationRatio <= 0 {
+		creationRatio = 1
+	}
+	return readRatio, creationRatio
 }
 
 func scaleKiroCacheTokens(tokens int, ratio float64) int {

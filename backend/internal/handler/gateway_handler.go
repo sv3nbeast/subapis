@@ -1622,7 +1622,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			if kiroAnthropicFallbackEnabled && (account.Platform == service.PlatformKiro || (kiroAnthropicFallbackPhase && account.Platform == service.PlatformAnthropic)) {
 				inputTokens := result.Usage.InputTokens + result.Usage.CacheCreationInputTokens + result.Usage.CacheReadInputTokens
 				logicalFallbackUsage = h.gatewayService.BuildKiroAnthropicFallbackLogicalUsage(
-					c.Request.Context(), apiKey.Group, body, reqModel, inputTokens,
+					c.Request.Context(), account, apiKey.Group, body, reqModel, inputTokens,
 				)
 			}
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), currentAPIKey)
