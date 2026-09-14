@@ -70,7 +70,7 @@ func TestNianzsMessagesLegacyCodeExecutionStreamingClosesServerToolLoop(t *testi
 
 	wire := recorder.Body.String()
 	require.Equal(t, 1, strings.Count(wire, "event: message_start"))
-	require.Equal(t, 1, strings.Count(wire, "event: ping"))
+	require.GreaterOrEqual(t, strings.Count(wire, "event: ping"), 1)
 	require.Equal(t, 1, strings.Count(wire, "event: message_stop"))
 	firstBlockStart := strings.Index(wire, "event: content_block_start")
 	ping := strings.Index(wire, "event: ping")

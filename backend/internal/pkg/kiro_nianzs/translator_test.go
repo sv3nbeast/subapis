@@ -2007,7 +2007,7 @@ func TestStreamEventStreamAsAnthropicExtractsEmbeddedToolCall(t *testing.T) {
 	require.Contains(t, output, `"text":"Before "`)
 	require.Contains(t, output, `"text":" After"`)
 	require.Contains(t, output, `"name":"remote_web_search"`)
-	require.Contains(t, output, `"partial_json":"{\"query\":\"golang\"}"`)
+	require.Equal(t, `{"query":"golang"}`, concatToolInputJSONForTest(t, output))
 }
 
 func TestStreamEventStreamAsAnthropicRecoversCodexNamespacedToolText(t *testing.T) {
@@ -2037,7 +2037,7 @@ func TestStreamEventStreamAsAnthropicRecoversCodexNamespacedToolText(t *testing.
 	require.NotContains(t, output, "</json")
 	require.Contains(t, output, `load active. Need wait.`)
 	require.Contains(t, output, `"name":"functions__wait"`)
-	require.Contains(t, output, `"partial_json":"{\"cell_id\":\"133\",\"max_tokens\":30000,\"yield_time_ms\":30000}"`)
+	require.Equal(t, `{"cell_id":"133","max_tokens":30000,"yield_time_ms":30000}`, concatToolInputJSONForTest(t, output))
 	require.NotContains(t, output, "=functions.wait")
 	require.NotContains(t, output, "assistant to=functions.wait")
 }
@@ -2129,7 +2129,7 @@ func TestStreamEventStreamAsAnthropicRecoversSplitLegacyFlattenedToolEnvelope(t 
 	require.NoError(t, err)
 	require.Equal(t, "tool_use", result.StopReason)
 	require.Contains(t, out.String(), `"name":"Bash"`)
-	require.Contains(t, out.String(), `"partial_json":"{\"command\":\"pwd\",\"description\":\"print cwd\"}"`)
+	require.Equal(t, `{"command":"pwd","description":"print cwd"}`, concatToolInputJSONForTest(t, out.String()))
 	require.NotContains(t, out.String(), "Tool calls:")
 	require.Equal(t, 1, strings.Count(out.String(), "event: message_stop"))
 }
@@ -2355,7 +2355,7 @@ func TestStreamEventStreamAsAnthropicDelaysMessageStartUntilContent(t *testing.T
 	output := out.String()
 	require.Contains(t, output, "event: message_start")
 	require.Contains(t, output, `"name":"remote_web_search"`)
-	require.Contains(t, output, `"partial_json":"{\"query\":\"golang\"}`)
+	require.Equal(t, `{"query":"golang"}`, concatToolInputJSONForTest(t, output))
 	messageStartIdx := strings.Index(output, "event: message_start")
 	toolUseIdx := strings.Index(output, `"name":"remote_web_search"`)
 	require.NotEqual(t, -1, messageStartIdx)
@@ -2394,7 +2394,7 @@ func TestStreamEventStreamAsAnthropicStreamsToolUseFragments(t *testing.T) {
 
 	output := out.String()
 	require.Equal(t, 1, strings.Count(output, `"id":"toolu_stream"`))
-	require.Equal(t, 1, strings.Count(output, `"type":"input_json_delta"`))
+	require.GreaterOrEqual(t, strings.Count(output, `"type":"input_json_delta"`), 1)
 	partial := extractStreamedToolInputJSON(t, output, "toolu_stream")
 	var input map[string]any
 	require.NoError(t, json.Unmarshal([]byte(partial), &input))
@@ -2724,7 +2724,7 @@ func TestStreamEventStreamAsAnthropicStreamsToolUseMapInput(t *testing.T) {
 	var out bytes.Buffer
 	_, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-sonnet-4-5", 9, KiroRequestContext{})
 	require.NoError(t, err)
-	require.Contains(t, out.String(), `"partial_json":"{\"query\":\"golang\"}"`)
+	require.Equal(t, `{"query":"golang"}`, concatToolInputJSONForTest(t, out.String()))
 }
 
 func TestStreamEventStreamAsAnthropicSkipsPayloadWithTrailingJSONValue(t *testing.T) {
@@ -3092,27 +3092,30 @@ func TestStreamEventStreamAsAnthropicThinkingAndTextFollowCanonicalSSELifecycle(
 	require.Equal(t, []string{
 		"message_start",
 		"content_block_start",
+		"ping",
 		"content_block_delta",
 		"content_block_delta",
 		"content_block_stop",
 		"content_block_start",
-	}, names[:6])
+	}, names[:7])
 	require.Equal(t, "content_block_stop", names[len(names)-3])
 	require.Equal(t, "message_delta", names[len(names)-2])
 	require.Equal(t, "message_stop", names[len(names)-1])
-	for _, name := range names[6 : len(names)-3] {
+	for _, name := range names[7 : len(names)-3] {
 		require.Equal(t, "content_block_delta", name)
 	}
 
 	require.Equal(t, "thinking", events[1].Get("content_block.type").String())
 	require.Equal(t, "", events[1].Get("content_block.signature").String())
-	require.Equal(t, "thinking_delta", events[2].Get("delta.type").String())
-	require.Equal(t, "signature_delta", events[3].Get("delta.type").String())
-	require.Equal(t, providerSignature, events[3].Get("delta.signature").String())
-	require.Equal(t, int64(0), events[4].Get("index").Int())
-	require.Equal(t, "text", events[5].Get("content_block.type").String())
-	require.Equal(t, int64(1), events[5].Get("index").Int())
-	for _, event := range events[6 : len(events)-3] {
+	// events[2] 是 content_block_start 之后的官方 ping 帧，其余顺延一位。
+	require.Equal(t, "ping", events[2].Get("type").String())
+	require.Equal(t, "thinking_delta", events[3].Get("delta.type").String())
+	require.Equal(t, "signature_delta", events[4].Get("delta.type").String())
+	require.Equal(t, providerSignature, events[4].Get("delta.signature").String())
+	require.Equal(t, int64(0), events[5].Get("index").Int())
+	require.Equal(t, "text", events[6].Get("content_block.type").String())
+	require.Equal(t, int64(1), events[6].Get("index").Int())
+	for _, event := range events[7 : len(events)-3] {
 		require.Equal(t, "text_delta", event.Get("delta.type").String())
 	}
 	messageDelta := events[len(events)-2]
@@ -3481,7 +3484,9 @@ func TestThinkingResponsesPreserveProviderRedactedContent(t *testing.T) {
 		events := parseAnthropicSSEEventsForTest(t, out.String())
 		require.Equal(t, "redacted_thinking", events[1].Get("content_block.type").String())
 		require.Equal(t, redacted, events[1].Get("content_block.data").String())
-		require.Equal(t, "content_block_stop", events[2].Get("type").String())
+		// content_block_start 之后是官方的 ping 帧，content_block_stop 顺延一位。
+		require.Equal(t, "ping", events[2].Get("type").String())
+		require.Equal(t, "content_block_stop", events[3].Get("type").String())
 		require.Equal(t, 1, strings.Count(out.String(), "event: message_stop"))
 		requireAnthropicSSEProtocolLifecycle(t, out.String())
 	})

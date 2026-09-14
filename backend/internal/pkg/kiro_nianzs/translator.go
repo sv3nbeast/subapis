@@ -951,7 +951,11 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if _, err = io.WriteString(dst, block); err != nil {
 			return err
 		}
-		if event == "content_block_start" && requestCtx.EmitProtocolPing && !protocolPingSent {
+		// Anthropic 对每个流式响应都会在首个 content_block_start 之后发一帧 ping
+		// （见官方 streaming 文档的事件序列示例），与客户端是否为 Claude Code 无关。
+		// EmitProtocolPing 只表示"对端是 Claude Code"，不能拿它来门控这一帧，
+		// 否则普通 API 客户端收到的事件序列与原生 Claude 不一致。
+		if event == "content_block_start" && !protocolPingSent {
 			ping := "event: ping\ndata: {\"type\": \"ping\"}\n\n"
 			if _, err = io.WriteString(dst, ping); err != nil {
 				return err
@@ -1210,15 +1214,18 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}); err != nil {
 			return err
 		}
-		if err := writeEvent("content_block_delta", map[string]any{
-			"type":  "content_block_delta",
-			"index": blockIndex,
-			"delta": map[string]any{
-				"type":         "input_json_delta",
-				"partial_json": inputJSON,
-			},
-		}); err != nil {
-			return err
+		// 官方以一个空 partial_json 起手，再增量下发输入 JSON。
+		for _, chunk := range append([]string{""}, splitToolInputJSONDeltas(inputJSON)...) {
+			if err := writeEvent("content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": blockIndex,
+				"delta": map[string]any{
+					"type":         "input_json_delta",
+					"partial_json": chunk,
+				},
+			}); err != nil {
+				return err
+			}
 		}
 		if err := writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": blockIndex}); err != nil {
 			return err
@@ -1467,15 +1474,18 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 		inputJSON, _ := json.Marshal(tool.Input)
 		_, _ = outputTextBuf.Write(inputJSON)
-		if err := writeEvent("content_block_delta", map[string]any{
-			"type":  "content_block_delta",
-			"index": contentBlockIndex,
-			"delta": map[string]any{
-				"type":         "input_json_delta",
-				"partial_json": string(inputJSON),
-			},
-		}); err != nil {
-			return err
+		// 官方以一个空 partial_json 起手，再增量下发输入 JSON。
+		for _, chunk := range append([]string{""}, splitToolInputJSONDeltas(string(inputJSON))...) {
+			if err := writeEvent("content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": contentBlockIndex,
+				"delta": map[string]any{
+					"type":         "input_json_delta",
+					"partial_json": chunk,
+				},
+			}); err != nil {
+				return err
+			}
 		}
 		if err := writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": contentBlockIndex}); err != nil {
 			return err
@@ -5951,6 +5961,60 @@ func skipHeaderValue(headers []byte, offset int, valueType byte) (int, bool) {
 	default:
 		return offset, false
 	}
+}
+
+// splitToolInputJSONDeltas 把一段完整的 tool 输入 JSON 拆成若干 partial_json 片段，
+// 形态对齐 Anthropic 官方的流式 tool_use。
+//
+// 官方把工具输入按 token 边界增量下发，例如
+// `""` → `{"location":` → ` "San` → ` Francisc` → `o,` → ` CA"}`；
+// Kiro 一次性给出完整输入，若原样单帧下发，事件形态与原生 Claude 明显不同。
+// 这里在 JSON 的词法边界（引号、冒号、逗号、括号）附近切分并限制片长，
+// 拼接结果与原串逐字节相同。按 rune 切分，不会切坏多字节字符。
+func splitToolInputJSONDeltas(inputJSON string) []string {
+	const maxRunesPerChunk = 18
+	const minRunesBeforeBoundary = 4
+
+	if inputJSON == "" {
+		return nil
+	}
+	var chunks []string
+	var current []rune
+	inString := false
+	escaped := false
+
+	flush := func() {
+		if len(current) > 0 {
+			chunks = append(chunks, string(current))
+			current = current[:0]
+		}
+	}
+	for _, r := range inputJSON {
+		current = append(current, r)
+		switch {
+		case escaped:
+			escaped = false
+			continue
+		case r == '\\' && inString:
+			escaped = true
+			continue
+		case r == '"':
+			inString = !inString
+		}
+		if len(current) >= maxRunesPerChunk {
+			flush()
+			continue
+		}
+		// 仅在字符串外的结构边界处切分，避免把转义序列拆散。
+		if !inString && len(current) >= minRunesBeforeBoundary {
+			switch r {
+			case ':', ',', '{', '}', '[', ']':
+				flush()
+			}
+		}
+	}
+	flush()
+	return chunks
 }
 
 // normalizeAnthropicToolUseID 把上游的 tool use ID 规范成 Anthropic 的 toolu_ 前缀。

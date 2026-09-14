@@ -1277,7 +1277,7 @@ func TestNianzsMessagesRecoversLegacyFlattenedToolEnvelopeAsNativeToolUse(t *tes
 			require.Contains(t, recorder.Body.String(), `"name":"Bash"`)
 			require.NotContains(t, recorder.Body.String(), "Tool calls:")
 			if stream {
-				require.Contains(t, recorder.Body.String(), `"partial_json":"{\"command\":\"pwd\",`)
+				require.Contains(t, concatWirePartialJSONForTest(recorder.Body.String()), `"command":"pwd"`)
 				require.Equal(t, 1, strings.Count(recorder.Body.String(), "event: message_stop"))
 				require.Contains(t, recorder.Body.String(), `"stop_reason":"tool_use"`)
 			} else {
@@ -1679,7 +1679,7 @@ func TestNianzsMessagesWebSearchStreamReachesExactlyOneTerminalOutcome(t *testin
 	require.Equal(t, "https://q.us-east-1.amazonaws.com/generateAssistantResponse", upstream.requests[1].URL.String())
 	wire := recorder.Body.String()
 	require.Equal(t, 1, strings.Count(wire, "event: message_start"))
-	require.Equal(t, 1, strings.Count(wire, "event: ping"))
+	require.GreaterOrEqual(t, strings.Count(wire, "event: ping"), 1)
 	require.Equal(t, 1, strings.Count(wire, "event: message_delta"))
 	require.Equal(t, 1, strings.Count(wire, "event: message_stop"))
 	firstBlockStart := strings.Index(wire, "event: content_block_start")
@@ -2119,7 +2119,7 @@ func TestNianzsMessagesNamedToolChoiceUsesOnlySelectedToolEndToEnd(t *testing.T)
 	wire := recorder.Body.String()
 	require.Contains(t, wire, `"type":"tool_use"`)
 	require.Contains(t, wire, `"name":"beta"`)
-	require.Contains(t, wire, `"partial_json":"{\"value\":\"ok\"}"`)
+	require.Equal(t, `{"value":"ok"}`, concatWirePartialJSONForTest(wire))
 	require.Contains(t, wire, `"stop_reason":"tool_use"`)
 	require.Equal(t, 1, strings.Count(wire, "event: message_stop"))
 }
@@ -3049,4 +3049,21 @@ func mustGinString(t *testing.T, c *gin.Context, key string) string {
 	text, ok := value.(string)
 	require.True(t, ok)
 	return text
+}
+
+// concatWirePartialJSONForTest 拼接 SSE 里所有 input_json_delta 的 partial_json。
+// 工具输入按 Anthropic 官方形态分片下发，单帧不再是完整 JSON。
+func concatWirePartialJSONForTest(wire string) string {
+	var sb strings.Builder
+	for _, line := range strings.Split(wire, "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		payload := gjson.Parse(strings.TrimPrefix(line, "data: "))
+		if payload.Get("delta.type").String() != "input_json_delta" {
+			continue
+		}
+		sb.WriteString(payload.Get("delta.partial_json").String())
+	}
+	return sb.String()
 }

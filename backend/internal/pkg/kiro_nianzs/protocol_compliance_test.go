@@ -219,7 +219,9 @@ func TestAnthropicProtocolComplianceThinkingTextStream(t *testing.T) {
 	})
 	require.NoError(t, err)
 	requireAnthropicSSEProtocolLifecycle(t, out.String())
-	require.NotContains(t, out.String(), "event: ping")
+	// ping 按官方规范是可选的（"any number of ping events"），但真实 Claude 响应
+	// 每次都会在首个 content_block_start 后带一帧，这里跟随官方实际行为。
+	require.Equal(t, 1, strings.Count(out.String(), "event: ping"))
 	require.NotContains(t, out.String(), `"context_management"`)
 }
 

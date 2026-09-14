@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -50,6 +51,18 @@ func TestStreamToolUseBlockMatchesAnthropicShape(t *testing.T) {
 	wire := out.String()
 	require.NotContains(t, wire, "tooluse_", "the Kiro tool-use ID prefix must not reach the client")
 	require.NotContains(t, wire, `"caller"`, "a plain custom tool_use must not carry a caller field")
+	require.Contains(t, wire, "event: ping", "real Claude streams carry a ping after the first content_block_start")
+
+	// 官方以一个空 partial_json 起手，再分多帧增量下发输入；拼接后必须等于完整输入。
+	deltas := make([]string, 0, 4)
+	for _, event := range parseAnthropicSSEEventsForTest(t, wire) {
+		if event.Get("delta.type").String() == "input_json_delta" {
+			deltas = append(deltas, event.Get("delta.partial_json").String())
+		}
+	}
+	require.Greater(t, len(deltas), 2, "tool input must stream incrementally, not as one frame")
+	require.Equal(t, "", deltas[0], "the first input_json_delta must be an empty partial_json")
+	require.Equal(t, `{"city":"beijing"}`, strings.Join(deltas, ""))
 
 	var sawToolUse bool
 	for _, event := range parseAnthropicSSEEventsForTest(t, wire) {
@@ -92,4 +105,40 @@ func TestNonStreamingToolUseBlockMatchesAnthropicShape(t *testing.T) {
 	require.Equal(t, "tool_use", block.Get("type").String())
 	require.True(t, strings.HasPrefix(block.Get("id").String(), "toolu_"))
 	require.False(t, block.Get("caller").Exists())
+}
+
+// concatToolInputJSONForTest 拼接 SSE 中所有 input_json_delta 的 partial_json。
+// 工具输入按 Anthropic 官方形态分片下发，单帧不再是完整 JSON，断言需要看拼接结果。
+func concatToolInputJSONForTest(t *testing.T, sse string) string {
+	t.Helper()
+	var sb strings.Builder
+	for _, event := range parseAnthropicSSEEventsForTest(t, sse) {
+		if event.Get("delta.type").String() != "input_json_delta" {
+			continue
+		}
+		sb.WriteString(event.Get("delta.partial_json").String())
+	}
+	return sb.String()
+}
+
+// 分片必须可无损拼接回原始 JSON，且不切坏多字节字符。
+func TestSplitToolInputJSONDeltasRoundTrips(t *testing.T) {
+	inputs := []string{
+		`{"city":"北京","unit":"c"}`,
+		`{"query":"golang"}`,
+		`{}`,
+		`{"path":"/tmp/a.txt","content":"hello world, this is a longer value"}`,
+		`{"escaped":"a\"b\\c","nested":{"k":[1,2,3]}}`,
+	}
+	for _, in := range inputs {
+		chunks := splitToolInputJSONDeltas(in)
+		require.Equal(t, in, strings.Join(chunks, ""), "chunks must rejoin losslessly: %s", in)
+		for _, c := range chunks {
+			require.True(t, utf8.ValidString(c), "chunk %q must stay valid UTF-8", c)
+		}
+		if len([]rune(in)) > 8 {
+			require.Greater(t, len(chunks), 1, "a non-trivial input should stream in multiple deltas: %s", in)
+		}
+	}
+	require.Empty(t, splitToolInputJSONDeltas(""))
 }
