@@ -162,6 +162,19 @@
             <Icon name="cloud" size="sm" />
             Droid
           </button>
+          <button
+            type="button"
+            @click="form.platform = 'cursor'"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'cursor'
+                ? 'bg-white text-rose-600 shadow-sm dark:bg-dark-600 dark:text-rose-400'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <PlatformIcon platform="cursor" size="sm" />
+            Cursor
+          </button>
         </div>
         <!-- CN providers row: Kimi / Zhipu GLM / DeepSeek -->
         <div class="mt-2 flex flex-wrap rounded-lg bg-gray-100 p-1 dark:bg-dark-700">
@@ -204,6 +217,73 @@
             <PlatformIcon platform="deepseek" size="sm" />
             DeepSeek
           </button>
+        </div>
+      </div>
+
+      <!-- Cursor：凭证从本地 Cursor 安装粘贴，不走浏览器 OAuth 授权流程。 -->
+      <div v-if="form.platform === 'cursor'" class="space-y-4" data-testid="cursor-credentials">
+        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.cursor.hint') }}</p>
+        <div>
+          <label class="input-label">{{ t('admin.accounts.cursor.accessToken') }}</label>
+          <input
+            v-model="cursorAccessToken"
+            data-testid="cursor-access-token"
+            type="password"
+            autocomplete="off"
+            class="input font-mono"
+            :placeholder="t('admin.accounts.cursor.accessTokenPlaceholder')"
+          />
+          <p class="input-hint">{{ t('admin.accounts.cursor.accessTokenHint') }}</p>
+        </div>
+        <div>
+          <label class="input-label">{{ t('admin.accounts.cursor.refreshToken') }}</label>
+          <input
+            v-model="cursorRefreshToken"
+            data-testid="cursor-refresh-token"
+            type="password"
+            autocomplete="off"
+            class="input font-mono"
+            :placeholder="t('admin.accounts.cursor.refreshTokenPlaceholder')"
+          />
+          <p class="input-hint">{{ t('admin.accounts.cursor.refreshTokenHint') }}</p>
+        </div>
+        <div>
+          <label class="input-label">{{ t('admin.accounts.cursor.machineId') }}</label>
+          <input
+            v-model="cursorMachineId"
+            data-testid="cursor-machine-id"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            class="input font-mono"
+            :placeholder="t('admin.accounts.cursor.machineIdPlaceholder')"
+          />
+          <p class="input-hint">{{ t('admin.accounts.cursor.machineIdHint') }}</p>
+        </div>
+        <div>
+          <label class="input-label">{{ t('admin.accounts.cursor.macMachineId') }}</label>
+          <input
+            v-model="cursorMacMachineId"
+            data-testid="cursor-mac-machine-id"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            class="input font-mono"
+            :placeholder="t('admin.accounts.cursor.macMachineIdPlaceholder')"
+          />
+          <p class="input-hint">{{ t('admin.accounts.cursor.macMachineIdHint') }}</p>
+        </div>
+        <div>
+          <label class="input-label">{{ t('admin.accounts.cursor.clientVersion') }}</label>
+          <input
+            v-model="cursorClientVersion"
+            data-testid="cursor-client-version"
+            type="text"
+            autocomplete="off"
+            class="input font-mono"
+            :placeholder="t('admin.accounts.cursor.clientVersionPlaceholder')"
+          />
+          <p class="input-hint">{{ t('admin.accounts.cursor.clientVersionHint') }}</p>
         </div>
       </div>
 
@@ -2653,12 +2733,18 @@
         </div>
       </div>
 
-      <!-- OpenAI OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
+      <!-- OpenAI / Grok / Cursor OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
       <div
-        v-if="(form.platform === 'openai' || form.platform === 'grok') && accountCategory === 'oauth-based'"
+        v-if="
+          form.platform === 'cursor' ||
+          ((form.platform === 'openai' || form.platform === 'grok') && accountCategory === 'oauth-based')
+        "
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
+        <p v-if="form.platform === 'cursor'" class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.cursor.modelRestrictionHint') }}
+        </p>
 
         <div v-if="isOpenAIModelRestrictionDisabled" class="mb-3 rounded-lg bg-amber-50 p-3 dark:bg-amber-900/20">
           <p class="text-xs text-amber-700 dark:text-amber-400">
@@ -4378,7 +4464,9 @@ import {
   applyAntigravityProjectID,
   applyHeaderOverride,
   applyInterceptWarmup,
+  buildCursorCredentials,
   cnSupportsNativeResponses,
+  CURSOR_DEFAULT_CLIENT_VERSION,
   defaultCNAdaptiveBaseUrls,
   defaultCNBaseUrl,
   validateHeaderOverrideRows,
@@ -4520,6 +4608,31 @@ const antigravityOAuth = useAntigravityOAuth() // For Antigravity OAuth
 const grokOAuth = useGrokOAuth() // For Grok OAuth
 const kiroOAuth = useKiroOAuth() // For Kiro OAuth / IDC
 const droidOAuth = useDroidOAuth() // For Droid OAuth
+
+// Cursor 没有授权流程：凭证从本地 Cursor 安装的 storage.json 粘贴。
+const cursorAccessToken = ref('')
+const cursorRefreshToken = ref('')
+const cursorMachineId = ref('')
+const cursorMacMachineId = ref('')
+const cursorClientVersion = ref(CURSOR_DEFAULT_CLIENT_VERSION)
+
+function resetCursorCredentialFields() {
+  cursorAccessToken.value = ''
+  cursorRefreshToken.value = ''
+  cursorMachineId.value = ''
+  cursorMacMachineId.value = ''
+  cursorClientVersion.value = CURSOR_DEFAULT_CLIENT_VERSION
+}
+
+function collectCursorCredentialFields() {
+  return {
+    accessToken: cursorAccessToken.value,
+    refreshToken: cursorRefreshToken.value,
+    machineId: cursorMachineId.value,
+    macMachineId: cursorMacMachineId.value,
+    clientVersion: cursorClientVersion.value
+  }
+}
 
 // Computed: current OAuth state for template binding
 const currentAuthUrl = computed(() => {
@@ -5365,6 +5478,10 @@ const isOAuthFlow = computed(() => {
   if (form.platform === 'anthropic' && accountCategory.value === 'bedrock') {
     return false
   }
+  // Cursor 账号按 oauth 类型存储，但凭证是手工粘贴的，没有授权步骤。
+  if (form.platform === 'cursor') {
+    return false
+  }
   return accountCategory.value === 'oauth-based'
 })
 
@@ -5578,6 +5695,12 @@ watch(
       accountCategory.value = 'oauth-based'
       apiKeyBaseUrl.value = 'https://api.factory.ai/api/llm'
       apiKeyValue.value = ''
+    } else if (newPlatform === 'cursor') {
+      // Cursor 凭证手工录入，没有授权流程，但账号仍按 oauth 类型存储。
+      accountCategory.value = 'oauth-based'
+      apiKeyBaseUrl.value = ''
+      apiKeyValue.value = ''
+      resetCursorCredentialFields()
     } else {
       kiroModelMappings.value = []
     }
@@ -6440,6 +6563,30 @@ const handleSubmit = async () => {
       return
     }
     step.value = 2
+    return
+  }
+
+  // Cursor：凭证已在表单里填好，直接创建。
+  if (form.platform === 'cursor') {
+    if (!form.name.trim()) {
+      appStore.showError(t('admin.accounts.pleaseEnterAccountName'))
+      return
+    }
+    const built = buildCursorCredentials(collectCursorCredentialFields(), 'create')
+    if (!built.ok) {
+      appStore.showError(t(built.errorKey))
+      return
+    }
+    const credentials = built.credentials
+    const modelMapping = buildModelMappingObject(
+      modelRestrictionMode.value,
+      allowedModels.value,
+      modelMappings.value
+    )
+    if (modelMapping) {
+      credentials.model_mapping = modelMapping
+    }
+    await createAccountAndFinish('cursor', 'oauth' as AccountType, credentials)
     return
   }
 

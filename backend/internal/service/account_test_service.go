@@ -338,6 +338,10 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.testDroidAccountConnection(c, account, modelID)
 	}
 
+	if account.Platform == PlatformCursor {
+		return s.testCursorAccountConnection(c, account, modelID, prompt)
+	}
+
 	if account.IsKiroDirect() {
 		if s.cfg != nil && normalizeKiroEngine(s.cfg.Gateway.KiroEngine) == KiroEngineNianzs {
 			return s.testKiroAccountConnectionNianzs(c, adaptKiroAccountForNianzs(account), modelID)

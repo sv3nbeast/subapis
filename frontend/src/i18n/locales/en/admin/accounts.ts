@@ -1056,6 +1056,33 @@ export default {
         relayBaseUrlHint: 'External Anthropic-compatible upstream URL (e.g. https://your-relay.example.com); requests go to {base_url}/v1/messages',
         relayPriorityHint: 'Keep a low priority (larger number) so it acts as a fallback only — used when all native Kiro accounts fail'
       },
+      cursor: {
+        hint: 'Cursor credentials are read from a local Cursor install; there is no browser authorization step. Take cursorAuth/accessToken plus telemetry.machineId and telemetry.macMachineId from Cursor\'s storage.json.',
+        accessToken: 'Access Token',
+        accessTokenPlaceholder: 'Paste the Cursor session token ({userId}::{jwt} is accepted)',
+        accessTokenHint: 'Required. A {userId}:: prefix is stripped automatically, leaving the bare JWT.',
+        accessTokenRequired: 'Cursor access token is required',
+        refreshToken: 'Refresh Token',
+        refreshTokenPlaceholder: 'Optional: used to renew the access token once it expires',
+        refreshTokenHint: 'Leave empty to re-import the token manually after it expires.',
+        machineId: 'Machine ID',
+        machineIdPlaceholder: 'telemetry.machineId (64 hex characters)',
+        machineIdHint: 'Required. Feeds the x-cursor-checksum header the upstream validates.',
+        machineIdRequired: 'Machine ID is required',
+        machineIdInvalid: 'Machine ID must be a 64-character hex string',
+        macMachineId: 'Mac Machine ID',
+        macMachineIdPlaceholder: 'telemetry.macMachineId (64 hex characters)',
+        macMachineIdHint: 'Required. Pairs with Machine ID to identify the device in the checksum.',
+        macMachineIdRequired: 'Mac Machine ID is required',
+        macMachineIdInvalid: 'Mac Machine ID must be a 64-character hex string',
+        clientVersion: 'Client Version',
+        clientVersionPlaceholder: '3.16.17',
+        clientVersionHint: 'Leave empty for the default. Match the Cursor build the credentials came from.',
+        modelRestrictionHint: 'Without a mapping, the model list comes from this account\'s live Cursor picker catalog.',
+        editHint: 'Credentials are never echoed back. Leave a field empty to keep its stored value; only filled fields are overwritten.',
+        unchangedPlaceholder: 'Leave empty to keep unchanged',
+        toolUseUnsupported: 'Cursor accounts serve plain chat only and do not support tool use (route Claude Code / Codex elsewhere).'
+      },
       // OAuth flow
       oauth: {
         title: 'Claude Account Authorization',

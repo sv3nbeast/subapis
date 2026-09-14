@@ -63,6 +63,7 @@ const (
 	PlatformKiro        = domain.PlatformKiro
 	PlatformDroid       = domain.PlatformDroid
 	PlatformGrok        = domain.PlatformGrok
+	PlatformCursor      = domain.PlatformCursor
 	PlatformKimi        = domain.PlatformKimi
 	PlatformZhipu       = domain.PlatformZhipu
 	PlatformDeepseek    = domain.PlatformDeepseek
@@ -121,6 +122,7 @@ var AllowedQuotaPlatforms = []string{
 	PlatformKiro,
 	PlatformDroid,
 	PlatformGrok,
+	PlatformCursor,
 	PlatformKimi,
 	PlatformZhipu,
 	PlatformDeepseek,

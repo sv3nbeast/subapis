@@ -15,6 +15,7 @@ func TestAllPlatformsIncludesEveryConcretePlatform(t *testing.T) {
 		"kiro",
 		"droid",
 		"grok",
+		"cursor",
 		"kimi",
 		"zhipu",
 		"deepseek",

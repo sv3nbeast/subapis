@@ -38,6 +38,9 @@ func (s *GatewayService) ForwardAsResponses(
 	if account != nil && account.Platform == PlatformDroid {
 		return s.forwardDroidOpenAI(ctx, c, account, body, droidEndpointOpenAI, startTime)
 	}
+	if account != nil && account.Platform == PlatformCursor {
+		return s.forwardCursorAsResponses(ctx, c, account, body, startTime)
+	}
 
 	normalizedBody, normalized, err := normalizeOpenAIResponsesLegacyIngress(body)
 	if err != nil {

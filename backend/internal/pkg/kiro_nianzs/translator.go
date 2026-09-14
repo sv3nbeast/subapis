@@ -2115,9 +2115,6 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if usage.KiroCredits > 0 {
 		finalUsageMap["_sub2api_kiro_credits"] = usage.KiroCredits
 	}
-	if requestCtx.ReportUsageIterations {
-		finalUsageMap["iterations"] = []any{kiroUsageIteration(clientUsage)}
-	}
 	messageDelta := map[string]any{
 		"type": "message_delta",
 		"delta": map[string]any{

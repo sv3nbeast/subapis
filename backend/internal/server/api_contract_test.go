@@ -1377,6 +1377,7 @@ func currentSystemSettingsContractJSON(t *testing.T, base string) string {
 		"kiro":        emptyQuota(),
 		"droid":       emptyQuota(),
 		"grok":        emptyQuota(),
+		"cursor":      emptyQuota(),
 		"kimi":        emptyQuota(),
 		"zhipu":       emptyQuota(),
 		"deepseek":    emptyQuota(),

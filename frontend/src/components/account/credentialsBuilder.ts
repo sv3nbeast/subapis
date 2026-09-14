@@ -490,3 +490,83 @@ export function applyPlanType(
   }
   return credentials
 }
+
+// ========== Cursor（从本地 Cursor 安装粘贴凭证） ==========
+
+export const CURSOR_DEFAULT_CLIENT_VERSION = '3.16.17'
+
+/** telemetry.machineId / telemetry.macMachineId 都是 64 位十六进制串。 */
+const CURSOR_TELEMETRY_ID_RE = /^[0-9a-fA-F]{64}$/
+
+export type CursorCredentialFields = {
+  accessToken: string
+  refreshToken: string
+  machineId: string
+  macMachineId: string
+  clientVersion: string
+}
+
+/** Cursor 客户端导出的 token 形如 `{userId}::{jwt}`，上游只接受裸 JWT。 */
+export function normalizeCursorAccessToken(raw: string): string {
+  const trimmed = raw.trim()
+  const sep = trimmed.indexOf('::')
+  if (sep >= 0 && sep < trimmed.length - 2) {
+    return trimmed.slice(sep + 2).trim()
+  }
+  return trimmed
+}
+
+export function isCursorTelemetryId(value: string): boolean {
+  return CURSOR_TELEMETRY_ID_RE.test(value.trim())
+}
+
+/**
+ * 构造 Cursor 账号凭证。创建时必填 access_token 与两个 telemetry id
+ * （checksum 头依赖它们）；编辑时留空表示不改动该字段。
+ */
+export function buildCursorCredentials(
+  fields: CursorCredentialFields,
+  mode: 'create' | 'edit'
+): { ok: true; credentials: Record<string, unknown> } | { ok: false; errorKey: string } {
+  const credentials: Record<string, unknown> = {}
+
+  const accessToken = normalizeCursorAccessToken(fields.accessToken)
+  if (accessToken) {
+    credentials.access_token = accessToken
+  } else if (mode === 'create') {
+    return { ok: false, errorKey: 'admin.accounts.cursor.accessTokenRequired' }
+  }
+
+  const refreshToken = fields.refreshToken.trim()
+  if (refreshToken) {
+    credentials.refresh_token = refreshToken
+  }
+
+  const machineId = fields.machineId.trim()
+  if (machineId) {
+    if (!isCursorTelemetryId(machineId)) {
+      return { ok: false, errorKey: 'admin.accounts.cursor.machineIdInvalid' }
+    }
+    credentials.machine_id = machineId
+  } else if (mode === 'create') {
+    return { ok: false, errorKey: 'admin.accounts.cursor.machineIdRequired' }
+  }
+
+  const macMachineId = fields.macMachineId.trim()
+  if (macMachineId) {
+    if (!isCursorTelemetryId(macMachineId)) {
+      return { ok: false, errorKey: 'admin.accounts.cursor.macMachineIdInvalid' }
+    }
+    credentials.mac_machine_id = macMachineId
+  } else if (mode === 'create') {
+    return { ok: false, errorKey: 'admin.accounts.cursor.macMachineIdRequired' }
+  }
+
+  const clientVersion =
+    fields.clientVersion.trim() || (mode === 'create' ? CURSOR_DEFAULT_CLIENT_VERSION : '')
+  if (clientVersion) {
+    credentials.client_version = clientVersion
+  }
+
+  return { ok: true, credentials }
+}

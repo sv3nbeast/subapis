@@ -271,12 +271,10 @@ func TestAnthropicProtocolComplianceClaudeCodeResponseHints(t *testing.T) {
 	require.True(t, messageDelta.data.Get("context_management.applied_edits").IsArray())
 	require.Equal(t, int64(0), messageDelta.data.Get("context_management.applied_edits.#").Int())
 	require.False(t, messageDelta.data.Get("usage.cache_creation").Exists())
-	require.True(t, messageDelta.data.Get("usage.iterations").IsArray())
-	require.Equal(t, int64(1), messageDelta.data.Get("usage.iterations.#").Int())
-	require.Equal(t, "message", messageDelta.data.Get("usage.iterations.0.type").String())
-	require.True(t, messageDelta.data.Get("usage.iterations.0.cache_creation").Exists())
-	require.Equal(t, messageDelta.data.Get("usage.input_tokens").Int(), messageDelta.data.Get("usage.iterations.0.input_tokens").Int())
-	require.Equal(t, messageDelta.data.Get("usage.output_tokens").Int(), messageDelta.data.Get("usage.iterations.0.output_tokens").Int())
+	// 对照真实 Anthropic 上游（官转分组）实测：message_delta.usage 不含 iterations，
+	// 官方 streaming 文档里也没有这个字段。它是我们自造的，会暴露非原生响应。
+	require.False(t, messageDelta.data.Get("usage.iterations").Exists(),
+		"usage must not carry a non-standard iterations array")
 
 	frames := strings.Split(strings.TrimSuffix(out.String(), "\n\n"), "\n\n")
 	require.GreaterOrEqual(t, len(frames), 7)
@@ -350,7 +348,8 @@ func TestAnthropicProtocolComplianceClaudeCodePureTextFingerprintShape(t *testin
 	require.Equal(t, []string{"N", "43QRR"}, textParts)
 	messageDelta := events[len(events)-2].data
 	require.Equal(t, int64(7), messageDelta.Get("usage.output_tokens").Int())
-	require.Equal(t, int64(7), messageDelta.Get("usage.iterations.0.output_tokens").Int())
+	require.Equal(t, int64(7), messageDelta.Get("usage.output_tokens").Int())
+	require.False(t, messageDelta.Get("usage.iterations").Exists())
 }
 
 func TestAnthropicProtocolComplianceClaudeCodeSimulatedUsageFraming(t *testing.T) {
@@ -433,7 +432,8 @@ func TestAnthropicProtocolComplianceClaudeCodeSimulatedUsageFraming(t *testing.T
 			delta := events[len(events)-2].data
 			require.Equal(t, tt.wantInput, start.Get("message.usage.input_tokens").Int())
 			require.Equal(t, tt.wantInput, delta.Get("usage.input_tokens").Int())
-			require.Equal(t, tt.wantInput, delta.Get("usage.iterations.0.input_tokens").Int())
+			require.Equal(t, tt.wantInput, delta.Get("usage.input_tokens").Int())
+			require.False(t, delta.Get("usage.iterations").Exists())
 			require.Equal(t, tt.wantCache, start.Get("message.usage.cache_creation_input_tokens").Int())
 			require.Equal(t, tt.wantCache, delta.Get("usage.cache_creation_input_tokens").Int())
 		})
@@ -468,7 +468,8 @@ func TestAnthropicProtocolComplianceDelayedMessageStartNormalizesUsageOnce(t *te
 	})
 	require.Equal(t, int64(130), events[0].data.Get("message.usage.input_tokens").Int())
 	require.Equal(t, int64(130), events[1].data.Get("usage.input_tokens").Int())
-	require.Equal(t, int64(130), events[1].data.Get("usage.iterations.0.input_tokens").Int())
+	require.Equal(t, int64(130), events[1].data.Get("usage.input_tokens").Int())
+	require.False(t, events[1].data.Get("usage.iterations").Exists())
 }
 
 func TestBuildKiroPayloadProtocolResponseHintsRequireExactBetaTokens(t *testing.T) {

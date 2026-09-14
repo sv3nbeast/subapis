@@ -33,6 +33,8 @@ const (
 	EndpointDroidMessages        = "/a/v1/messages"
 	EndpointDroidResponses       = "/o/v1/responses"
 	EndpointDroidCompletions     = "/o/v1/chat/completions"
+	// Cursor 的三条入站协议都落到同一个上游 RPC，用量与统计据此归口。
+	EndpointCursorAgentRun = "/agent.v1.AgentService/Run"
 )
 
 const EndpointAntigravityGenerateContent = "/v1internal:streamGenerateContent"
@@ -241,6 +243,10 @@ func DeriveUpstreamEndpoint(inbound, rawRequestPath, platform string) string {
 			return EndpointDroidResponses
 		}
 		return EndpointDroidMessages
+
+	case service.PlatformCursor:
+		// Cursor 只有一个上游端点：入站协议的差异在网关侧消化。
+		return EndpointCursorAgentRun
 	}
 
 	// Unknown platform — fall back to inbound.

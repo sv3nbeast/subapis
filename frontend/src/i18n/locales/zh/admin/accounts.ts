@@ -1132,6 +1132,33 @@ export default {
         relayBaseUrlHint: '外部 Anthropic 兼容上游地址（如 https://your-relay.example.com），将请求 {base_url}/v1/messages',
         relayPriorityHint: '建议保持较低优先级（数字更大），仅作兜底——原生 Kiro 账号全部异常时才启用'
       },
+      cursor: {
+        hint: 'Cursor 账号的凭证从本地 Cursor 安装中读取，没有浏览器授权步骤。在 Cursor 的 storage.json 里取 cursorAuth/accessToken 与 telemetry.machineId、telemetry.macMachineId。',
+        accessToken: 'Access Token',
+        accessTokenPlaceholder: '粘贴 Cursor 会话 token（支持 {userId}::{jwt} 形式）',
+        accessTokenHint: '必填。带 {userId}:: 前缀时会自动去掉，只保留 JWT。',
+        accessTokenRequired: '请填写 Cursor Access Token',
+        refreshToken: 'Refresh Token',
+        refreshTokenPlaceholder: '可选：用于 access token 过期后自动续期',
+        refreshTokenHint: '留空则 token 过期后需要手动重新导入。',
+        machineId: 'Machine ID',
+        machineIdPlaceholder: 'telemetry.machineId（64 位十六进制）',
+        machineIdHint: '必填。参与 x-cursor-checksum 计算，与上游风控直接相关。',
+        machineIdRequired: '请填写 Machine ID',
+        machineIdInvalid: 'Machine ID 必须是 64 位十六进制字符串',
+        macMachineId: 'Mac Machine ID',
+        macMachineIdPlaceholder: 'telemetry.macMachineId（64 位十六进制）',
+        macMachineIdHint: '必填。与 Machine ID 一起构成 checksum 的设备标识。',
+        macMachineIdRequired: '请填写 Mac Machine ID',
+        macMachineIdInvalid: 'Mac Machine ID 必须是 64 位十六进制字符串',
+        clientVersion: '客户端版本',
+        clientVersionPlaceholder: '3.16.17',
+        clientVersionHint: '留空使用默认值。建议与导出凭证的 Cursor 版本保持一致。',
+        modelRestrictionHint: '不配置映射时，模型列表取自该账号在线的 Cursor picker 目录。',
+        editHint: '凭证不回显。留空表示保留现有值，只有填写的字段才会被覆盖。',
+        unchangedPlaceholder: '留空表示不修改',
+        toolUseUnsupported: 'Cursor 账号只支持纯对话，不支持工具调用（Claude Code / Codex 请使用其他平台）。'
+      },
       // OAuth flow
       oauth: {
         title: 'Claude 账号授权',

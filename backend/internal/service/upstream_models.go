@@ -15,6 +15,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/cursor"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/droid"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 )
@@ -579,6 +580,10 @@ func (s *AccountTestService) fetchUpstreamModelList(ctx context.Context, account
 	}
 	if account.IsDroid() {
 		models, err := s.fetchDroidSupportedModels(ctx, account)
+		return models, nil, err
+	}
+	if account.Platform == PlatformCursor {
+		models, err := s.fetchCursorSupportedModels(ctx, account)
 		return models, nil, err
 	}
 
@@ -1617,6 +1622,20 @@ func (s *AccountTestService) fetchDroidSupportedModels(ctx context.Context, acco
 		return defaultModels, nil
 	}
 	return dedupeAndSortModelIDs(append(defaultModels, models...)), nil
+}
+
+// fetchCursorSupportedModels 读取账号的 Cursor picker 目录。拉不到时回落到内置
+// 快照，与 Droid 一致：模型同步失败不应该让账号变成「零可用模型」。
+func (s *AccountTestService) fetchCursorSupportedModels(ctx context.Context, account *Account) ([]string, error) {
+	models, err := FetchCursorAvailableModels(ctx, account)
+	if err != nil {
+		return cursor.DefaultModelIDs(), nil
+	}
+	ids := cursor.ModelIDs(models)
+	if len(ids) == 0 {
+		return cursor.DefaultModelIDs(), nil
+	}
+	return ids, nil
 }
 
 func extractUpstreamModelPage(body []byte) ([]string, string, error) {

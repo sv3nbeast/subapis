@@ -363,6 +363,16 @@ func ProvideDroidTokenProvider(
 	return p
 }
 
+func ProvideCursorTokenProvider(
+	accountRepo AccountRepository,
+	tokenCache GeminiTokenCache,
+	refreshAPI *OAuthRefreshAPI,
+) *CursorTokenProvider {
+	p := NewCursorTokenProvider(accountRepo, tokenCache)
+	p.SetRefreshAPI(refreshAPI, NewCursorTokenRefresher())
+	return p
+}
+
 func ProvideKiroCooldownStore(redisClient *redis.Client) KiroCooldownStore {
 	return newDualKiroCooldownStore(redisClient)
 }
@@ -754,6 +764,7 @@ func ProvideGatewayService(
 	kiroTokenProvider *KiroTokenProvider,
 	nianzsKiroTokenProvider *NianzsKiroTokenProvider,
 	droidTokenProvider *DroidTokenProvider,
+	cursorTokenProvider *CursorTokenProvider,
 	kiroCooldownStore KiroCooldownStore,
 	sessionLimitCache SessionLimitCache,
 	rpmCache RPMCache,
@@ -777,6 +788,7 @@ func ProvideGatewayService(
 	)
 	svc.SetCompositeResolver(compositeResolver)
 	svc.SetNianzsKiroTokenProvider(nianzsKiroTokenProvider)
+	svc.SetCursorTokenProvider(cursorTokenProvider)
 	return svc
 }
 
@@ -1045,6 +1057,7 @@ var ProviderSet = wire.NewSet(
 	ProvideKiroTokenProvider,
 	ProvideNianzsKiroTokenProvider,
 	ProvideDroidTokenProvider,
+	ProvideCursorTokenProvider,
 	ProvideKiroCooldownStore,
 	ProvideGrokTokenProvider,
 	ProvideOpenAITokenProvider,

@@ -14,6 +14,7 @@ const concretePlatforms = [
   'kiro',
   'droid',
   'grok',
+  'cursor',
   'kimi',
   'zhipu',
   'deepseek'

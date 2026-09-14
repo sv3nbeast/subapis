@@ -752,12 +752,85 @@
         </div>
       </div>
 
-      <!-- OpenAI / Kiro / Grok OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
+      <!-- Cursor：凭证轮换（token 过期后重新导入，留空表示不改动该字段） -->
       <div
-        v-if="(account.platform === 'openai' || account.platform === 'kiro' || account.platform === 'grok') && account.type === 'oauth'"
+        v-if="account.platform === 'cursor'"
+        class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="cursor-credentials"
+      >
+        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.cursor.editHint') }}</p>
+        <div>
+          <label class="input-label">{{ t('admin.accounts.cursor.accessToken') }}</label>
+          <input
+            v-model="cursorAccessToken"
+            data-testid="cursor-access-token"
+            type="password"
+            autocomplete="off"
+            class="input font-mono"
+            :placeholder="t('admin.accounts.cursor.unchangedPlaceholder')"
+          />
+        </div>
+        <div>
+          <label class="input-label">{{ t('admin.accounts.cursor.refreshToken') }}</label>
+          <input
+            v-model="cursorRefreshToken"
+            data-testid="cursor-refresh-token"
+            type="password"
+            autocomplete="off"
+            class="input font-mono"
+            :placeholder="t('admin.accounts.cursor.unchangedPlaceholder')"
+          />
+        </div>
+        <div>
+          <label class="input-label">{{ t('admin.accounts.cursor.machineId') }}</label>
+          <input
+            v-model="cursorMachineId"
+            data-testid="cursor-machine-id"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            class="input font-mono"
+            :placeholder="t('admin.accounts.cursor.unchangedPlaceholder')"
+          />
+        </div>
+        <div>
+          <label class="input-label">{{ t('admin.accounts.cursor.macMachineId') }}</label>
+          <input
+            v-model="cursorMacMachineId"
+            data-testid="cursor-mac-machine-id"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            class="input font-mono"
+            :placeholder="t('admin.accounts.cursor.unchangedPlaceholder')"
+          />
+        </div>
+        <div>
+          <label class="input-label">{{ t('admin.accounts.cursor.clientVersion') }}</label>
+          <input
+            v-model="cursorClientVersion"
+            data-testid="cursor-client-version"
+            type="text"
+            autocomplete="off"
+            class="input font-mono"
+            :placeholder="t('admin.accounts.cursor.unchangedPlaceholder')"
+          />
+        </div>
+      </div>
+
+      <!-- OpenAI / Kiro / Grok / Cursor OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
+      <div
+        v-if="
+          account.platform === 'cursor' ||
+          ((account.platform === 'openai' || account.platform === 'kiro' || account.platform === 'grok') &&
+            account.type === 'oauth')
+        "
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
+        <p v-if="account.platform === 'cursor'" class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.cursor.modelRestrictionHint') }}
+        </p>
 
         <div
           v-if="account.platform === 'openai' && isOpenAIModelRestrictionDisabled"
@@ -3104,6 +3177,7 @@ import {
   applyAntigravityProjectID,
   applyHeaderOverride,
   applyInterceptWarmup,
+  buildCursorCredentials,
   isCustomGrokBaseUrl,
   isHeaderOverrideCapable,
   splitHeaderOverridesObject,
@@ -3339,6 +3413,12 @@ const modelMappings = ref<ModelMapping[]>([])
 const openAICompactModelMappings = ref<ModelMapping[]>([])
 const modelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const allowedModels = ref<string[]>([])
+// Cursor 凭证轮换：编辑态一律以空值呈现，留空即保留原凭证，避免把脱敏回显写回去。
+const cursorAccessToken = ref('')
+const cursorRefreshToken = ref('')
+const cursorMachineId = ref('')
+const cursorMacMachineId = ref('')
+const cursorClientVersion = ref('')
 const DEFAULT_POOL_MODE_RETRY_COUNT = 3
 const MAX_POOL_MODE_RETRY_COUNT = 10
 const poolModeEnabled = ref(false)
@@ -3855,6 +3935,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   void nextTick(() => {
     syncingForm.value = false
   })
+  // 凭证从不回显：留空即保留后端已存的 Cursor 凭证。
+  cursorAccessToken.value = ''
+  cursorRefreshToken.value = ''
+  cursorMachineId.value = ''
+  cursorMacMachineId.value = ''
+  cursorClientVersion.value = ''
   antigravityMixedChannelConfirmed.value = false
   showMixedChannelWarning.value = false
   mixedChannelWarningDetails.value = null
@@ -5309,6 +5395,40 @@ const handleSubmit = async () => {
       } else {
         delete newCredentials.model_mapping
 
+      }
+
+      updatePayload.credentials = newCredentials
+    }
+
+    // Cursor: 凭证字段留空表示保留原值，只覆盖真正填了的字段。
+    if (props.account.platform === 'cursor') {
+      const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
+        ((props.account.credentials as Record<string, unknown>) || {})
+      const built = buildCursorCredentials(
+        {
+          accessToken: cursorAccessToken.value,
+          refreshToken: cursorRefreshToken.value,
+          machineId: cursorMachineId.value,
+          macMachineId: cursorMacMachineId.value,
+          clientVersion: cursorClientVersion.value
+        },
+        'edit'
+      )
+      if (!built.ok) {
+        appStore.showError(t(built.errorKey))
+        return
+      }
+      const newCredentials: Record<string, unknown> = { ...currentCredentials, ...built.credentials }
+
+      const modelMapping = buildModelMappingObject(
+        modelRestrictionMode.value,
+        allowedModels.value,
+        modelMappings.value
+      )
+      if (modelMapping) {
+        newCredentials.model_mapping = modelMapping
+      } else {
+        delete newCredentials.model_mapping
       }
 
       updatePayload.credentials = newCredentials

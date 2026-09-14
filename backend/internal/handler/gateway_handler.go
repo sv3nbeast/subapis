@@ -17,6 +17,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/cursor"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/droid"
 	pkgerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
@@ -1728,6 +1729,10 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	}
 	if platform == service.PlatformDroid {
 		returnGatewayModelIDs(c, filterGatewayModelsByGroupConfig(droid.DefaultModelIDs(), apiKey), platform)
+		return
+	}
+	if platform == service.PlatformCursor {
+		returnGatewayModelIDs(c, filterGatewayModelsByGroupConfig(cursor.DefaultModelIDs(), apiKey), platform)
 		return
 	}
 	if platform == service.PlatformAnthropic {

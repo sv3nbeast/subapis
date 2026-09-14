@@ -18,6 +18,7 @@ export const CONCRETE_PLATFORM_OPTIONS = [
   { value: 'kiro', label: 'Kiro' },
   { value: 'droid', label: 'Droid' },
   { value: 'grok', label: 'Grok' },
+  { value: 'cursor', label: 'Cursor' },
   { value: 'kimi', label: 'Kimi' },
   { value: 'zhipu', label: 'Zhipu GLM' },
   { value: 'deepseek', label: 'DeepSeek' }
@@ -36,9 +37,11 @@ export const GROUP_PLATFORM_OPTIONS = [
 
 /**
  * Concrete platforms accepted by CompositeModelRoute.target_platform.
- * Kiro and Droid can own direct groups, but are not composite route targets.
+ * Kiro, Droid, and Cursor can own direct groups, but are not composite route
+ * targets. Cursor in particular serves plain chat only, so it cannot stand in
+ * for another platform behind a composite route.
  */
-const COMPOSITE_ROUTE_EXCLUDED_PLATFORMS = new Set<AccountPlatform>(['kiro', 'droid'])
+const COMPOSITE_ROUTE_EXCLUDED_PLATFORMS = new Set<AccountPlatform>(['kiro', 'droid', 'cursor'])
 
 export const COMPOSITE_ROUTE_PLATFORM_OPTIONS = CONCRETE_PLATFORM_OPTIONS.filter(
   (option) => !COMPOSITE_ROUTE_EXCLUDED_PLATFORMS.has(option.value)

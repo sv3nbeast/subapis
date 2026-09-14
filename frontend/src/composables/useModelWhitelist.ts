@@ -123,6 +123,23 @@ const droidModels = [
   'gpt-5-2025-08-07'
 ]
 
+// Cursor picker（与后端 internal/pkg/cursor/models.go 的内置快照对应；
+// 真实可用模型随订阅等级变化，可用"预览上游模型"按账号拉取在线目录）
+const cursorModels = [
+  'default',
+  'composer-2.5', 'composer-1',
+  'grok-4.6', 'grok-4.5',
+  'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-opus-4-5',
+  'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-sonnet-4',
+  'claude-fable-5', 'claude-haiku-4-5',
+  'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4',
+  'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5.3-codex', 'gpt-5.2', 'gpt-5.1', 'gpt-5-mini',
+  'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash',
+  'gemini-3.1-pro', 'gemini-2.5-flash',
+  'kimi-k3', 'kimi-k2.7-code',
+  'glm-5.2', 'GLM-5.1', 'GLM-4.7'
+]
+
 // 智谱 GLM
 const zhipuModels = [
   'glm-4', 'glm-4v', 'glm-4-plus', 'glm-4-0520',
@@ -280,6 +297,7 @@ const allModelsList: string[] = [
   ...geminiModels,
   ...kiroModels,
   ...droidModels,
+  ...cursorModels,
   ...zhipuModels,
   ...qwenModels,
   ...deepseekModels,
@@ -513,6 +531,7 @@ export function getModelsByPlatform(platform: string): string[] {
     case 'antigravity': return antigravityModels
     case 'kiro': return kiroModels
     case 'droid': return droidModels
+    case 'cursor': return cursorModels
     case 'zhipu': return zhipuModels
     case 'qwen': return qwenModels
     case 'deepseek': return deepseekModels

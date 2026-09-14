@@ -1080,6 +1080,7 @@ type GatewayService struct {
 	kiroTokenProvider          *KiroTokenProvider
 	nianzsKiroTokenProvider    *NianzsKiroTokenProvider
 	droidTokenProvider         *DroidTokenProvider
+	cursorTokenProvider        *CursorTokenProvider
 	kiroCooldownStore          KiroCooldownStore
 	nianzsKiroCooldownStore    NianzsKiroCooldownStore
 	sessionLimitCache          SessionLimitCache // 会话数量限制缓存（仅 Anthropic OAuth/SetupToken）
@@ -1244,6 +1245,12 @@ func NewGatewayService(
 func (s *GatewayService) SetNianzsKiroTokenProvider(provider *NianzsKiroTokenProvider) {
 	if s != nil {
 		s.nianzsKiroTokenProvider = provider
+	}
+}
+
+func (s *GatewayService) SetCursorTokenProvider(provider *CursorTokenProvider) {
+	if s != nil {
+		s.cursorTokenProvider = provider
 	}
 }
 
@@ -7252,6 +7259,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	}
 	if account != nil && account.Platform == PlatformDroid {
 		return s.forwardDroidMessages(ctx, c, account, parsed, startTime)
+	}
+	if account != nil && account.Platform == PlatformCursor {
+		return s.forwardCursorMessages(ctx, c, account, parsed, startTime)
 	}
 
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
@@ -14131,6 +14141,18 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 			for model := range mapping {
 				modelSet[model] = struct{}{}
 			}
+		}
+	}
+
+	// Cursor 未配置映射时用账号的在线 picker 目录：可用模型随订阅等级与客户端
+	// 版本变动，内置快照只作为拉取失败时的兜底（由 handler 的 fallback 提供）。
+	if !hasAnyMapping && platform == PlatformCursor {
+		if models := s.cursorPickerModelIDs(ctx, accounts); len(models) > 0 {
+			if s.modelsListCache != nil {
+				s.modelsListCache.Set(cacheKey, cloneStringSlice(models), s.modelsListCacheTTL)
+				modelsListCacheStoreTotal.Add(1)
+			}
+			return cloneStringSlice(models)
 		}
 	}
 

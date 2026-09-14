@@ -375,7 +375,7 @@ func normalizeKiroEndpointFields(g *Group) {
 
 func supportsGatewayNonStreamMessagesPlatform(platform string) bool {
 	switch platform {
-	case PlatformAnthropic, PlatformGemini, PlatformAntigravity, PlatformKiro, PlatformDroid:
+	case PlatformAnthropic, PlatformGemini, PlatformAntigravity, PlatformKiro, PlatformDroid, PlatformCursor:
 		return true
 	default:
 		return false
