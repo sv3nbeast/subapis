@@ -1675,7 +1675,8 @@ func TestOpenAIResponsesWebSocket_PassthroughKeepsTurnMappingSnapshot(t *testing
 	require.Equal(t, "gpt-5.6-sol", *got.logs[0].UpstreamModel)
 	require.NotNil(t, got.logs[0].ModelMappingChain)
 	require.Equal(t, "sol→gpt-5.6-sol", *got.logs[0].ModelMappingChain)
-	require.InDelta(t, 40e-6, got.logs[0].TotalCost, 1e-12,
+	// gpt-5.6-sol 官方现行价：输入 $4/MTok、输出 $20/MTok → 2*4e-6 + 1*2e-5 = 2.8e-5
+	require.InDelta(t, 28e-6, got.logs[0].TotalCost, 1e-12,
 		"the in-flight turn must retain the channel-mapped billing model used when it was sent")
 
 	require.Equal(t, "sol", got.logs[1].Model)
@@ -1683,7 +1684,8 @@ func TestOpenAIResponsesWebSocket_PassthroughKeepsTurnMappingSnapshot(t *testing
 	require.Equal(t, "gpt-5.6-terra", *got.logs[1].UpstreamModel)
 	require.NotNil(t, got.logs[1].ModelMappingChain)
 	require.Equal(t, "sol→gpt-5.6-terra", *got.logs[1].ModelMappingChain)
-	require.InDelta(t, got.logs[1].TotalCost*2.5, got.logs[0].TotalCost, 1e-12,
+	// sol 2.8e-5 / terra 1.6e-5 = 1.75（Sol 2026-08 降价后的比值）
+	require.InDelta(t, got.logs[1].TotalCost*1.75, got.logs[0].TotalCost, 1e-12,
 		"the next turn must use the updated channel mapping")
 }
 
@@ -1708,7 +1710,7 @@ func TestOpenAIResponsesWebSocket_CtxPoolAppliesPerTurnMappingAndPreservesReques
 	require.Len(t, got.logs, 2)
 	require.Equal(t, "gpt-5.6-sol", got.logs[0].RequestedModel)
 	require.Nil(t, got.logs[0].ModelMappingChain)
-	require.InDelta(t, 40e-6, got.logs[0].TotalCost, 1e-12)
+	require.InDelta(t, 28e-6, got.logs[0].TotalCost, 1e-12)
 	require.Equal(t, "gpt-5.6-terra", got.logs[1].RequestedModel)
 	require.NotNil(t, got.logs[1].ModelMappingChain)
 	require.Equal(t, "gpt-5.6-terra→gpt-5.6-sol", *got.logs[1].ModelMappingChain)
