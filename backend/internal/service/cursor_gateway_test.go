@@ -76,18 +76,27 @@ func TestCursorTokenCacheKeySharesCredentialAcrossAccounts(t *testing.T) {
 	}
 }
 
-func TestGuardCursorToolRequest(t *testing.T) {
-	if err := guardCursorToolRequest(cursorRunRequest{}); err != nil {
-		t.Fatalf("tool-free request rejected: %v", err)
+func TestGuardCursorRequest(t *testing.T) {
+	if err := guardCursorRequest(cursorRunRequest{}); err != nil {
+		t.Fatalf("plain text request rejected: %v", err)
 	}
 	// Silently dropping tools would leave Claude Code / Codex waiting forever
 	// for a tool call the Ask-mode upstream can never emit.
-	err := guardCursorToolRequest(cursorRunRequest{HasTools: true})
+	err := guardCursorRequest(cursorRunRequest{HasTools: true})
 	if err == nil {
 		t.Fatal("request with tools was accepted; Cursor cannot serve tool use")
 	}
 	if !strings.Contains(err.Error(), "tool use") {
 		t.Errorf("error = %q, want it to name tool use", err)
+	}
+	// Dropping images silently is worse than failing: the model answers
+	// confidently about an image it never received.
+	err = guardCursorRequest(cursorRunRequest{HasImages: true})
+	if err == nil {
+		t.Fatal("request with images was accepted; the Run payload has no image field")
+	}
+	if !strings.Contains(err.Error(), "image") {
+		t.Errorf("error = %q, want it to name image input", err)
 	}
 }
 
@@ -161,31 +170,50 @@ func TestCursorRunOptsFromResponsesAndChat(t *testing.T) {
 
 func TestCursorContentText(t *testing.T) {
 	tests := []struct {
-		name string
-		raw  string
-		want string
+		name      string
+		raw       string
+		want      string
+		wantImage bool
 	}{
 		{name: "plain string", raw: `"hello"`, want: "hello"},
 		{name: "null collapses to empty", raw: `null`, want: ""},
 		{name: "absent collapses to empty", raw: ``, want: ""},
 		{name: "content parts are concatenated", raw: `[{"type":"text","text":"a"},{"type":"text","text":"b"}]`, want: "ab"},
 		{name: "untyped parts count as text", raw: `[{"text":"a"}]`, want: "a"},
-		{name: "non-text parts are skipped", raw: `[{"type":"image","text":"x"},{"type":"text","text":"keep"}]`, want: "keep"},
+		{
+			name:      "image parts are reported, not silently dropped",
+			raw:       `[{"type":"image_url"},{"type":"text","text":"keep"}]`,
+			want:      "keep",
+			wantImage: true,
+		},
+		{
+			name:      "responses-style input_image is reported too",
+			raw:       `[{"type":"input_image"},{"type":"text","text":"keep"}]`,
+			want:      "keep",
+			wantImage: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := cursorContentText(json.RawMessage(tt.raw)); got != tt.want {
+			got, hadImage := cursorContentText(json.RawMessage(tt.raw))
+			if got != tt.want {
 				t.Errorf("cursorContentText(%s) = %q, want %q", tt.raw, got, tt.want)
+			}
+			if hadImage != tt.wantImage {
+				t.Errorf("hadImage = %v, want %v", hadImage, tt.wantImage)
 			}
 		})
 	}
 }
 
 func TestCursorMessagesFromChatFlattensContent(t *testing.T) {
-	got := cursorMessagesFromChat([]apicompat.ChatMessage{
+	got, droppedImages := cursorMessagesFromChat([]apicompat.ChatMessage{
 		{Role: "system", Content: json.RawMessage(`"be terse"`)},
 		{Role: "user", Content: json.RawMessage(`[{"type":"text","text":"hi "},{"type":"text","text":"there"}]`)},
 	})
+	if droppedImages {
+		t.Error("droppedImages = true for a text-only conversation")
+	}
 	want := []cursor.ChatMessage{
 		{Role: "system", Content: "be terse"},
 		{Role: "user", Content: "hi there"},

@@ -21,6 +21,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/cursor"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/droid"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
@@ -2750,6 +2751,35 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 			return
 		}
 		response.Success(c, buildMappedGrokModels(mapping))
+		return
+	}
+
+	// Cursor 账号：优先回显映射里的模型；没有映射时用该账号的在线 picker 目录，
+	// 拉不到再回落到内置快照。否则管理端会拿到与 Cursor 无关的默认模型集。
+	if account.Platform == service.PlatformCursor {
+		if mapping := account.GetModelMapping(); len(mapping) > 0 {
+			requested := make([]string, 0, len(mapping))
+			for model := range mapping {
+				requested = append(requested, model)
+			}
+			sort.Strings(requested)
+			models := make([]cursor.Model, 0, len(requested))
+			for _, model := range requested {
+				models = append(models, cursor.Model{
+					ID:          model,
+					Object:      "model",
+					OwnedBy:     "cursor",
+					DisplayName: model,
+				})
+			}
+			response.Success(c, models)
+			return
+		}
+		if live, err := service.FetchCursorAvailableModels(c.Request.Context(), account); err == nil && len(live) > 0 {
+			response.Success(c, cursor.ModelsFromAvailable(live))
+			return
+		}
+		response.Success(c, cursor.DefaultModels)
 		return
 	}
 

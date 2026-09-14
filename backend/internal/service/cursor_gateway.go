@@ -27,6 +27,7 @@ type cursorRunRequest struct {
 	RequestModel  string // 客户端请求的模型（用于回写与计费口径）
 	Opts          cursor.RunOpts
 	HasTools      bool
+	HasImages     bool
 	RequestStream bool
 	StartTime     time.Time
 }
@@ -58,15 +59,17 @@ func (s *GatewayService) forwardCursorMessages(ctx context.Context, c *gin.Conte
 		return nil, fmt.Errorf("cursor anthropic: convert: %w", err)
 	}
 
+	messages, droppedImages := cursorMessagesFromChat(ccReq.Messages)
 	run := cursorRunRequest{
-		Messages:      cursorMessagesFromChat(ccReq.Messages),
+		Messages:      messages,
 		RequestModel:  req.Model,
 		Opts:          cursorRunOptsFromAnthropic(&req),
 		HasTools:      len(req.Tools) > 0,
+		HasImages:     droppedImages,
 		RequestStream: req.Stream,
 		StartTime:     startTime,
 	}
-	if err := guardCursorToolRequest(run); err != nil {
+	if err := guardCursorRequest(run); err != nil {
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
@@ -95,15 +98,17 @@ func (s *GatewayService) forwardCursorAsChatCompletions(ctx context.Context, c *
 		return nil, fmt.Errorf("cursor chat: model is required")
 	}
 
+	messages, droppedImages := cursorMessagesFromChat(req.Messages)
 	run := cursorRunRequest{
-		Messages:      cursorMessagesFromChat(req.Messages),
+		Messages:      messages,
 		RequestModel:  req.Model,
 		Opts:          cursorRunOptsFromChat(&req),
 		HasTools:      len(req.Tools) > 0 || len(req.Functions) > 0,
+		HasImages:     droppedImages,
 		RequestStream: req.Stream,
 		StartTime:     startTime,
 	}
-	if err := guardCursorToolRequest(run); err != nil {
+	if err := guardCursorRequest(run); err != nil {
 		writeGatewayCCError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
@@ -139,15 +144,17 @@ func (s *GatewayService) forwardCursorAsResponses(ctx context.Context, c *gin.Co
 		return nil, fmt.Errorf("cursor responses: convert: %w", err)
 	}
 
+	messages, droppedImages := cursorMessagesFromChat(ccReq.Messages)
 	run := cursorRunRequest{
-		Messages:      cursorMessagesFromChat(ccReq.Messages),
+		Messages:      messages,
 		RequestModel:  req.Model,
 		Opts:          cursorRunOptsFromResponses(&req),
 		HasTools:      len(req.Tools) > 0,
+		HasImages:     droppedImages,
 		RequestStream: req.Stream,
 		StartTime:     startTime,
 	}
-	if err := guardCursorToolRequest(run); err != nil {
+	if err := guardCursorRequest(run); err != nil {
 		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
@@ -164,14 +171,20 @@ func (s *GatewayService) forwardCursorAsResponses(ctx context.Context, c *gin.Co
 	return s.bufferCursorAsResponses(c, stream, run)
 }
 
-// guardCursorToolRequest 对带工具的请求快速失败。AgentService/Run 在 Ask 模式下
-// 既不接受工具定义也不产出 tool_use；静默丢弃会让 Claude Code / Codex 这类
-// 客户端一直等一个永远不会到来的工具调用，报错比挂起有用得多。
-func guardCursorToolRequest(run cursorRunRequest) error {
-	if !run.HasTools {
-		return nil
+// guardCursorRequest 对 Ask 模式承载不了的请求快速失败。
+//
+// 工具：Run 在 Ask 模式下既不接受工具定义也不产出 tool_use，静默丢弃会让
+// Claude Code / Codex 一直等一个永远不会到来的工具调用。
+// 图片：Run 的用户消息没有图片字段（Cursor 的图片走另一条 StreamUnifiedChat
+// 链路），继续发只会让模型看不到图却照常作答，答案错得毫无提示。
+func guardCursorRequest(run cursorRunRequest) error {
+	if run.HasTools {
+		return fmt.Errorf("cursor accounts do not support tool use: the upstream Ask-mode endpoint accepts plain text turns only. Route tool-calling clients (Claude Code, Codex) to another platform")
 	}
-	return fmt.Errorf("cursor accounts do not support tool use: the upstream Ask-mode endpoint accepts plain text turns only. Route tool-calling clients (Claude Code, Codex) to another platform")
+	if run.HasImages {
+		return fmt.Errorf("cursor accounts do not support image input: the upstream Ask-mode endpoint carries text turns only")
+	}
+	return nil
 }
 
 // startCursorRun 解析模型、拿到有效凭证并建立上游流；命中 401 时强制轮换一次重试。
@@ -268,7 +281,7 @@ func isCursorAuthError(err error) bool {
 // resolveCursorRunModel 把客户端模型名映射成 AgentService/Run 接受的参数化 slug。
 func (s *GatewayService) resolveCursorRunModel(ctx context.Context, c *gin.Context, account *Account, run cursorRunRequest) string {
 	requested := account.GetMappedModel(run.RequestModel)
-	resolved := cursor.ResolveRunModel(requested, run.Opts, s.cursorRunCatalog(ctx, account))
+	resolved := cursor.ResolveRunModel(requested, run.Opts, cursorRunCatalog(ctx, account))
 	if resolved.RunSlug == "" {
 		return requested
 	}
@@ -282,8 +295,9 @@ func (s *GatewayService) resolveCursorRunModel(ctx context.Context, c *gin.Conte
 }
 
 // cursorRunCatalog 返回账号的在线模型目录（带进程级缓存）。取不到时返回 nil，
-// 变体解析会回落到内置快照。
-func (s *GatewayService) cursorRunCatalog(ctx context.Context, account *Account) []cursor.AvailableModel {
+// 变体解析会回落到内置快照。缓存是进程级的，所以这里不依赖任何 receiver——
+// 网关与管理端共用同一份。
+func cursorRunCatalog(ctx context.Context, account *Account) []cursor.AvailableModel {
 	if account == nil {
 		return nil
 	}
@@ -326,14 +340,15 @@ func fetchCursorAvailableModels(ctx context.Context, account *Account, timeout t
 	return client.AvailableModels(ctx)
 }
 
-// cursorPickerModelIDs 为 cursor 分组的 GET /v1/models 提供在线 picker id 列表。
-func (s *GatewayService) cursorPickerModelIDs(ctx context.Context, accounts []Account) []string {
+// cursorPickerModelIDs 从一组账号里取出第一份可用的在线 picker id 列表，
+// 供网关的 /v1/models 与管理端的分组模型候选共用。
+func cursorPickerModelIDs(ctx context.Context, accounts []Account) []string {
 	for i := range accounts {
 		account := &accounts[i]
 		if account.Platform != PlatformCursor {
 			continue
 		}
-		models := s.cursorRunCatalog(ctx, account)
+		models := cursorRunCatalog(ctx, account)
 		if ids := cursor.ModelIDs(models); len(ids) > 0 {
 			return ids
 		}
@@ -376,28 +391,29 @@ func (c *cursorCatalogCache) put(accountID int64, models []cursor.AvailableModel
 	}
 }
 
-// cursorMessagesFromChat 把 Chat Completions 轮次压平成 Cursor 的纯文本轮次。
-func cursorMessagesFromChat(messages []apicompat.ChatMessage) []cursor.ChatMessage {
-	out := make([]cursor.ChatMessage, 0, len(messages))
+// cursorMessagesFromChat 把 Chat Completions 轮次压平成 Cursor 的纯文本轮次，
+// 并报告是否丢弃了图片——Ask 模式的 Run 请求没有图片字段可放。
+func cursorMessagesFromChat(messages []apicompat.ChatMessage) (out []cursor.ChatMessage, droppedImages bool) {
+	out = make([]cursor.ChatMessage, 0, len(messages))
 	for _, message := range messages {
-		out = append(out, cursor.ChatMessage{
-			Role:    message.Role,
-			Content: cursorContentText(message.Content),
-		})
+		text, hadImage := cursorContentText(message.Content)
+		droppedImages = droppedImages || hadImage
+		out = append(out, cursor.ChatMessage{Role: message.Role, Content: text})
 	}
-	return out
+	return out, droppedImages
 }
 
-// cursorContentText 把 string / content-parts 数组 / null 统一折叠成文本。
-func cursorContentText(raw json.RawMessage) string {
+// cursorContentText 把 string / content-parts 数组 / null 统一折叠成文本，
+// 同时报告是否见到过图片部件。
+func cursorContentText(raw json.RawMessage) (text string, hadImage bool) {
 	raw = json.RawMessage(strings.TrimSpace(string(raw)))
 	if len(raw) == 0 || string(raw) == "null" {
-		return ""
+		return "", false
 	}
 	if raw[0] == '"' {
-		var text string
-		if json.Unmarshal(raw, &text) == nil {
-			return text
+		var plain string
+		if json.Unmarshal(raw, &plain) == nil {
+			return plain, false
 		}
 	}
 	var parts []struct {
@@ -407,13 +423,16 @@ func cursorContentText(raw json.RawMessage) string {
 	if json.Unmarshal(raw, &parts) == nil {
 		var b strings.Builder
 		for _, part := range parts {
-			if part.Type == "" || part.Type == "text" {
+			switch {
+			case part.Type == "" || part.Type == "text":
 				b.WriteString(part.Text)
+			case strings.HasPrefix(part.Type, "image") || strings.HasPrefix(part.Type, "input_image"):
+				hadImage = true
 			}
 		}
-		return b.String()
+		return b.String(), hadImage
 	}
-	return string(raw)
+	return string(raw), false
 }
 
 func cursorRunOptsFromAnthropic(req *apicompat.AnthropicRequest) cursor.RunOpts {

@@ -220,8 +220,140 @@
         </div>
       </div>
 
-      <!-- Cursor：凭证从本地 Cursor 安装粘贴，不走浏览器 OAuth 授权流程。 -->
+      <!-- Cursor：默认走浏览器授权；拿不到浏览器时可手工粘贴本地 Cursor 的凭证。 -->
       <div v-if="form.platform === 'cursor'" class="space-y-4" data-testid="cursor-credentials">
+        <div>
+          <label class="input-label">{{ t('admin.accounts.cursor.authMode.title') }}</label>
+          <div class="mt-2 grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              data-testid="cursor-auth-mode-oauth"
+              @click="cursorAuthMode = 'oauth'"
+              :class="[
+                'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+                cursorAuthMode === 'oauth'
+                  ? 'border-rose-500 bg-rose-50 dark:bg-rose-900/20'
+                  : 'border-gray-200 hover:border-rose-300 dark:border-dark-600 dark:hover:border-rose-700'
+              ]"
+            >
+              <div
+                :class="[
+                  'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                  cursorAuthMode === 'oauth'
+                    ? 'bg-rose-500 text-white'
+                    : 'bg-gray-100 text-gray-500 dark:bg-dark-600 dark:text-gray-400'
+                ]"
+              >
+                <Icon name="key" size="sm" />
+              </div>
+              <div class="min-w-0">
+                <span class="block text-sm font-medium text-gray-900 dark:text-white">
+                  {{ t('admin.accounts.cursor.authMode.oauth') }}
+                </span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.accounts.cursor.authMode.oauthHint') }}
+                </span>
+              </div>
+            </button>
+            <button
+              type="button"
+              data-testid="cursor-auth-mode-manual"
+              @click="cursorAuthMode = 'manual'"
+              :class="[
+                'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+                cursorAuthMode === 'manual'
+                  ? 'border-rose-500 bg-rose-50 dark:bg-rose-900/20'
+                  : 'border-gray-200 hover:border-rose-300 dark:border-dark-600 dark:hover:border-rose-700'
+              ]"
+            >
+              <div
+                :class="[
+                  'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                  cursorAuthMode === 'manual'
+                    ? 'bg-rose-500 text-white'
+                    : 'bg-gray-100 text-gray-500 dark:bg-dark-600 dark:text-gray-400'
+                ]"
+              >
+                <Icon name="document" size="sm" />
+              </div>
+              <div class="min-w-0">
+                <span class="block text-sm font-medium text-gray-900 dark:text-white">
+                  {{ t('admin.accounts.cursor.authMode.manual') }}
+                </span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.accounts.cursor.authMode.manualHint') }}
+                </span>
+              </div>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cursor 浏览器授权 -->
+      <div
+        v-if="form.platform === 'cursor' && cursorAuthMode === 'oauth'"
+        class="space-y-4"
+        data-testid="cursor-oauth"
+      >
+        <p class="text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.cursor.oauth.hint') }}
+        </p>
+        <button
+          type="button"
+          data-testid="cursor-oauth-start"
+          class="btn-secondary w-full"
+          :disabled="cursorOAuth.loading.value || cursorOAuth.polling.value"
+          @click="startCursorAuthorization"
+        >
+          {{
+            cursorOAuth.authUrl.value
+              ? t('admin.accounts.cursor.oauth.restart')
+              : t('admin.accounts.cursor.oauth.start')
+          }}
+        </button>
+
+        <div v-if="cursorOAuth.authUrl.value" class="space-y-2">
+          <label class="input-label">{{ t('admin.accounts.cursor.oauth.linkLabel') }}</label>
+          <a
+            :href="cursorOAuth.authUrl.value"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-testid="cursor-oauth-link"
+            class="block break-all rounded-lg bg-gray-50 p-3 text-xs text-primary-600 hover:underline dark:bg-dark-700 dark:text-primary-400"
+          >
+            {{ cursorOAuth.authUrl.value }}
+          </a>
+          <p class="input-hint">{{ t('admin.accounts.cursor.oauth.linkHint') }}</p>
+        </div>
+
+        <div
+          v-if="cursorOAuth.polling.value"
+          class="rounded-lg bg-blue-50 p-3 text-xs text-blue-700 dark:bg-blue-900/20 dark:text-blue-300"
+          data-testid="cursor-oauth-pending"
+        >
+          {{ t('admin.accounts.cursor.oauth.waiting') }}
+        </div>
+        <div
+          v-else-if="cursorOAuthAuthorized"
+          class="rounded-lg bg-green-50 p-3 text-xs text-green-700 dark:bg-green-900/20 dark:text-green-300"
+          data-testid="cursor-oauth-success"
+        >
+          {{ t('admin.accounts.cursor.oauth.authorized', { email: cursorOAuthAccountLabel }) }}
+        </div>
+        <div
+          v-if="cursorOAuth.error.value"
+          class="rounded-lg bg-red-50 p-3 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-300"
+        >
+          {{ cursorOAuth.error.value }}
+        </div>
+      </div>
+
+      <!-- Cursor 手工导入 -->
+      <div
+        v-if="form.platform === 'cursor' && cursorAuthMode === 'manual'"
+        class="space-y-4"
+        data-testid="cursor-manual-credentials"
+      >
         <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.cursor.hint') }}</p>
         <div>
           <label class="input-label">{{ t('admin.accounts.cursor.accessToken') }}</label>
@@ -4433,6 +4565,7 @@ import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import { useGrokOAuth } from '@/composables/useGrokOAuth'
 import { useKiroOAuth } from '@/composables/useKiroOAuth'
 import { useDroidOAuth } from '@/composables/useDroidOAuth'
+import { useCursorOAuth } from '@/composables/useCursorOAuth'
 import type {
   Proxy,
   AdminGroup,
@@ -4488,6 +4621,7 @@ import {
   resolveOpenAIWSModeConcurrencyHintKey,
   type OpenAIWSMode
 } from '@/utils/openaiWsMode'
+import type { CursorTokenInfo } from '@/api/admin/cursor'
 import OAuthAuthorizationFlow from './OAuthAuthorizationFlow.vue'
 
 // Type for exposed OAuthAuthorizationFlow component
@@ -4609,7 +4743,33 @@ const grokOAuth = useGrokOAuth() // For Grok OAuth
 const kiroOAuth = useKiroOAuth() // For Kiro OAuth / IDC
 const droidOAuth = useDroidOAuth() // For Droid OAuth
 
-// Cursor 没有授权流程：凭证从本地 Cursor 安装的 storage.json 粘贴。
+// Cursor 支持两种建号方式：浏览器授权（默认）与从本地 storage.json 手工粘贴。
+const cursorOAuth = useCursorOAuth()
+const cursorAuthMode = ref<'oauth' | 'manual'>('oauth')
+const cursorOAuthTokenInfo = ref<CursorTokenInfo | null>(null)
+const cursorOAuthAuthorized = computed(() => Boolean(cursorOAuthTokenInfo.value?.access_token))
+const cursorOAuthAccountLabel = computed(
+  () => cursorOAuthTokenInfo.value?.email || cursorOAuthTokenInfo.value?.user_id || ''
+)
+
+// 发起授权后立刻开始轮询：用户在浏览器登录完成的瞬间就能看到成功态，
+// 不必回到这里再点一次。
+const startCursorAuthorization = async () => {
+  cursorOAuthTokenInfo.value = null
+  if (!(await cursorOAuth.generateAuthUrl(form.proxy_id))) {
+    return
+  }
+  const tokenInfo = await cursorOAuth.awaitAuthorization(form.proxy_id)
+  if (tokenInfo?.access_token) {
+    cursorOAuthTokenInfo.value = tokenInfo
+    // 邮箱能唯一标识账号，未命名时用它省去手填。
+    if (!form.name.trim() && tokenInfo.email) {
+      form.name = tokenInfo.email
+    }
+  }
+}
+
+// Cursor 手工导入：凭证从本地 Cursor 安装的 storage.json 粘贴。
 const cursorAccessToken = ref('')
 const cursorRefreshToken = ref('')
 const cursorMachineId = ref('')
@@ -4622,6 +4782,9 @@ function resetCursorCredentialFields() {
   cursorMachineId.value = ''
   cursorMacMachineId.value = ''
   cursorClientVersion.value = CURSOR_DEFAULT_CLIENT_VERSION
+  cursorAuthMode.value = 'oauth'
+  cursorOAuthTokenInfo.value = null
+  cursorOAuth.resetState()
 }
 
 function collectCursorCredentialFields() {
@@ -5761,6 +5924,9 @@ watch(
     grokOAuth.resetState()
     kiroOAuth.resetState()
     droidOAuth.resetState()
+    // 关闭弹窗必须停掉轮询，否则它会在后台一直跑到超时。
+    cursorOAuth.resetState()
+    cursorOAuthTokenInfo.value = null
   }
 )
 
@@ -6325,6 +6491,8 @@ const resetForm = () => {
   grokOAuth.resetState()
   kiroOAuth.resetState()
   droidOAuth.resetState()
+  cursorOAuth.resetState()
+  cursorOAuthTokenInfo.value = null
   oauthFlowRef.value?.reset()
   antigravityMixedChannelConfirmed.value = false
   upstreamModelsPreviewed.value = false
@@ -6566,18 +6734,27 @@ const handleSubmit = async () => {
     return
   }
 
-  // Cursor：凭证已在表单里填好，直接创建。
+  // Cursor：浏览器授权完成或手工填好凭证后直接创建，没有第二步。
   if (form.platform === 'cursor') {
     if (!form.name.trim()) {
       appStore.showError(t('admin.accounts.pleaseEnterAccountName'))
       return
     }
-    const built = buildCursorCredentials(collectCursorCredentialFields(), 'create')
-    if (!built.ok) {
-      appStore.showError(t(built.errorKey))
-      return
+    let credentials: Record<string, unknown>
+    if (cursorAuthMode.value === 'oauth') {
+      if (!cursorOAuthTokenInfo.value?.access_token) {
+        appStore.showError(t('admin.accounts.cursor.oauth.notAuthorized'))
+        return
+      }
+      credentials = cursorOAuth.buildCredentials(cursorOAuthTokenInfo.value)
+    } else {
+      const built = buildCursorCredentials(collectCursorCredentialFields(), 'create')
+      if (!built.ok) {
+        appStore.showError(t(built.errorKey))
+        return
+      }
+      credentials = built.credentials
     }
-    const credentials = built.credentials
     const modelMapping = buildModelMappingObject(
       modelRestrictionMode.value,
       allowedModels.value,

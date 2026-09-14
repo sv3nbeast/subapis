@@ -2187,13 +2187,38 @@ func (s *adminServiceImpl) GetGroupModelsListCandidates(ctx context.Context, id 
 	}
 
 	candidates := defaultModelsListCandidateIDs(platform)
-	if id <= 0 || s.accountRepo == nil {
+	if s.accountRepo == nil {
 		return candidates, nil
 	}
 
-	accounts, err := s.accountRepo.ListSchedulableByGroupID(ctx, id)
-	if err != nil {
-		return nil, err
+	var accounts []Account
+	switch {
+	case id > 0:
+		listed, err := s.accountRepo.ListSchedulableByGroupID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		accounts = listed
+	case platform == PlatformCursor:
+		// 新建 Cursor 分组时还没有绑定账号，但平台内已有账号可以提供在线目录，
+		// 否则用户只能从一份可能过期的内置快照里选模型。
+		listed, err := s.accountRepo.ListSchedulableByPlatform(ctx, PlatformCursor)
+		if err != nil {
+			return nil, err
+		}
+		accounts = listed
+	default:
+		return candidates, nil
+	}
+
+	// Cursor 的可用模型随订阅等级与客户端版本变动，在线目录比静态快照权威。
+	if platform == PlatformCursor {
+		if live := cursorPickerModelIDs(ctx, accounts); len(live) > 0 {
+			candidates = live
+		}
+	}
+	if id <= 0 {
+		return candidates, nil
 	}
 
 	seen := make(map[string]struct{}, len(candidates))

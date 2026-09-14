@@ -286,6 +286,7 @@ const PLATFORM_LABELS: Record<string, string> = {
   kiro: 'Kiro',
   droid: 'Droid',
   grok: 'Grok',
+  cursor: 'Cursor',
   kimi: 'Kimi',
   zhipu: 'Zhipu GLM',
   deepseek: 'DeepSeek'

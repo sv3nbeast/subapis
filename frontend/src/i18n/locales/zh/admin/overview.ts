@@ -920,6 +920,7 @@ export default {
         grok: 'Grok',
         kiro: 'Kiro',
         droid: 'Droid',
+        cursor: 'Cursor',
         kimi: 'Kimi',
         zhipu: '智谱 GLM',
         deepseek: 'DeepSeek',

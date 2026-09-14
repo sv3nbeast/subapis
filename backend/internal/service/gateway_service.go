@@ -14147,7 +14147,7 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 	// Cursor 未配置映射时用账号的在线 picker 目录：可用模型随订阅等级与客户端
 	// 版本变动，内置快照只作为拉取失败时的兜底（由 handler 的 fallback 提供）。
 	if !hasAnyMapping && platform == PlatformCursor {
-		if models := s.cursorPickerModelIDs(ctx, accounts); len(models) > 0 {
+		if models := cursorPickerModelIDs(ctx, accounts); len(models) > 0 {
 			if s.modelsListCache != nil {
 				s.modelsListCache.Set(cacheKey, cloneStringSlice(models), s.modelsListCacheTTL)
 				modelsListCacheStoreTotal.Add(1)

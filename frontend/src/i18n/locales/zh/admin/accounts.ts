@@ -1157,7 +1157,27 @@ export default {
         modelRestrictionHint: '不配置映射时，模型列表取自该账号在线的 Cursor picker 目录。',
         editHint: '凭证不回显。留空表示保留现有值，只有填写的字段才会被覆盖。',
         unchangedPlaceholder: '留空表示不修改',
-        toolUseUnsupported: 'Cursor 账号只支持纯对话，不支持工具调用（Claude Code / Codex 请使用其他平台）。'
+        toolUseUnsupported: 'Cursor 账号只支持纯对话，不支持工具调用（Claude Code / Codex 请使用其他平台）。',
+        authMode: {
+          title: '添加方式',
+          oauth: '浏览器授权',
+          oauthHint: '登录 Cursor 账号，自动获取凭证',
+          manual: '手工导入',
+          manualHint: '粘贴本地 Cursor 的凭证'
+        },
+        oauth: {
+          hint: '点击下方按钮生成授权链接，在浏览器中登录 Cursor 后会自动完成凭证获取。设备标识由网关生成并与该账号绑定。',
+          start: '获取授权链接',
+          restart: '重新获取授权链接',
+          linkLabel: '授权链接',
+          linkHint: '在浏览器中打开并登录；登录完成后本页会自动检测。',
+          waiting: '等待浏览器完成登录…',
+          authorized: '授权成功：{email}',
+          notAuthorized: '请先完成浏览器授权',
+          sessionMissing: '授权会话缺失，请重新获取授权链接',
+          timeout: '授权超时，请重新获取授权链接',
+          authFailed: 'Cursor 授权失败'
+        }
       },
       // OAuth flow
       oauth: {

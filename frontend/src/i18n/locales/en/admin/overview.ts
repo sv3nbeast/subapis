@@ -987,6 +987,7 @@ export default {
         grok: 'Grok',
         kiro: 'Kiro',
         droid: 'Droid',
+        cursor: 'Cursor',
         kimi: 'Kimi',
         zhipu: 'Zhipu GLM',
         deepseek: 'DeepSeek',

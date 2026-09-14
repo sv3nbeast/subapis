@@ -83,7 +83,9 @@ func CORS(cfg config.CORSConfig) gin.HandlerFunc {
 			}
 			c.Writer.Header().Set("Access-Control-Allow-Headers", allowHeadersValue)
 			c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
-			c.Writer.Header().Set("Access-Control-Expose-Headers", "ETag, Server-Timing")
+			// X-Sub2API-Model-Variant 告知客户端请求模型被解析成了哪个上游变体
+			// （Cursor 的 picker → run slug）；不暴露的话浏览器端读不到它。
+			c.Writer.Header().Set("Access-Control-Expose-Headers", "ETag, Server-Timing, X-Sub2API-Model-Variant")
 			c.Writer.Header().Set("Access-Control-Max-Age", "86400")
 		}
 		// 处理预检请求
