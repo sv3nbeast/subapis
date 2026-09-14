@@ -3,6 +3,7 @@ package kiro
 import (
 	"bytes"
 	"context"
+	"net/http"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -20,6 +21,10 @@ func TestNormalizeAnthropicToolUseID(t *testing.T) {
 		{"tooluse_", "tooluse_"},         // 空 ID 主体，不产生裸前缀
 		{"", ""},
 		{"srvtoolu_web", "srvtoolu_web"}, // 服务端工具 ID 不受影响
+		// Bedrock 会插入 bdrk_ 段，官方 ID 没有，必须抹掉
+		{"toolu_bdrk_011Czx95Lx414PZQkAicFfBC", "toolu_011Czx95Lx414PZQkAicFfBC"},
+		{"srvtoolu_bdrk_0199", "srvtoolu_0199"},
+		{"toolu_bdrk_", "toolu_bdrk_"}, // 无主体时不产生裸前缀
 	}
 	for _, tc := range cases {
 		require.Equal(t, tc.want, normalizeAnthropicToolUseID(tc.in), "input %q", tc.in)
@@ -141,4 +146,50 @@ func TestSplitToolInputJSONDeltasRoundTrips(t *testing.T) {
 		}
 	}
 	require.Empty(t, splitToolInputJSONDeltas(""))
+}
+
+// Kiro 协议没有 toolChoice 字段，tool_choice=any/tool 只能靠提示逼近官方的协议级保证。
+// system 段提示对问候类输入常被忽略，因此强制要求必须同时出现在当前用户消息末尾。
+func TestForcedToolChoiceAddsUserHint(t *testing.T) {
+	cases := []struct {
+		name       string
+		toolChoice string
+		wantInUser string
+	}{
+		{"any", `{"type":"any"}`, "calling one of the available tools"},
+		{"named tool", `{"type":"tool","name":"get_weather"}`, "calling the 'get_weather' tool"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"model":"claude-opus-5","max_tokens":400,
+				"messages":[{"role":"user","content":"你好"}],
+				"tools":[{"name":"get_weather","description":"获取天气","input_schema":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}],
+				"tool_choice":` + tc.toolChoice + `}`
+			res, err := BuildKiroPayloadWithOptions(
+				[]byte(body), "claude-opus-5", "arn:test", http.Header{},
+				KiroPayloadOptions{RequireNativeToolProgress: true},
+			)
+			require.NoError(t, err)
+
+			payload := gjson.ParseBytes(res.Payload)
+			userContent := payload.Get("conversationState.currentMessage.userInputMessage.content").String()
+			require.Contains(t, userContent, "你好", "the original user text must be preserved")
+			require.Contains(t, userContent, "[CRITICAL]", "forced tool choice must be restated on the user turn")
+			require.Contains(t, userContent, tc.wantInUser)
+			require.True(t, res.Context.NativeToolCallRequired, "forced tool choice must arm the native tool-call guard")
+		})
+	}
+
+	// tool_choice=auto 不得追加强制提示。
+	body := `{"model":"claude-opus-5","max_tokens":400,
+		"messages":[{"role":"user","content":"你好"}],
+		"tools":[{"name":"get_weather","description":"获取天气","input_schema":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}],
+		"tool_choice":{"type":"auto"}}`
+	res, err := BuildKiroPayloadWithOptions(
+		[]byte(body), "claude-opus-5", "arn:test", http.Header{},
+		KiroPayloadOptions{RequireNativeToolProgress: true},
+	)
+	require.NoError(t, err)
+	userContent := gjson.ParseBytes(res.Payload).Get("conversationState.currentMessage.userInputMessage.content").String()
+	require.NotContains(t, userContent, "[CRITICAL]")
 }

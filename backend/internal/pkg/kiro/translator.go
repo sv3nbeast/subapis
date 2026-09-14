@@ -5168,9 +5168,16 @@ func skipHeaderValue(headers []byte, offset int, valueType byte) (int, bool) {
 // 原样回传该 ID，我们据以重建的 history 用的也是同一个值，因此会话内自洽；上游接受
 // toolu_ 前缀本就有先例——网关自行合成 tool_use 时用的就是 "toolu_"+GenerateToolUseID()。
 func normalizeAnthropicToolUseID(id string) string {
-	rest := strings.TrimPrefix(id, "tooluse_")
-	if rest != id && rest != "" {
-		return "toolu_" + rest
+	if rest := strings.TrimPrefix(id, "tooluse_"); rest != id && rest != "" {
+		id = "toolu_" + rest
+	}
+	// Bedrock 在 ID 里插入一段 bdrk_（如 toolu_bdrk_011Czx...），官方 ID 没有这一段，
+	// 留着等于在每次工具调用里写明后端是 Bedrock。
+	for _, prefix := range []string{"srvtoolu_", "toolu_"} {
+		marked := prefix + "bdrk_"
+		if rest := strings.TrimPrefix(id, marked); rest != id && rest != "" {
+			return prefix + rest
+		}
 	}
 	return id
 }

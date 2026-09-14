@@ -254,6 +254,10 @@ type KiroRequestContext struct {
 	CacheEmulationUsage      *Usage
 	StructuredOutputToolName string
 	StructuredOutputUserHint string
+	// ForcedToolChoiceUserHint 承载 tool_choice=any/tool 的强制要求。Kiro 协议没有
+	// toolChoice 字段，只能靠提示；system 段的提示对问候类输入常被模型忽略，
+	// 因此同时追加到当前用户消息末尾（与结构化输出同一套已验证有效的机制）。
+	ForcedToolChoiceUserHint string
 	StopSequences            []string
 	MaxOutputTokens          int
 	// EventDiagnosticSink receives redacted EventStream metadata. It is nil on
@@ -747,6 +751,9 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 		}
 		if requestCtx.StructuredOutputUserHint != "" {
 			currentUserMsg.Content = appendTextBlock(currentUserMsg.Content, requestCtx.StructuredOutputUserHint)
+		}
+		if requestCtx.ForcedToolChoiceUserHint != "" {
+			currentUserMsg.Content = appendTextBlock(currentUserMsg.Content, requestCtx.ForcedToolChoiceUserHint)
 		}
 		currentToolResults = deduplicateToolResults(currentToolResults)
 		var currentToolResultIDs map[string]bool
@@ -2661,11 +2668,15 @@ func extractClaudeToolChoiceHint(claudeBody []byte, requestCtx *KiroRequestConte
 
 	switch strings.ToLower(strings.TrimSpace(toolChoice.Get("type").String())) {
 	case "any":
+		// Anthropic 对 tool_choice=any 的保证是协议级的（服务端 prefill 助手消息），
+		// 且明确不会先输出自然语言。Kiro 没有等价开关，这里用最强提示逼近该语义。
+		requestCtx.ForcedToolChoiceUserHint = "[CRITICAL] You MUST answer by calling one of the available tools right now. Do NOT reply with plain text, a greeting, or a question."
 		return "[INSTRUCTION: You MUST use at least one of the available tools to respond. Do not respond with text only - always make a tool call.]"
 	case "tool":
 		toolName := mapKiroToolName(toolChoice.Get("name").String(), requestCtx)
 		if toolName != "" {
 			requestCtx.forcedToolChoiceName = toolName
+			requestCtx.ForcedToolChoiceUserHint = fmt.Sprintf("[CRITICAL] You MUST answer by calling the '%s' tool right now. Do NOT reply with plain text, a greeting, or a question. If an argument is unknown, choose the most reasonable value.", toolName)
 			return fmt.Sprintf("[INSTRUCTION: You MUST use the tool named '%s' to respond. Do not use any other tool or respond with text only.]", toolName)
 		}
 	case "none":
@@ -6024,9 +6035,16 @@ func splitToolInputJSONDeltas(inputJSON string) []string {
 // 原样回传该 ID，我们据以重建的 history 用的也是同一个值，因此会话内自洽；上游接受
 // toolu_ 前缀本就有先例——网关自行合成 tool_use 时用的就是 "toolu_"+GenerateToolUseID()。
 func normalizeAnthropicToolUseID(id string) string {
-	rest := strings.TrimPrefix(id, "tooluse_")
-	if rest != id && rest != "" {
-		return "toolu_" + rest
+	if rest := strings.TrimPrefix(id, "tooluse_"); rest != id && rest != "" {
+		id = "toolu_" + rest
+	}
+	// Bedrock 在 ID 里插入一段 bdrk_（如 toolu_bdrk_011Czx...），官方 ID 没有这一段，
+	// 留着等于在每次工具调用里写明后端是 Bedrock。
+	for _, prefix := range []string{"srvtoolu_", "toolu_"} {
+		marked := prefix + "bdrk_"
+		if rest := strings.TrimPrefix(id, marked); rest != id && rest != "" {
+			return prefix + rest
+		}
 	}
 	return id
 }
