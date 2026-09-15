@@ -131,13 +131,14 @@ const cursorModels = [
   'grok-4.6', 'grok-4.5',
   'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-opus-4-5',
   'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-sonnet-4',
-  'claude-fable-5', 'claude-haiku-4-5',
+  'claude-fable-5-1', 'claude-fable-5', 'claude-haiku-4-5',
   'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4',
   'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5.3-codex', 'gpt-5.2', 'gpt-5.1', 'gpt-5-mini',
-  'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash',
+  'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash',
   'gemini-3.1-pro', 'gemini-2.5-flash',
   'kimi-k3', 'kimi-k2.7-code',
-  'glm-5.2', 'GLM-5.1', 'GLM-4.7'
+  'glm-5.2', 'GLM-5.1', 'GLM-4.7',
+  'muse-spark-1.3'
 ]
 
 // 智谱 GLM

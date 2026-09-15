@@ -25,10 +25,18 @@ func defaultRunSlugTable() map[string][]string {
 			"gpt-5.5-high", "gpt-5.5-high-fast",
 			"gpt-5.5-extra-high", "gpt-5.5-extra-high-fast",
 		},
+		// claude-fable-5-1 / muse-spark-1.3 / gemini-3.8-flash 来自 2026-09-15
+		// 对真实账号 AvailableModels 的实测（TestE2ERunSlugSnapshotMatchesLive）。
+		"claude-fable-5-1": concat(
+			effortOnly("claude-fable-5-1", "low", "medium", "high", "xhigh", "max"),
+			effortOnly("claude-fable-5-1-thinking", "low", "medium", "high", "xhigh", "max"),
+		),
 		"claude-fable-5": concat(
 			effortOnly("claude-fable-5", "low", "medium", "high", "xhigh", "max"),
 			effortOnly("claude-fable-5-thinking", "low", "medium", "high", "xhigh", "max"),
 		),
+		"muse-spark-1.3":   effortOnly("muse-spark-1.3", "minimal", "low", "medium", "high", "xhigh", "max"),
+		"gemini-3.8-flash": {"gemini-3.8-flash"},
 		"grok-4.5": concat(
 			effortFast("cursor-grok-4.5", "low", "medium", "high"),
 			[]string{

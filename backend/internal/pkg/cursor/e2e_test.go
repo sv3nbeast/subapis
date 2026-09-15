@@ -132,6 +132,12 @@ func TestE2ERunSlugSnapshotMatchesLive(t *testing.T) {
 	for picker, slugs := range liveByPicker {
 		known, ok := snapshot[picker]
 		if !ok {
+			// 快照的作用是记录"picker 名之外的参数化 slug"。线上没给 slug、
+			// 或唯一的 slug 就等于 picker 名本身时，解析回落到 picker 名的结果
+			// 完全一致，无需记录。只有真正多出变体才是漂移。
+			if !hasParameterizedSlug(picker, slugs) {
+				continue
+			}
 			t.Errorf("live picker %q is missing from the bundled snapshot (slugs: %v)", picker, slugs)
 			continue
 		}
@@ -165,4 +171,15 @@ func TestE2ETokenRefresh(t *testing.T) {
 		t.Fatal("refresh returned an empty access token")
 	}
 	t.Logf("refreshed; expires at %s", result.ExpiresAt(time.Now()).Format(time.RFC3339))
+}
+
+// hasParameterizedSlug 报告线上目录是否给该 picker 提供了区别于 picker 名本身
+// 的 slug。只有这种情况快照才需要记录。
+func hasParameterizedSlug(picker string, slugs []string) bool {
+	for _, slug := range slugs {
+		if !strings.EqualFold(strings.TrimSpace(slug), picker) {
+			return true
+		}
+	}
+	return false
 }
