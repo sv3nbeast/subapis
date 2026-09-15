@@ -48,8 +48,23 @@ func scanAgentStage(row interface{ Scan(...any) error }) (*service.WebAgentBlobS
 
 // Image artifacts are their own preview, so they reserve one key and leave the
 // preview slot empty; Office artifacts pair a file with a rendered PDF.
+//
+// An image reserves an extension-free key: the provider picks PNG, JPEG or WebP
+// only when it answers, long after this key is committed and compared during
+// storage reconciliation. Its format lives on the artifact row's MIME.
 func webAgentArtifactExtension(kind string) string {
-	return map[string]string{"slides": "pptx", "document": "docx", "spreadsheet": "xlsx", "image": "png"}[kind]
+	return map[string]string{"slides": "pptx", "document": "docx", "spreadsheet": "xlsx"}[kind]
+}
+
+func webAgentKnownArtifactKind(kind string) bool {
+	return kind == "image" || webAgentArtifactExtension(kind) != ""
+}
+
+func webAgentBlobKeyFor(kind string) string {
+	if ext := webAgentArtifactExtension(kind); ext != "" {
+		return uuid.NewString() + "." + ext
+	}
+	return uuid.NewString()
 }
 
 func webAgentPreviewKey(kind string) string {
@@ -63,10 +78,12 @@ func (r *webChatRepository) ReserveArtifactStorage(ctx context.Context, t *servi
 	if t == nil || t.ID <= 0 || t.UserID <= 0 {
 		return nil, service.ErrWebAgentInvalid
 	}
-	ext := webAgentArtifactExtension(t.Kind)
-	if ext == "" {
+	// Guard the kind itself: an image legitimately has no extension, so an empty
+	// extension no longer signals an unknown kind.
+	if !webAgentKnownArtifactKind(t.Kind) {
 		return nil, service.ErrWebAgentInvalid
 	}
+	blobKey := webAgentBlobKeyFor(t.Kind)
 	tx, err := r.beginAgentTransaction(ctx)
 	if err != nil {
 		return nil, err
@@ -92,7 +109,7 @@ func (r *webChatRepository) ReserveArtifactStorage(ctx context.Context, t *servi
 	}
 	b, err := scanAgentStage(tx.QueryRowContext(ctx, `INSERT INTO web_agent_blob_stages AS b(task_id,user_id,lease_token,blob_key,preview_key,state,reserved_bytes)
  VALUES($1,$2,$3,$4,$5,'allocated',$6) ON CONFLICT(task_id) DO NOTHING RETURNING `+agentStageColumns,
-		t.ID, t.UserID, t.LeaseToken, uuid.NewString()+"."+ext, webAgentPreviewKey(t.Kind), service.WebAgentStorageReservationBytes))
+		t.ID, t.UserID, t.LeaseToken, blobKey, webAgentPreviewKey(t.Kind), service.WebAgentStorageReservationBytes))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, service.ErrWebAgentLeaseLost
 	}

@@ -18,16 +18,11 @@ const (
 	webAgentImageStepStore    = "保存成果"
 
 	webAgentImageFallbackTitle = "生成的图片"
-
-	// Storage reserves the key before the provider replies, so the stored bytes
-	// must match this extension. PNG is what both gpt-image and grok-imagine
-	// return for a default generation request.
-	webAgentImageStoredExtension = "png"
 )
 
 var (
 	errWebAgentImageTooLarge = errors.New("generated image exceeds the artifact size budget")
-	errWebAgentImageFormat   = errors.New("generated image is not stored as PNG")
+	errWebAgentImageFormat   = errors.New("generated image is not a supported format")
 )
 
 // Artifact digests are hex-encoded SHA-256 over the stored bytes.
@@ -133,9 +128,10 @@ func (e *WebAgentImageExecutor) Execute(ctx context.Context, task *WebAgentTask,
 	if int64(len(output.Data)) > webAgentArtifactMaxBytes {
 		return artifact, webAgentFailure("output_budget_exceeded", errWebAgentImageTooLarge)
 	}
-	// The reserved key's extension is fixed at reservation time, so an artifact
-	// whose bytes are a different format would be served under the wrong type.
-	if output.Extension != webAgentImageStoredExtension {
+	// Providers differ here: gpt-image answers PNG while grok-imagine answers
+	// JPEG for the same request. The artifact records what actually came back,
+	// which is why its key carries no extension.
+	if _, ok := webAgentImageFormats[output.MIME]; !ok {
 		return artifact, webAgentFailure("model_response_invalid", errWebAgentImageFormat)
 	}
 	artifact.Title = webAgentImageTitle(task.Prompt)

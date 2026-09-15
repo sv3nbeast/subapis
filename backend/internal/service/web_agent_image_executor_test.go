@@ -73,7 +73,7 @@ func TestWebAgentImageTitleStaysWithinArtifactBudget(t *testing.T) {
 	require.Equal(t, 60, len([]rune(long)), "a long prompt is truncated to the artifact title budget")
 	require.NoError(t, (&WebAgentArtifact{
 		Kind: "image", Title: long, Filename: webAgentArtifactFilename(long, "png"), MIME: "image/png",
-		BlobKey: "ffffffff-ffff-ffff-ffff-ffffffffffff.png", SizeBytes: 10,
+		BlobKey: "ffffffff-ffff-ffff-ffff-ffffffffffff", SizeBytes: 10,
 		SHA256: webAgentBlobDigest(agentPNGBytes),
 	}).Validate())
 }
@@ -84,7 +84,7 @@ func TestImageArtifactMustNotCarryAPreviewBlob(t *testing.T) {
 	artifact := func() *WebAgentArtifact {
 		return &WebAgentArtifact{
 			Kind: "image", Title: "cat", Filename: webAgentArtifactFilename("cat", "png"), MIME: "image/png",
-			BlobKey: "ffffffff-ffff-ffff-ffff-ffffffffffff.png", SizeBytes: 10, SHA256: webAgentBlobDigest(agentPNGBytes),
+			BlobKey: "ffffffff-ffff-ffff-ffff-ffffffffffff", SizeBytes: 10, SHA256: webAgentBlobDigest(agentPNGBytes),
 		}
 	}
 	require.NoError(t, artifact().Validate())
@@ -102,4 +102,47 @@ func TestImageArtifactMustNotCarryAPreviewBlob(t *testing.T) {
 	require.ErrorIs(t, office.Validate(), ErrWebAgentInvalid, "an Office artifact without a preview must be rejected")
 	office.PreviewKey, office.PreviewBytes = "ffffffff-ffff-ffff-ffff-fffffffffffe.pdf", 4
 	require.NoError(t, office.Validate())
+}
+
+// Providers disagree on format for the same request: gpt-image answers PNG
+// while grok-imagine answers JPEG. The artifact must store what came back, so
+// its key carries no extension and its MIME is the source of truth.
+func TestImageArtifactStoresWhicheverFormatTheProviderReturned(t *testing.T) {
+	artifact := func(mime, ext string) *WebAgentArtifact {
+		return &WebAgentArtifact{
+			Kind: "image", Title: "cat", Filename: webAgentArtifactFilename("cat", ext), MIME: mime,
+			BlobKey: "ffffffff-ffff-ffff-ffff-ffffffffffff", SizeBytes: 10, SHA256: webAgentBlobDigest(agentPNGBytes),
+		}
+	}
+	for mime, ext := range webAgentImageFormats {
+		require.NoError(t, artifact(mime, ext).Validate(), "a %s artifact must be storable", mime)
+	}
+
+	require.ErrorIs(t, artifact("image/gif", "gif").Validate(), ErrWebAgentInvalid, "an unsupported MIME must be refused")
+
+	// A key committed with an extension cannot describe an image, because the
+	// format is only known after that key is already reserved.
+	withExtension := artifact("image/jpeg", "jpg")
+	withExtension.BlobKey = "ffffffff-ffff-ffff-ffff-ffffffffffff.jpg"
+	require.ErrorIs(t, withExtension.Validate(), ErrWebAgentInvalid)
+
+	// The download filename follows the MIME, so a JPEG does not download as PNG.
+	mismatched := artifact("image/jpeg", "png")
+	require.ErrorIs(t, mismatched.Validate(), ErrWebAgentInvalid)
+}
+
+// Office artifacts keep their reserved extension: their renderer output format
+// is known up front, and a mismatch would serve the wrong file type.
+func TestOfficeArtifactStillRequiresItsReservedExtension(t *testing.T) {
+	office := &WebAgentArtifact{
+		Kind: "document", Title: "doc", Filename: webAgentArtifactFilename("doc", "docx"),
+		MIME: webAgentArtifactTypes["document"].mime, BlobKey: "ffffffff-ffff-ffff-ffff-ffffffffffff.docx",
+		PreviewKey: "ffffffff-ffff-ffff-ffff-fffffffffffe.pdf", PreviewBytes: 4,
+		SizeBytes: 10, SHA256: webAgentBlobDigest(agentPNGBytes), Spec: json.RawMessage(`{"kind":"document","title":"doc"}`),
+	}
+	require.NoError(t, office.Validate())
+
+	noExtension := *office
+	noExtension.BlobKey = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+	require.ErrorIs(t, noExtension.Validate(), ErrWebAgentInvalid, "an Office key must keep its extension")
 }

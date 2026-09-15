@@ -65,9 +65,22 @@ func (a *WebAgentArtifact) Validate() error {
 	if !ok {
 		return ErrWebAgentInvalid
 	}
+	// An image stores whichever format the provider returned, so its MIME is the
+	// source of truth and its key carries no extension. An Office artifact must
+	// still match the extension its renderer was reserved for.
+	ext := format.ext
+	if !webAgentArtifactHasPreview(a.Kind) {
+		imageExt, ok := webAgentImageFormats[a.MIME]
+		if !ok || strings.ContainsRune(a.BlobKey, '.') {
+			return ErrWebAgentInvalid
+		}
+		ext = imageExt
+	} else if a.MIME != format.mime || !strings.HasSuffix(a.BlobKey, "."+ext) {
+		return ErrWebAgentInvalid
+	}
 	if !utf8.ValidString(a.Title) || strings.TrimSpace(a.Title) == "" || utf8.RuneCountInString(a.Title) > 120 ||
-		a.Filename != webAgentArtifactFilename(a.Title, format.ext) || a.MIME != format.mime ||
-		!webAgentBlobKey.MatchString(a.BlobKey) || !strings.HasSuffix(a.BlobKey, "."+format.ext) ||
+		a.Filename != webAgentArtifactFilename(a.Title, ext) ||
+		!webAgentBlobKey.MatchString(a.BlobKey) ||
 		a.SizeBytes <= 0 || a.SizeBytes > webAgentArtifactMaxBytes ||
 		a.SizeBytes+a.PreviewBytes > webAgentArtifactMaxBytes {
 		return ErrWebAgentInvalid
@@ -192,6 +205,11 @@ func (s *WebAgentArtifactService) Download(ctx context.Context, userID, id int64
 	}
 	key, expected := artifact.BlobKey, artifact.SizeBytes
 	if preview {
+		// An image is its own preview and stores no PDF, so a preview request for
+		// one is a client mistake rather than a missing file.
+		if !webAgentArtifactHasPreview(artifact.Kind) {
+			return nil, nil, 0, ErrWebAgentArtifactNotFound
+		}
 		key, expected = artifact.PreviewKey, artifact.PreviewBytes
 	}
 	reader, size, err := s.store.Open(ctx, key)

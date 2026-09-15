@@ -37,12 +37,22 @@ var webAgentArtifactTypes = map[string]struct{ ext, mime, entry string }{
 	"document":    {"docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "word/document.xml"},
 	"spreadsheet": {"xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xl/workbook.xml"},
 	// An image is its own preview, so it carries no separate PDF and no zip entry.
+	// The entry only supplies a default: a provider may answer PNG, JPEG or WebP
+	// for the same request, so the stored extension and MIME follow the bytes.
 	"image": {"png", "image/png", ""},
 }
 
 // Office artifacts pair a file with a rendered PDF preview. An image is already
 // displayable, so it stores one blob and leaves the preview slot empty.
 func webAgentArtifactHasPreview(kind string) bool { return kind != "image" }
+
+// Formats an image artifact may store, keyed by MIME. A browser renders all
+// three inline, which is what the preview pane relies on.
+var webAgentImageFormats = map[string]string{
+	"image/png":  "png",
+	"image/jpeg": "jpg",
+	"image/webp": "webp",
+}
 
 type WebAgentOfficeClient struct {
 	endpoint string
@@ -207,7 +217,11 @@ type WebAgentBlobStore interface {
 }
 type WebAgentFileStore struct{ root, storageID string }
 
-var webAgentBlobKey = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(pptx|xlsx|docx|pdf|png)$`)
+// An Office blob is reserved with the extension its renderer will produce. An
+// image cannot be: the provider decides PNG, JPEG or WebP after the key is
+// already committed, so its key is extension-free and the format lives on the
+// artifact row's MIME instead.
+var webAgentBlobKey = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.(pptx|xlsx|docx|pdf))?$`)
 
 func NewWebAgentFileStore(root string) (*WebAgentFileStore, error) {
 	root = filepath.Clean(root)
