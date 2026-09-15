@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/cursor"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
@@ -69,8 +70,14 @@ func (s *GatewayService) forwardCursorMessages(ctx context.Context, c *gin.Conte
 		RequestStream: req.Stream,
 		StartTime:     startTime,
 	}
-	if err := guardCursorRequest(run); err != nil {
-		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+	if capability := cursorUnsupportedCapability(run); capability != "" {
+		mixed := cursorMixedScheduled(ctx, account)
+		err := cursorCapabilityError(capability, mixed)
+		// 混合调度下不写响应体：写出即锁死 failover，请求就再也换不到
+		// 同组的真 Anthropic 账号了。
+		if !mixed {
+			writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		}
 		return nil, err
 	}
 
@@ -108,8 +115,12 @@ func (s *GatewayService) forwardCursorAsChatCompletions(ctx context.Context, c *
 		RequestStream: req.Stream,
 		StartTime:     startTime,
 	}
-	if err := guardCursorRequest(run); err != nil {
-		writeGatewayCCError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+	if capability := cursorUnsupportedCapability(run); capability != "" {
+		mixed := cursorMixedScheduled(ctx, account)
+		err := cursorCapabilityError(capability, mixed)
+		if !mixed {
+			writeGatewayCCError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		}
 		return nil, err
 	}
 
@@ -154,8 +165,12 @@ func (s *GatewayService) forwardCursorAsResponses(ctx context.Context, c *gin.Co
 		RequestStream: req.Stream,
 		StartTime:     startTime,
 	}
-	if err := guardCursorRequest(run); err != nil {
-		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+	if capability := cursorUnsupportedCapability(run); capability != "" {
+		mixed := cursorMixedScheduled(ctx, account)
+		err := cursorCapabilityError(capability, mixed)
+		if !mixed {
+			writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		}
 		return nil, err
 	}
 
@@ -171,20 +186,58 @@ func (s *GatewayService) forwardCursorAsResponses(ctx context.Context, c *gin.Co
 	return s.bufferCursorAsResponses(c, stream, run)
 }
 
-// guardCursorRequest 对 Ask 模式承载不了的请求快速失败。
+// cursorUnsupportedCapability 描述这条请求用到了 Ask 模式承载不了的能力。
 //
 // 工具：Run 在 Ask 模式下既不接受工具定义也不产出 tool_use，静默丢弃会让
 // Claude Code / Codex 一直等一个永远不会到来的工具调用。
 // 图片：Run 的用户消息没有图片字段（Cursor 的图片走另一条 StreamUnifiedChat
 // 链路），继续发只会让模型看不到图却照常作答，答案错得毫无提示。
-func guardCursorRequest(run cursorRunRequest) error {
-	if run.HasTools {
-		return fmt.Errorf("cursor accounts do not support tool use: the upstream Ask-mode endpoint accepts plain text turns only. Route tool-calling clients (Claude Code, Codex) to another platform")
+//
+// 返回空串表示这条请求 Cursor 能承载。
+func cursorUnsupportedCapability(run cursorRunRequest) string {
+	switch {
+	case run.HasTools:
+		return "tool use"
+	case run.HasImages:
+		return "image input"
+	default:
+		return ""
 	}
-	if run.HasImages {
-		return fmt.Errorf("cursor accounts do not support image input: the upstream Ask-mode endpoint carries text turns only")
+}
+
+// cursorMixedScheduled 报告这个 Cursor 账号是否由非 cursor 分组顺带选中。
+// 分组平台不是 cursor 就意味着同组还有其它平台的账号可以接手。
+func cursorMixedScheduled(ctx context.Context, account *Account) bool {
+	if account == nil || account.Platform != PlatformCursor {
+		return false
 	}
-	return nil
+	// 只有确认是专属 cursor 分组时才走"直接告知客户端"的分支。分组信息缺失或
+	// 未水合时按混合调度处理：让请求还能转移，代价只是少一条解释性错误；反过来
+	// 猜错则会把一个本可由同组账号服务的请求打成 400。
+	if group, ok := ctx.Value(ctxkey.Group).(*Group); ok && IsGroupContextValid(group) {
+		return group.Platform != PlatformCursor
+	}
+	return true
+}
+
+// cursorCapabilityError 决定能力不匹配时怎么失败，这取决于账号是怎么被选中的。
+//
+// 混合调度下 Cursor 账号是被 anthropic 分组顺带选中的——用户的意图是"用这个
+// 分组"，不是"用 Cursor"。此时必须返回可转移错误且不写任何响应体，让网关把
+// 请求交给同组的真 Anthropic 账号；写出 400 会让 c.Writer.Size() 变化，
+// failover 判定随即锁死，用户吃到一个本可避免的错误。
+//
+// 专属 Cursor 分组下没有别的账号可让位，转移只会白跑一轮，此时直接把原因写给
+// 客户端更有用。
+func cursorCapabilityError(capability string, mixedScheduled bool) error {
+	if mixedScheduled {
+		return &UpstreamFailoverError{
+			StatusCode:             http.StatusBadRequest,
+			ResponseBody:           []byte(fmt.Sprintf("cursor account cannot serve %s; deferring to another account in this group", capability)),
+			RequestScopedTransient: true,
+		}
+	}
+	return fmt.Errorf("cursor accounts do not support %s: the upstream Ask-mode endpoint accepts plain text turns only", capability)
 }
 
 // startCursorRun 解析模型、拿到有效凭证并建立上游流；命中 401 时强制轮换一次重试。

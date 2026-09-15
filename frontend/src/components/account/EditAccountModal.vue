@@ -3047,6 +3047,12 @@
             </div>
           </div>
         </div>
+        <p
+          v-if="account.platform === 'cursor' && mixedScheduling"
+          class="mt-2 text-xs text-amber-600 dark:text-amber-400"
+        >
+          {{ t('admin.accounts.cursor.mixedSchedulingHint') }}
+        </p>
         <div v-if="account?.platform === 'kiro' && account?.type === 'oauth'" class="mt-3">
           <label class="flex cursor-pointer items-center gap-2">
             <input
@@ -4929,7 +4935,9 @@ function toPositiveNumber(value: unknown) {
   return Math.trunc(num)
 }
 
-const supportsMixedScheduling = computed(() => ['antigravity', 'kiro', 'droid'].includes(props.account?.platform || ''))
+const supportsMixedScheduling = computed(() =>
+  ['antigravity', 'kiro', 'droid', 'cursor'].includes(props.account?.platform || '')
+)
 
 const needsMixedChannelCheck = () => platformNeedsMixedChannelCheck(props.account?.platform)
 

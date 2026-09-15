@@ -2183,7 +2183,7 @@ func (a *Account) SupportsMixedScheduling() bool {
 		return false
 	}
 	switch a.Platform {
-	case PlatformAntigravity, PlatformKiro, PlatformDroid:
+	case PlatformAntigravity, PlatformKiro, PlatformDroid, PlatformCursor:
 		return true
 	default:
 		return false
@@ -2191,7 +2191,13 @@ func (a *Account) SupportsMixedScheduling() bool {
 }
 
 // IsMixedSchedulingEnabled 检查账号是否启用混合调度。
-// Antigravity 可参与 anthropic/gemini 分组调度；Kiro/Droid 仅参与 anthropic 分组调度。
+// Antigravity 可参与 anthropic/gemini 分组调度；Kiro/Droid/Cursor 仅参与
+// anthropic 分组调度。
+//
+// Cursor 与其它三者有一处本质差别：它的上游只承载纯文本对话，工具与图片都做
+// 不到。所以它进 anthropic 分组后，只有纯对话请求能落到它身上；带 tools 或
+// 图片的请求（Claude Code 全是这类）必须让位给同组的其它账号，由
+// cursorCapabilityFailover 负责转移而不是直接报错。
 func (a *Account) IsMixedSchedulingEnabled() bool {
 	if !a.SupportsMixedScheduling() {
 		return false

@@ -8,7 +8,7 @@ import (
 
 func TestMixedSchedulingKiroDroidRules(t *testing.T) {
 	require.Equal(t,
-		[]string{PlatformAnthropic, PlatformAntigravity, PlatformKiro, PlatformDroid},
+		[]string{PlatformAnthropic, PlatformAntigravity, PlatformKiro, PlatformDroid, PlatformCursor},
 		mixedSchedulingQueryPlatforms(PlatformAnthropic),
 	)
 	require.Equal(t,

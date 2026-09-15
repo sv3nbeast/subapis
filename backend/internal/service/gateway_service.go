@@ -5826,7 +5826,7 @@ func isPlatformFilteredForSelection(acc *Account, platform string, allowMixedSch
 func mixedSchedulingQueryPlatforms(nativePlatform string) []string {
 	switch nativePlatform {
 	case PlatformAnthropic:
-		return []string{PlatformAnthropic, PlatformAntigravity, PlatformKiro, PlatformDroid}
+		return []string{PlatformAnthropic, PlatformAntigravity, PlatformKiro, PlatformDroid, PlatformCursor}
 	case PlatformGemini:
 		return []string{PlatformGemini, PlatformAntigravity}
 	case PlatformOpenAI:
@@ -5852,7 +5852,7 @@ func isAccountAllowedInMixedScheduling(account *Account, nativePlatform string) 
 	switch nativePlatform {
 	case PlatformAnthropic:
 		switch account.Platform {
-		case PlatformAntigravity, PlatformKiro, PlatformDroid:
+		case PlatformAntigravity, PlatformKiro, PlatformDroid, PlatformCursor:
 			return true
 		default:
 			return false

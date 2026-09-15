@@ -1,13 +1,16 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/cursor"
 )
 
@@ -76,28 +79,131 @@ func TestCursorTokenCacheKeySharesCredentialAcrossAccounts(t *testing.T) {
 	}
 }
 
-func TestGuardCursorRequest(t *testing.T) {
-	if err := guardCursorRequest(cursorRunRequest{}); err != nil {
-		t.Fatalf("plain text request rejected: %v", err)
+func TestCursorUnsupportedCapability(t *testing.T) {
+	if got := cursorUnsupportedCapability(cursorRunRequest{}); got != "" {
+		t.Errorf("plain text request reported %q, want it servable", got)
 	}
 	// Silently dropping tools would leave Claude Code / Codex waiting forever
 	// for a tool call the Ask-mode upstream can never emit.
-	err := guardCursorRequest(cursorRunRequest{HasTools: true})
-	if err == nil {
-		t.Fatal("request with tools was accepted; Cursor cannot serve tool use")
-	}
-	if !strings.Contains(err.Error(), "tool use") {
-		t.Errorf("error = %q, want it to name tool use", err)
+	if got := cursorUnsupportedCapability(cursorRunRequest{HasTools: true}); got != "tool use" {
+		t.Errorf("tools reported %q, want %q", got, "tool use")
 	}
 	// Dropping images silently is worse than failing: the model answers
 	// confidently about an image it never received.
-	err = guardCursorRequest(cursorRunRequest{HasImages: true})
-	if err == nil {
-		t.Fatal("request with images was accepted; the Run payload has no image field")
+	if got := cursorUnsupportedCapability(cursorRunRequest{HasImages: true}); got != "image input" {
+		t.Errorf("images reported %q, want %q", got, "image input")
 	}
-	if !strings.Contains(err.Error(), "image") {
-		t.Errorf("error = %q, want it to name image input", err)
+}
+
+func TestCursorCapabilityErrorStaysFailoverableWhenMixedScheduled(t *testing.T) {
+	// Mixed scheduling: the group has other accounts that can serve this, so the
+	// error must be failoverable. A plain error would end the request instead.
+	var failoverErr *UpstreamFailoverError
+	if !errors.As(cursorCapabilityError("tool use", true), &failoverErr) {
+		t.Fatal("mixed-scheduled capability error is not an UpstreamFailoverError; the request could not move to another account")
 	}
+	if !failoverErr.RequestScopedTransient {
+		t.Error("RequestScopedTransient = false; the account would be penalized for a request-shape mismatch")
+	}
+
+	// A dedicated Cursor group has nobody to defer to; failing over would only
+	// burn a cycle, so the client should be told why.
+	if errors.As(cursorCapabilityError("tool use", false), &failoverErr) {
+		t.Error("dedicated-group capability error is failoverable; it should terminate with a reason")
+	}
+}
+
+func TestCursorMixedScheduled(t *testing.T) {
+	cursorAccount := &Account{Platform: PlatformCursor, Type: AccountTypeOAuth}
+
+	hydrated := func(platform string) *Group {
+		return &Group{ID: 1, Platform: platform, Status: StatusActive, Hydrated: true}
+	}
+
+	tests := []struct {
+		name    string
+		ctx     context.Context
+		account *Account
+		want    bool
+	}{
+		{
+			name:    "anthropic group means the account was picked as a stand-in",
+			ctx:     context.WithValue(context.Background(), ctxkey.Group, hydrated(PlatformAnthropic)),
+			account: cursorAccount,
+			want:    true,
+		},
+		{
+			name:    "dedicated cursor group is a direct choice",
+			ctx:     context.WithValue(context.Background(), ctxkey.Group, hydrated(PlatformCursor)),
+			account: cursorAccount,
+		},
+		{
+			// Guessing "dedicated" here would 400 a request another account in
+			// the group could have served; staying failoverable costs only the
+			// explanatory message.
+			name:    "missing group context stays failoverable",
+			ctx:     context.Background(),
+			account: cursorAccount,
+			want:    true,
+		},
+		{
+			name:    "unhydrated group is treated as unknown, not dedicated",
+			ctx:     context.WithValue(context.Background(), ctxkey.Group, &Group{ID: 1, Platform: PlatformCursor}),
+			account: cursorAccount,
+			want:    true,
+		},
+		{
+			name:    "non-cursor account",
+			ctx:     context.WithValue(context.Background(), ctxkey.Group, hydrated(PlatformAnthropic)),
+			account: &Account{Platform: PlatformKiro},
+		},
+		{
+			name: "nil account",
+			ctx:  context.Background(),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cursorMixedScheduled(tt.ctx, tt.account); got != tt.want {
+				t.Errorf("cursorMixedScheduled = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCursorSupportsMixedScheduling(t *testing.T) {
+	account := &Account{Platform: PlatformCursor, Type: AccountTypeOAuth}
+	if !account.SupportsMixedScheduling() {
+		t.Fatal("cursor accounts cannot opt into mixed scheduling")
+	}
+	// Opt-in only: a cursor account must not be pulled into an anthropic group
+	// until the operator says so.
+	if account.IsMixedSchedulingEnabled() {
+		t.Error("mixed scheduling is on without the account opting in")
+	}
+	account.Extra = map[string]any{"mixed_scheduling": true}
+	if !account.IsMixedSchedulingEnabled() {
+		t.Error("mixed scheduling stayed off after opting in")
+	}
+	if !isAccountAllowedInMixedScheduling(account, PlatformAnthropic) {
+		t.Error("an opted-in cursor account is not allowed in an anthropic group")
+	}
+	// Cursor serves no Gemini-shaped traffic.
+	if isAccountAllowedInMixedScheduling(account, PlatformGemini) {
+		t.Error("cursor was allowed into a gemini group")
+	}
+	if !containsString(mixedSchedulingQueryPlatforms(PlatformAnthropic), PlatformCursor) {
+		t.Error("anthropic scheduling does not query cursor accounts")
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCursorRunOptsFromAnthropic(t *testing.T) {

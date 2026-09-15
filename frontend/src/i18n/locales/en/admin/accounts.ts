@@ -1081,6 +1081,7 @@ export default {
         modelRestrictionHint: 'Without a mapping, the model list comes from this account\'s live Cursor picker catalog.',
         editHint: 'Credentials are never echoed back. Leave a field empty to keep its stored value; only filled fields are overwritten.',
         unchangedPlaceholder: 'Leave empty to keep unchanged',
+        mixedSchedulingHint: 'Note: Cursor serves plain chat only. Inside a Claude group, requests carrying tools or images (all of Claude Code) are handed to another account in the group rather than failing; only plain chat lands here.',
         toolUseUnsupported: 'Cursor accounts serve plain chat only and do not support tool use (route Claude Code / Codex elsewhere).',
         authMode: {
           title: 'How to add',

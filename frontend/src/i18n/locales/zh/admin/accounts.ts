@@ -1157,6 +1157,7 @@ export default {
         modelRestrictionHint: '不配置映射时，模型列表取自该账号在线的 Cursor picker 目录。',
         editHint: '凭证不回显。留空表示保留现有值，只有填写的字段才会被覆盖。',
         unchangedPlaceholder: '留空表示不修改',
+        mixedSchedulingHint: '注意：Cursor 只支持纯对话。放入 Claude 分组后，带工具调用或图片的请求（Claude Code 全是这类）会自动让给同组的其它账号，不会失败；纯对话请求才会落到此账号。',
         toolUseUnsupported: 'Cursor 账号只支持纯对话，不支持工具调用（Claude Code / Codex 请使用其他平台）。',
         authMode: {
           title: '添加方式',

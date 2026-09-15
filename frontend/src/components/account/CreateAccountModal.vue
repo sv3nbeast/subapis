@@ -4078,7 +4078,7 @@
       </div>
 
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
-        <!-- Mixed Scheduling (antigravity / kiro / droid accounts) -->
+        <!-- Mixed Scheduling (antigravity / kiro / droid / cursor accounts) -->
         <div v-if="supportsMixedScheduling" class="flex items-center gap-2">
           <label class="flex cursor-pointer items-center gap-2">
             <input
@@ -4107,6 +4107,12 @@
             </div>
           </div>
         </div>
+        <p
+          v-if="form.platform === 'cursor' && mixedScheduling"
+          class="mt-2 text-xs text-amber-600 dark:text-amber-400"
+        >
+          {{ t('admin.accounts.cursor.mixedSchedulingHint') }}
+        </p>
         <div v-if="form.platform === 'kiro' && accountCategory === 'oauth-based'" class="mt-3">
           <label class="flex cursor-pointer items-center gap-2">
             <input
@@ -5279,7 +5285,9 @@ function buildKiroExtra(base?: Record<string, unknown>): Record<string, unknown>
   return Object.keys(extra).length > 0 ? extra : undefined
 }
 
-const supportsMixedScheduling = computed(() => ['antigravity', 'kiro', 'droid'].includes(form.platform))
+const supportsMixedScheduling = computed(() =>
+  ['antigravity', 'kiro', 'droid', 'cursor'].includes(form.platform)
+)
 
 function buildMixedSchedulingExtra(): Record<string, unknown> | undefined {
   const extra: Record<string, unknown> = {}
@@ -5905,7 +5913,7 @@ watch(
       anthropicAPIKeyAuthScheme.value = 'x_api_key'
       webSearchEmulationMode.value = 'default'
     }
-    if (!['antigravity', 'kiro', 'droid'].includes(newPlatform)) {
+    if (!['antigravity', 'kiro', 'droid', 'cursor'].includes(newPlatform)) {
       mixedScheduling.value = false
     }
     if (newPlatform !== 'kiro') {
