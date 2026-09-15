@@ -7333,14 +7333,34 @@ func addKiroPriorCredits(usage Usage, requestCtx KiroRequestContext) Usage {
 //
 // The provider percentage also stays as the fallback whenever the request side
 // yields nothing at all.
+//
+// For the extended-context clients the projection must never *shrink* what the
+// request side already accounts for. reconcileKiroUsageWithContext rescales all
+// three input buckets proportionally, so a session whose request side is mostly
+// emulated cache had its real total pulled down to Kiro's smaller occupancy: one
+// observed session reported 454k against a 1.53M request side, i.e. 45% of a 1M
+// window, and the client never compacted while the true figure was over 100%.
+// Kiro's tokenizer and ours disagree, so whichever measure says more context is
+// in play is the one the client has to act on.
 func clientVisibleKiroUsage(usage Usage, model string, requestCtx KiroRequestContext) Usage {
+	requestSide := usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
 	if !kiroReportsRequestSideInput(model, requestCtx) {
-		return reconcileKiroUsageWithContext(usage, requestCtx.ContextWindowTokens)
+		projected := reconcileKiroUsageWithContext(usage, requestCtx.ContextWindowTokens)
+		if requestSide > 0 && kiroUsageInputTotal(projected) < requestSide {
+			return usage
+		}
+		return projected
 	}
-	if usage.InputTokens > 0 || usage.CacheReadInputTokens > 0 || usage.CacheCreationInputTokens > 0 {
+	if requestSide > 0 {
 		return usage
 	}
 	return reconcileKiroUsageWithContext(usage, requestCtx.ContextWindowTokens)
+}
+
+// kiroUsageInputTotal sums the three input buckets that a client adds up to
+// decide how full its context window is.
+func kiroUsageInputTotal(usage Usage) int {
+	return usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
 }
 
 // kiroReportsRequestSideInput reports whether the caller's own context window is

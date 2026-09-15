@@ -4489,6 +4489,49 @@ func TestClientVisibleKiroUsageKeepsOccupancyForExtendedContextClients(t *testin
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-opus-5[1m]"))
 }
 
+// Captured from production: a declared-1M session whose request side was almost
+// entirely emulated cache. Kiro's percentage put the session at ~454k while the
+// request side accounted for ~1.53M, and rescaling every bucket to the smaller
+// figure told a 1M client it was 45% full. It never compacted, and each cache
+// rebuild in that state cost ~$6.67. The projection may raise the reported
+// occupancy but must never lower it below what the request side already accounts
+// for.
+func TestClientVisibleKiroUsageNeverShrinksBelowRequestSide(t *testing.T) {
+	// contextUsagePercentage 45.42 of a 1M window ≈ 454k, well under the real
+	// 1.53M sitting in the cache buckets.
+	usage := Usage{
+		InputTokens:                0,
+		CacheReadInputTokens:       1_529_150,
+		CacheCreationInputTokens:   1_474,
+		CacheCreation5mInputTokens: 1_474,
+		OutputTokens:               611,
+		HasContextUsage:            true,
+		ContextUsagePercentage:     45.42,
+	}
+	declared := KiroRequestContext{ContextWindowTokens: 1_000_000, ClientDeclaredExtendedContext: true}
+
+	visible := clientVisibleKiroUsage(usage, "claude-opus-4-8", declared)
+
+	require.Equal(t, 1_529_150, visible.CacheReadInputTokens,
+		"the provider percentage must not shrink real cache occupancy")
+	require.Equal(t, 1_474, visible.CacheCreationInputTokens)
+	require.Equal(t, 611, visible.OutputTokens)
+	require.Greater(t, kiroUsageInputTotal(visible), 1_000_000,
+		"a client on a 1M window has to see that it is over budget")
+
+	// The projection still applies when it reports *more* context than the
+	// request side — that is the case it exists for.
+	sparse := Usage{
+		InputTokens:            12_000,
+		OutputTokens:           10,
+		HasContextUsage:        true,
+		ContextUsagePercentage: 85,
+	}
+	raised := clientVisibleKiroUsage(sparse, "claude-opus-4-8", declared)
+	require.Equal(t, 849_990, raised.InputTokens)
+	require.True(t, raised.InputTokensFromContext)
+}
+
 // The 1M beta token carries a version date, so the family prefix has to match —
 // pinning the exact string would silently disable the split on the next
 // revision. The token must also survive into the request context built for the
