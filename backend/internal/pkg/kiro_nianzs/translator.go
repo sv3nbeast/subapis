@@ -599,11 +599,11 @@ func kiroMaxOutputTokensForModel(model string) int {
 }
 
 func contextWindowTokensForModel(model string) int {
-	normalized := strings.ToLower(strings.TrimSpace(model))
-	normalized = strings.TrimSuffix(normalized, "-thinking")
-	if strings.Contains(normalized, "[1m]") || strings.HasSuffix(normalized, "-1m") {
+	if kiroModelDeclaresExtendedContext(model) {
 		return kiroExtendedContextTokens
 	}
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	normalized = strings.TrimSuffix(normalized, "-thinking")
 	switch normalizeModelAlias(normalized) {
 	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
 		"claude-opus-5",
@@ -868,7 +868,7 @@ func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, reque
 		usage.InputTokens = requestCtx.EstimatedInputTokens
 	}
 	usage = addKiroPriorCredits(usage, requestCtx)
-	clientUsage := reconcileKiroUsageWithContext(usage, requestCtx.ContextWindowTokens)
+	clientUsage := clientVisibleKiroUsage(usage, model, requestCtx.ContextWindowTokens)
 	return &ParseResult{
 		ResponseBody: buildClaudeResponse(content, toolUses, model, clientUsage, stopReason, reasoningArtifacts, requestCtx),
 		Usage:        usage,
@@ -2086,7 +2086,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	// framing twice (once here and once inside ensureMessageStart).
 	usage = normalizeClaudeCodeSimulatedInputUsage(usage, requestCtx)
 	usage.TotalTokens = usage.InputTokens + usage.OutputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
-	clientUsage := reconcileKiroUsageWithContext(usage, requestCtx.ContextWindowTokens)
+	clientUsage := clientVisibleKiroUsage(usage, model, requestCtx.ContextWindowTokens)
 	if err := releaseStreamOutput(); err != nil {
 		return nil, err
 	}
@@ -7279,6 +7279,59 @@ func addKiroPriorCredits(usage Usage, requestCtx KiroRequestContext) Usage {
 		usage.KiroCredits += requestCtx.PriorAttemptKiroCredits
 	}
 	return usage
+}
+
+// clientVisibleKiroUsage picks the input accounting returned to the client.
+//
+// Kiro never reports tokenUsage, only a context percentage, so reconciling
+// against it yields Kiro's *own* occupancy — the agent instructions Kiro
+// injects upstream are counted as if the caller had sent them. Measured on
+// claude-opus-5 that is a ~7k fixed floor plus a ~1.59x expansion, so a 13
+// token request reports ~7k, which reconciles with neither count_tokens nor
+// the invoice (billing uses the request-side estimate).
+//
+// Which figure is correct depends on how big the caller believes its context
+// window is, because Kiro grants all of these models ~1M regardless:
+//
+//   - Claude models without "[1m]": the caller assumes Anthropic's 200k, far
+//     under Kiro's capacity, so the request-side figure reconciles with
+//     count_tokens and still compacts with room to spare (200k request-side is
+//     ~325k of Kiro context). Kiro's occupancy made them compact at ~20%.
+//   - "[1m]" models: the caller also assumes 1M, so only Kiro's occupancy
+//     yields the right ratio. The request-side figure would let a session
+//     reach ~1.6M of Kiro context before compacting.
+//   - GPT models on the Responses route: Codex sizes compaction against the
+//     ~872k-922k it reads from the model manifest, near enough to Kiro's
+//     capacity that it has the same problem as "[1m]".
+//
+// The provider percentage also stays as the fallback whenever the request side
+// yields nothing at all.
+func clientVisibleKiroUsage(usage Usage, model string, contextWindowTokens int) Usage {
+	if !kiroModelReportsRequestSideInput(model) {
+		return reconcileKiroUsageWithContext(usage, contextWindowTokens)
+	}
+	if usage.InputTokens > 0 || usage.CacheReadInputTokens > 0 || usage.CacheCreationInputTokens > 0 {
+		return usage
+	}
+	return reconcileKiroUsageWithContext(usage, contextWindowTokens)
+}
+
+// kiroModelReportsRequestSideInput reports whether the caller's own context
+// window is small enough relative to Kiro's that the request-side input figure
+// can be reported without delaying compaction past Kiro's capacity.
+func kiroModelReportsRequestSideInput(model string) bool {
+	if kiroModelDeclaresExtendedContext(model) {
+		return false
+	}
+	return strings.Contains(strings.ToLower(strings.TrimSpace(model)), "claude")
+}
+
+// kiroModelDeclaresExtendedContext reports whether the caller asked for the 1M
+// context variant, where the client's own window matches Kiro's.
+func kiroModelDeclaresExtendedContext(model string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	normalized = strings.TrimSuffix(normalized, "-thinking")
+	return strings.Contains(normalized, "[1m]") || strings.HasSuffix(normalized, "-1m")
 }
 
 // reconcileKiroUsageWithContext derives the client-visible context occupancy

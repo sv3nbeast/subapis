@@ -4387,8 +4387,8 @@ func TestKiroContextUsageAt85PercentReturnsCompactionThresholdNonStreaming(t *te
 		},
 	})
 	require.NoError(t, err)
-	// Provider context occupancy is a client compaction signal. Billing keeps
-	// the cache-emulated request usage instead of charging the synthetic 850k.
+	// Billing keeps the cache-emulated request usage rather than the synthetic
+	// 850k the provider percentage would imply.
 	require.False(t, result.Usage.InputTokensFromContext)
 	require.Equal(t, 85.0, result.Usage.ContextUsagePercentage)
 	require.Equal(t, 100_010, result.Usage.TotalTokens)
@@ -4396,9 +4396,74 @@ func TestKiroContextUsageAt85PercentReturnsCompactionThresholdNonStreaming(t *te
 	require.Equal(t, 80_000, result.Usage.CacheReadInputTokens)
 	require.Equal(t, 10_000, result.Usage.CacheCreationInputTokens)
 	require.Equal(t, result.Usage.CacheCreationInputTokens, result.Usage.CacheCreation5mInputTokens+result.Usage.CacheCreation1hInputTokens)
-	require.Equal(t, int64(84_999), gjson.GetBytes(result.ResponseBody, "usage.input_tokens").Int())
-	require.Equal(t, int64(679_992), gjson.GetBytes(result.ResponseBody, "usage.cache_read_input_tokens").Int())
-	require.Equal(t, int64(84_999), gjson.GetBytes(result.ResponseBody, "usage.cache_creation_input_tokens").Int())
+	// The response body reports the same request-side buckets it bills, so
+	// usage reconciles with count_tokens. Scaling them up to Kiro's own
+	// occupancy would charge one number and report a ~8x larger one, and
+	// Claude clients size compaction against Anthropic's context window, not
+	// Kiro's, so the inflated figure made them compact far too early.
+	require.Equal(t, int64(10_000), gjson.GetBytes(result.ResponseBody, "usage.input_tokens").Int())
+	require.Equal(t, int64(80_000), gjson.GetBytes(result.ResponseBody, "usage.cache_read_input_tokens").Int())
+	require.Equal(t, int64(10_000), gjson.GetBytes(result.ResponseBody, "usage.cache_creation_input_tokens").Int())
+}
+
+// Kiro never sends tokenUsage, so reconciling against its context percentage
+// reports Kiro's own occupancy — including the agent instructions Kiro injects
+// upstream. On a 13 token request that measured ~7k, which no client can
+// reconcile against count_tokens or its invoice. The request-side figure is
+// authoritative whenever it exists; the percentage only fills a total blank.
+func TestClientVisibleKiroUsagePrefersRequestSideInput(t *testing.T) {
+	withEstimate := Usage{
+		InputTokens:            13,
+		OutputTokens:           4,
+		HasContextUsage:        true,
+		ContextUsagePercentage: 0.8,
+	}
+	visible := clientVisibleKiroUsage(withEstimate, "claude-opus-5", 872_000)
+	require.Equal(t, 13, visible.InputTokens, "request-side input must survive a context percentage")
+	require.False(t, visible.InputTokensFromContext)
+
+	cached := Usage{
+		CacheReadInputTokens:   4_757,
+		InputTokens:            25,
+		OutputTokens:           3,
+		HasContextUsage:        true,
+		ContextUsagePercentage: 1.55,
+	}
+	visibleCached := clientVisibleKiroUsage(cached, "claude-opus-5", 872_000)
+	require.Equal(t, 25, visibleCached.InputTokens)
+	require.Equal(t, 4_757, visibleCached.CacheReadInputTokens,
+		"emulated cache buckets must not be rescaled to Kiro occupancy")
+
+	// Nothing request-side at all: the provider percentage is better than zero.
+	blank := Usage{
+		OutputTokens:           10,
+		HasContextUsage:        true,
+		ContextUsagePercentage: 85,
+	}
+	fallback := clientVisibleKiroUsage(blank, "claude-opus-5", 1_000_000)
+	require.Equal(t, 849_990, fallback.InputTokens)
+	require.True(t, fallback.InputTokensFromContext)
+}
+
+// A "[1m]" caller sizes compaction against the same 1M window Kiro enforces,
+// so it must keep seeing Kiro's occupancy. Handing it the request-side figure
+// would let the session grow to ~1.6M of Kiro context before it compacts.
+func TestClientVisibleKiroUsageKeepsOccupancyForExtendedContextModels(t *testing.T) {
+	usage := Usage{
+		InputTokens:            624_500,
+		OutputTokens:           10,
+		HasContextUsage:        true,
+		ContextUsagePercentage: 85,
+	}
+	for _, model := range []string{"claude-opus-5[1m]", "claude-opus-5-1m", "claude-opus-5[1m]-thinking"} {
+		visible := clientVisibleKiroUsage(usage, model, 1_000_000)
+		require.Equal(t, 849_990, visible.InputTokens, model)
+		require.True(t, visible.InputTokensFromContext, model)
+	}
+	require.True(t, kiroModelDeclaresExtendedContext("claude-opus-5[1m]"))
+	require.False(t, kiroModelDeclaresExtendedContext("claude-opus-5"))
+	// The window resolver and the usage split must agree on what "1m" means.
+	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-opus-5[1m]"))
 }
 
 func TestKiroContextUsageBoundaryStaysBelow85UntilProviderReachesIt(t *testing.T) {
@@ -4441,8 +4506,12 @@ func TestKiroStreamingContextUsageReturnsAuthoritativeTerminalUsage(t *testing.T
 	require.False(t, result.Usage.InputTokensFromContext)
 	require.Equal(t, 100_005, result.Usage.TotalTokens)
 	require.Equal(t, 100_000, result.Usage.InputTokens)
-	require.Contains(t, out.String(), `"input_tokens":100000`)
-	require.Contains(t, out.String(), `"input_tokens":855832`)
+	// Anthropic reports one input figure per message: message_start and
+	// message_delta agree, and both agree with count_tokens and billing.
+	// Rescaling the terminal frame to Kiro's context occupancy used to make
+	// them disagree by ~8x within a single response.
+	require.Equal(t, 2, strings.Count(out.String(), `"input_tokens":100000`))
+	require.NotContains(t, out.String(), `"input_tokens":855832`)
 	require.Contains(t, out.String(), `"_sub2api_kiro_usage_final":true`)
 	require.Equal(t, 1, strings.Count(out.String(), "event: message_stop"))
 }

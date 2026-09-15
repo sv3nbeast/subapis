@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -552,6 +553,12 @@ func nianzsKiroSemanticTailResponse(t *testing.T, content string, percentage flo
 	}
 }
 
+// Claude callers without "[1m]" size compaction against Anthropic's 200k, so
+// they compact long before Kiro's ~1M runs out even when we report the much
+// smaller request-side input. Reporting Kiro's own occupancy instead made them
+// compact at ~20% of the window, and left usage.input_tokens irreconcilable
+// with both count_tokens and the invoice. "[1m]" and the Codex/Responses route
+// keep the occupancy projection — see the Responses test below.
 func TestNianzsMessagesRouteReturns85PercentContextUsageForClaudeCompaction(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, stream := range []bool{false, true} {
@@ -576,18 +583,27 @@ func TestNianzsMessagesRouteReturns85PercentContextUsageForClaudeCompaction(t *t
 			billingTotal := result.Usage.InputTokens + result.Usage.CacheReadInputTokens + result.Usage.CacheCreationInputTokens + result.Usage.OutputTokens
 			require.Less(t, billingTotal, 850_000, "provider context occupancy must not become billable input")
 			require.Equal(t, 10, result.Usage.OutputTokens)
+			require.Positive(t, result.Usage.InputTokens)
 			if stream {
-				require.Contains(t, recorder.Body.String(), `"input_tokens":849990`)
-				require.Equal(t, 1, strings.Count(recorder.Body.String(), "event: message_stop"))
-				require.NotContains(t, recorder.Body.String(), "_sub2api_kiro_usage_final")
-				require.NotContains(t, recorder.Body.String(), "_sub2api_billing_usage")
+				wire := recorder.Body.String()
+				require.Contains(t, wire, `"input_tokens":`+strconv.Itoa(result.Usage.InputTokens))
+				require.NotContains(t, wire, `"input_tokens":849990`)
+				require.Equal(t, 1, strings.Count(wire, "event: message_stop"))
+				require.NotContains(t, wire, "_sub2api_kiro_usage_final")
+				require.NotContains(t, wire, "_sub2api_billing_usage")
 			} else {
-				require.Equal(t, int64(849_990), gjson.Get(recorder.Body.String(), "usage.input_tokens").Int())
+				require.Equal(t, int64(result.Usage.InputTokens),
+					gjson.Get(recorder.Body.String(), "usage.input_tokens").Int())
 			}
 		})
 	}
 }
 
+// Codex sizes compaction against the model manifest's max_context_window
+// (≈872k-922k), which is close enough to Kiro's ~1M that the request-side figure
+// would let a session run past the provider window. So the Responses route keeps
+// reporting Kiro's occupancy, exactly like the "[1m]" Claude models do — the
+// split lives in kiroModelReportsRequestSideInput, not in client sniffing.
 func TestNianzsResponsesRouteReturns85PercentContextUsageWithoutBillingIt(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"gpt-5.6-sol","input":[{"role":"user","content":"context threshold"}],"stream":true}`)
