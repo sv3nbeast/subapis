@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	"github.com/tidwall/gjson"
 )
 
 const webAgentModelMaxInputBytes = 384 << 10
@@ -278,4 +280,145 @@ func parseWebAgentModelResponse(data []byte, anthropic bool, out *WebAgentModelO
 		return errors.New("task model returned empty or oversized content")
 	}
 	return nil
+}
+
+// A generated image is orders of magnitude larger than a JSON plan, so it gets
+// its own budget instead of borrowing the plan response limit.
+const webAgentImageMaxResponseBytes = 24 << 20
+
+type WebAgentImageOutput struct {
+	Data       []byte
+	MIME       string
+	Extension  string
+	Generation *WebAgentGeneration
+}
+
+type WebAgentImageCaller interface {
+	GenerateImage(context.Context, *WebChatSession, *APIKey, string) (*WebAgentImageOutput, error)
+}
+
+// GenerateImage routes through the local authenticated gateway's images
+// endpoint. Chat Completions rejects image models before account selection, so
+// a workbench image task cannot reuse the conversation path. Billing, content
+// moderation, concurrency limits and failover all come from that gateway route.
+func (c *WebAgentModelClient) GenerateImage(ctx context.Context, session *WebChatSession, key *APIKey, prompt string) (*WebAgentImageOutput, error) {
+	if c == nil || session == nil || key == nil || key.Key == "" {
+		return nil, ErrWebAgentUnavailable
+	}
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return nil, ErrWebAgentInvalid
+	}
+	// b64_json keeps the bytes in the response: a provider URL would expire long
+	// before the artifact it backs, leaving stored history with broken images.
+	payload, err := json.Marshal(map[string]any{
+		"model":           session.Model,
+		"prompt":          prompt,
+		"n":               1,
+		"response_format": "b64_json",
+	})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.origin+"/v1/images/generations", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+key.Key)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "SubAPIs-WebAgent/1.0")
+
+	result := &WebAgentImageOutput{Generation: &WebAgentGeneration{}}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return result, webAgentModelTransportFailure("model_request_failed", fmt.Errorf("task image request failed: %w", err))
+	}
+	defer resp.Body.Close()
+	result.Generation.RequestID = resp.Header.Get("X-Request-Id")
+	if id := resp.Header.Get("X-Client-Request-Id"); len(id) <= 256 {
+		result.Generation.ClientRequestID = id
+	}
+	if result.Generation.RequestID == "" {
+		result.Generation.RequestID = resp.Header.Get("Request-Id")
+	}
+	if len(result.Generation.RequestID) > 256 {
+		return nil, webAgentFailure("model_response_invalid", errors.New("invalid task request identifier"))
+	}
+	if resp.StatusCode != http.StatusOK {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+		fingerprint := fmt.Sprintf("%x", sha256.Sum256(payload))[:16]
+		detail := sanitizeWebAgentProviderError(string(errBody))
+		if detail == "" {
+			detail = "provider returned no diagnostic body"
+		}
+		return result, webAgentFailure(fmt.Sprintf("model_http_%d", resp.StatusCode), fmt.Errorf("task image returned HTTP %d (request_fingerprint=%s): %s", resp.StatusCode, fingerprint, detail))
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, webAgentImageMaxResponseBytes+1))
+	if err != nil {
+		return result, webAgentModelTransportFailure("model_response_interrupted", err)
+	}
+	if len(data) > webAgentImageMaxResponseBytes {
+		return result, webAgentFailure("output_budget_exceeded", errors.New("task image response exceeds budget"))
+	}
+	if err = parseWebAgentImageResponse(data, result); err != nil {
+		return result, webAgentFailure("model_response_invalid", err)
+	}
+	if ctx.Err() != nil {
+		return result, ctx.Err()
+	}
+	return result, nil
+}
+
+// parseWebAgentImageResponse trusts the decoded bytes, not the provider's
+// declared format: the artifact's stored MIME must match what a browser will
+// actually render, and a mismatched extension breaks preview and download.
+func parseWebAgentImageResponse(data []byte, out *WebAgentImageOutput) error {
+	if out.Generation == nil {
+		out.Generation = &WebAgentGeneration{}
+	}
+	// The images endpoint reports token usage for image models that price on
+	// tokens; absent fields simply leave the usage snapshot empty.
+	if usage := gjson.GetBytes(data, "usage"); usage.Exists() {
+		out.Generation.Usage = &WebChatUsage{
+			InputTokens:  usage.Get("input_tokens").Int(),
+			OutputTokens: usage.Get("output_tokens").Int(),
+		}
+	}
+	encoded := strings.TrimSpace(gjson.GetBytes(data, "data.0.b64_json").String())
+	if encoded == "" {
+		// A URL-only reply means the request lost its b64_json format somewhere in
+		// the chain. Fail loudly instead of storing an artifact that will 404.
+		if gjson.GetBytes(data, "data.0.url").Exists() {
+			return errors.New("image response returned a provider URL instead of image bytes")
+		}
+		return errors.New("image response carries no image data")
+	}
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return fmt.Errorf("image response is not valid base64: %w", err)
+	}
+	if len(raw) == 0 {
+		return errors.New("image response decoded to zero bytes")
+	}
+	mime, ext, ok := sniffWebAgentImageFormat(raw)
+	if !ok {
+		return errors.New("image response is not a supported image format")
+	}
+	out.Data, out.MIME, out.Extension = raw, mime, ext
+	return nil
+}
+
+// Only formats the artifact pipeline can store and a browser can display inline.
+func sniffWebAgentImageFormat(raw []byte) (mime string, ext string, ok bool) {
+	switch {
+	case len(raw) >= 8 && bytes.HasPrefix(raw, []byte("\x89PNG\r\n\x1a\n")):
+		return "image/png", "png", true
+	case len(raw) >= 3 && bytes.HasPrefix(raw, []byte{0xFF, 0xD8, 0xFF}):
+		return "image/jpeg", "jpg", true
+	case len(raw) >= 12 && bytes.HasPrefix(raw, []byte("RIFF")) && bytes.Equal(raw[8:12], []byte("WEBP")):
+		return "image/webp", "webp", true
+	default:
+		return "", "", false
+	}
 }

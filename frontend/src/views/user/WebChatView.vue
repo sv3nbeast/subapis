@@ -58,9 +58,11 @@
 
         <div v-if="taskMode!=='chat'&&workspaceSection==='chat'" class="task-context">
           <p v-if="!options.tasks_enabled">{{ t('webAgent.unavailable') }} <button @click="refreshTaskOptions">{{ t('webAgent.refresh') }}</button></p>
+          <p v-else-if="taskMode==='image'&&!imageModelsAvailable">{{ t('webAgent.noImageModel') }}</p>
+          <p v-else-if="taskMode==='image'">{{ t('webAgent.imageHint') }}</p>
           <p v-else>{{ t('webAgent.budget',{minutes:(options.task_limits?.deadline_seconds||600)/60}) }}</p>
-          <details v-if="options.task_limits"><summary>{{ t('workspace.usageDetails') }}</summary>{{ t('webAgent.budgetDetails',{input:options.task_limits.max_input_bytes/1024,output:activeSession?.max_output_tokens||8192,file:options.task_limits.max_artifact_bytes/1024/1024}) }}</details>
-          <p v-if="sourceArtifact">{{ t('webAgent.source',{version:sourceArtifact.version}) }} · {{ sourceArtifact.title }} <button @click="sourceArtifact=null">{{ t('webAgent.clearSource') }}</button></p>
+          <details v-if="options.task_limits&&taskMode!=='image'"><summary>{{ t('workspace.usageDetails') }}</summary>{{ t('webAgent.budgetDetails',{input:options.task_limits.max_input_bytes/1024,output:activeSession?.max_output_tokens||8192,file:options.task_limits.max_artifact_bytes/1024/1024}) }}</details>
+          <p v-if="sourceArtifact&&taskMode!=='image'">{{ t('webAgent.source',{version:sourceArtifact.version}) }} · {{ sourceArtifact.title }} <button @click="sourceArtifact=null">{{ t('webAgent.clearSource') }}</button></p>
           <p v-if="agent.error.value" role="alert">{{ agent.error.value }}</p>
           <p v-if="agent.pending.value">{{ t('webAgent.pending') }} <button :disabled="agent.creating.value" @click="retryTaskSubmission">{{ t('webAgent.retrySubmission') }}</button></p>
         </div>
@@ -77,7 +79,7 @@
           <div v-else class="empty-state"><h2>{{ t('workspace.noProjects') }}</h2><p>{{ t('workspace.noProjectsHint') }}</p></div>
         </section>
         <div v-else-if="showHome&&taskMode==='chat'" class="home-scroll"><WebChatHome :name="authStore.user?.username" :sessions="displayedSessions" :disabled="sending" @select="selectSession" @shortcut="chooseShortcut">
-          <template #composer><WebChatComposer v-model="draft" :modes="taskModes" :mode="taskMode" :mode-disabled="sending||agent.creating.value" :allow-modes="workspaceSection==='chat'" @update:mode="setTaskMode" :disabled="!canCompose" :can-send="canSend&&Boolean(draft.trim())" :sending="sending" :files-enabled="options.files_enabled" :templates-enabled="options.templates_enabled" :template-name="activeTemplateName" :documents="pendingDocuments" :failed-attachments="failedAttachments" :attachment-state="attachmentState" @submit="send" @stop="stopGeneration" @open-template="templateDialogOpen=true" @clear-template="activeTemplateId=null" @files="uploadTemporaryDocuments" @remove-document="removePendingDocument" @retry-attachment="retryFailedAttachment" @remove-failed-attachment="removeFailedAttachment"/></template>
+          <template #composer><WebChatComposer v-model="draft" :modes="availableModes" :mode="taskMode" :mode-disabled="sending||agent.creating.value" :allow-modes="workspaceSection==='chat'" @update:mode="setTaskMode" :disabled="!canCompose" :can-send="canSend&&Boolean(draft.trim())" :sending="sending" :files-enabled="options.files_enabled" :templates-enabled="options.templates_enabled" :template-name="activeTemplateName" :documents="pendingDocuments" :failed-attachments="failedAttachments" :attachment-state="attachmentState" @submit="send" @stop="stopGeneration" @open-template="templateDialogOpen=true" @clear-template="activeTemplateId=null" @files="uploadTemporaryDocuments" @remove-document="removePendingDocument" @retry-attachment="retryFailedAttachment" @remove-failed-attachment="removeFailedAttachment"/></template>
         </WebChatHome></div>
         <template v-else>
           <p v-if="taskMode==='chat'" class="chat-capability-hint">{{ t('webAgent.chatHint') }}</p>
@@ -135,8 +137,8 @@
             </article>
           </div></section></div>
           </template>
-          <div v-if="canCompose" class="composer-dock wc-compose"><WebChatComposer v-model="draft" :modes="taskModes" :mode="taskMode" :mode-disabled="sending||agent.creating.value" :allow-modes="workspaceSection==='chat'" @update:mode="setTaskMode" :disabled="!canCompose||agent.creating.value" :can-send="canSend&&Boolean(draft.trim())" :sending="sending" :files-enabled="options.files_enabled" :templates-enabled="options.templates_enabled" :template-name="activeTemplateName" :documents="pendingDocuments" :failed-attachments="failedAttachments" :attachment-state="attachmentState" @submit="send" @stop="stopGeneration" @open-template="templateDialogOpen=true" @files="uploadTemporaryDocuments" @remove-document="removePendingDocument" @retry-attachment="retryFailedAttachment" @remove-failed-attachment="removeFailedAttachment">
-            <template #model><WebChatModelPicker v-model="selectedChatModelId" :models="asArray(options.models)" :disabled="sending||creatingSession||agent.creating.value" /></template>
+          <div v-if="canCompose" class="composer-dock wc-compose"><WebChatComposer v-model="draft" :modes="availableModes" :mode="taskMode" :mode-disabled="sending||agent.creating.value" :allow-modes="workspaceSection==='chat'" @update:mode="setTaskMode" :disabled="!canCompose||agent.creating.value" :can-send="canSend&&Boolean(draft.trim())" :sending="sending" :files-enabled="options.files_enabled" :templates-enabled="options.templates_enabled" :template-name="activeTemplateName" :documents="pendingDocuments" :failed-attachments="failedAttachments" :attachment-state="attachmentState" @submit="send" @stop="stopGeneration" @open-template="templateDialogOpen=true" @files="uploadTemporaryDocuments" @remove-document="removePendingDocument" @retry-attachment="retryFailedAttachment" @remove-failed-attachment="removeFailedAttachment">
+            <template #model><WebChatModelPicker v-model="selectedChatModelId" :models="eligibleModels" :disabled="sending||creatingSession||agent.creating.value" /></template>
           </WebChatComposer></div>
         </template>
       </main>
@@ -202,7 +204,7 @@ const knowledgeLibraryOpen=ref(false),knowledgeProject=ref<WebChatProject|null>(
 const options=ref<WebChatOptions>({enabled:false,groups:[],projects_enabled:false,templates_enabled:false,history_enabled:false,files_enabled:false,file_limits:{max_file_bytes:20*1024*1024,max_files_per_project:50,max_bytes_per_user:500*1024*1024}}), sessions=ref<WebChatSession[]>([]), messages=ref<WebChatMessage[]>([]),projects=ref<WebChatProject[]>([]),templates=ref<WebChatTemplate[]>([])
 const activeTemplateId=ref<number|null>(null)
 const activeSessionId=ref<number|null>(null), selectedChatModelId=ref(''), selectedGroupId=ref<number|null>(null), selectedModel=ref(''), draft=ref(''), streamingText=ref(''), sessionQuery=ref('')
-const taskModes=['chat','slides','spreadsheet','document'] as const
+const taskModes=['chat','image','slides','spreadsheet','document'] as const
 type TaskMode=typeof taskModes[number]
 const taskMode=ref<TaskMode>('chat'),selectedArtifact=ref<WebAgentArtifact|null>(null),sourceArtifact=ref<WebAgentArtifact|null>(null)
 const artifactLibrary=ref<InstanceType<typeof WebAgentArtifactLibrary>>(),libraryFiles=ref<WebAgentArtifact[]>([])
@@ -237,7 +239,20 @@ const {pendingDocuments,failedAttachments,attachmentState,uploadTemporaryDocumen
 const activeSession=computed(()=>sessions.value.find(item=>item.id===activeSessionId.value)||null)
 const selectedGroup=computed(()=>asArray(options.value.groups).find(group=>group.id===selectedGroupId.value)||null)
 const selectedGroupModels=computed(()=>asArray(selectedGroup.value?.models))
-const selectedModelOption=computed(()=>asArray(options.value.models).find(model=>model.id===selectedChatModelId.value)||null)
+const CHAT_CAPABILITY='chat', IMAGE_CAPABILITY='image'
+// An entry published before image support declares nothing and is a chat model.
+function modelSupports(model:{capabilities?:string[]},capability:string){const list=asArray(model.capabilities);return list.length?list.includes(capability):capability===CHAT_CAPABILITY}
+const requiredCapability=computed(()=>taskMode.value==='image'?IMAGE_CAPABILITY:CHAT_CAPABILITY)
+// The picker must only offer models the current mode can actually reach: the
+// images endpoint refuses chat models and Chat Completions refuses image models.
+const eligibleModels=computed(()=>asArray(options.value.models).filter(model=>modelSupports(model,requiredCapability.value)))
+const imageModelsAvailable=computed(()=>asArray(options.value.models).some(model=>modelSupports(model,IMAGE_CAPABILITY)))
+const availableModes=computed(()=>taskModes.filter(mode=>{
+  if(mode==='chat')return true
+  if(mode==='image')return Boolean(options.value.tasks_enabled)&&imageModelsAvailable.value
+  return Boolean(options.value.tasks_enabled)&&options.value.office_tasks_enabled!==false
+}))
+const selectedModelOption=computed(()=>eligibleModels.value.find(model=>model.id===selectedChatModelId.value)||null)
 const hasUsableModel=computed(()=>asArray(options.value.models).length>0)
 const displayedSessions=computed(()=>{
   const startToday=new Date().setHours(0,0,0,0)
@@ -417,7 +432,14 @@ async function send(){
   })
  }catch(e){operationError.value=extractApiErrorMessage(e)}
 }
-function setTaskMode(mode:TaskMode){taskMode.value=mode;if(sourceArtifact.value?.kind!==mode)sourceArtifact.value=null}
+function setTaskMode(mode:TaskMode){
+ taskMode.value=mode
+ if(sourceArtifact.value?.kind!==mode)sourceArtifact.value=null
+ // Chat and image models are mutually exclusive targets, so a mode switch must
+ // land on a model the new mode can reach instead of keeping an unusable one.
+ if(!eligibleModels.value.some(model=>model.id===selectedChatModelId.value))
+  selectedChatModelId.value=eligibleModels.value.find(model=>model.recommended)?.id||eligibleModels.value[0]?.id||''
+}
 async function refreshTaskOptions(){try{const opts=await webChatAPI.getOptions();options.value={...opts,groups:asArray(opts.groups)}}catch(e){operationError.value=extractApiErrorMessage(e)}}
 async function inspectArtifact(id:number){const version=++artifactSelection;try{const artifact=await getArtifact(id);if(version===artifactSelection)selectedArtifact.value=artifact}catch(e){if(version===artifactSelection)operationError.value=extractApiErrorMessage(e)}}
 function navigateWorkspace(section:'files'|'projects'){if(sending.value||agent.creating.value)return;artifactSelection++;selectedArtifact.value=null;workspaceSection.value=section;sessionsOpen.value=false}
@@ -442,9 +464,20 @@ async function reviseArtifact(artifact:WebAgentArtifact){
 function artifactDeleted(id:number){agent.markArtifactDeleted(id);artifactLibrary.value?.remove(id);libraryFiles.value=libraryFiles.value.filter(a=>a.id!==id);if(selectedArtifact.value?.id===id)selectedArtifact.value=null;if(sourceArtifact.value?.id===id)sourceArtifact.value=null}
 function acceptFileTask(task:WebAgentTask|null){if(!task)return;if(activeSessionId.value===task.session_id){if(draft.value.trim()===task.prompt)draft.value='';clearPendingDocuments();sourceArtifact.value=null}}
 async function createFileTask(content:string){
- const kind=taskMode.value,group=selectedGroupId.value,model=selectedModel.value,source=sourceArtifact.value,template=activeTemplateId.value,documents=pendingDocuments.value.map(d=>d.id)
- if(kind==='chat'||!group)return
- try{const session=activeSession.value||await createSessionForCurrentSelection();if(!session)return;acceptFileTask(await agent.create({kind,prompt:content,group_id:group,model,document_ids:documents,...(template?{template_id:template}:{}),...(source?{source_artifact_id:source.id}:{})}))}catch(e){operationError.value=extractApiErrorMessage(e)}
+ const kind=taskMode.value,source=sourceArtifact.value,template=activeTemplateId.value,documents=pendingDocuments.value.map(d=>d.id)
+ if(kind==='chat')return
+ // The session target follows the conversation, which is a chat model. A file
+ // task runs on the model picked for this mode, so send that selection instead.
+ const selection=selectedModelOption.value
+ if(!selection){operationError.value=catalogText.value.reselect;return}
+ try{
+  const session=activeSession.value||await createSessionForCurrentSelection()
+  if(!session)return
+  // Images take the prompt alone: reference documents and revisions are the
+  // Office pipeline's inputs, and sending them here would be silently dropped.
+  const extras=kind==='image'?{}:{document_ids:documents,...(template?{template_id:template}:{}),...(source?{source_artifact_id:source.id}:{})}
+  acceptFileTask(await agent.create({kind,prompt:content,chat_model_id:selection.id,...extras}))
+ }catch(e){operationError.value=extractApiErrorMessage(e)}
 }
 async function retryTaskSubmission(){try{acceptFileTask(await agent.retryPending())}catch(e){operationError.value=extractApiErrorMessage(e)}}
 async function cancelFileTask(id:number){try{await agent.cancel(id)}catch(e){operationError.value=extractApiErrorMessage(e)}}

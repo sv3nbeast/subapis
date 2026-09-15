@@ -68,13 +68,30 @@ func (a *WebAgentArtifact) Validate() error {
 	if !utf8.ValidString(a.Title) || strings.TrimSpace(a.Title) == "" || utf8.RuneCountInString(a.Title) > 120 ||
 		a.Filename != webAgentArtifactFilename(a.Title, format.ext) || a.MIME != format.mime ||
 		!webAgentBlobKey.MatchString(a.BlobKey) || !strings.HasSuffix(a.BlobKey, "."+format.ext) ||
-		!webAgentBlobKey.MatchString(a.PreviewKey) || !strings.HasSuffix(a.PreviewKey, ".pdf") ||
-		a.SizeBytes <= 0 || a.PreviewBytes <= 0 || a.SizeBytes > webAgentArtifactMaxBytes || a.PreviewBytes > webAgentArtifactMaxBytes ||
-		a.SizeBytes+a.PreviewBytes > webAgentArtifactMaxBytes || len(a.Spec) > 1<<20 || !json.Valid(a.Spec) {
+		a.SizeBytes <= 0 || a.SizeBytes > webAgentArtifactMaxBytes ||
+		a.SizeBytes+a.PreviewBytes > webAgentArtifactMaxBytes {
+		return ErrWebAgentInvalid
+	}
+	if webAgentArtifactHasPreview(a.Kind) {
+		if !webAgentBlobKey.MatchString(a.PreviewKey) || !strings.HasSuffix(a.PreviewKey, ".pdf") ||
+			a.PreviewBytes <= 0 || a.PreviewBytes > webAgentArtifactMaxBytes {
+			return ErrWebAgentInvalid
+		}
+	} else if a.PreviewKey != "" || a.PreviewBytes != 0 {
+		// An image is its own preview. A stored preview would be an unreferenced
+		// blob that storage accounting never reclaims.
 		return ErrWebAgentInvalid
 	}
 	hash, err := hex.DecodeString(a.SHA256)
 	if err != nil || len(hash) != 32 {
+		return ErrWebAgentInvalid
+	}
+	// Office artifacts round-trip through a JSON spec the renderer consumed. An
+	// image has no spec to re-validate; its prompt lives on the task.
+	if !webAgentArtifactHasPreview(a.Kind) {
+		return nil
+	}
+	if len(a.Spec) > 1<<20 || !json.Valid(a.Spec) {
 		return ErrWebAgentInvalid
 	}
 	var spec struct{ Kind, Title string }

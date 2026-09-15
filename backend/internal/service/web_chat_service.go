@@ -170,17 +170,18 @@ func (s *WebChatService) Options(ctx context.Context, userID int64) (*WebChatOpt
 		return nil, err
 	}
 	options := &WebChatOptions{
-		Models:           catalogOptions(runtime.Catalog, groups),
-		Enabled:          true,
-		TasksEnabled:     s.agent.Ready(ctx),
-		TaskStatus:       s.agent.Availability(ctx),
-		TaskLimits:       WebAgentDefaultLimits(),
-		Groups:           groups,
-		ProjectsEnabled:  runtime.ProjectsEnabled,
-		TemplatesEnabled: runtime.TemplatesEnabled,
-		HistoryEnabled:   runtime.HistoryEnabled,
-		FilesEnabled:     runtime.FilesEnabled,
-		FileFormats:      []string{"pdf", "docx", "xlsx", "txt", "md", "csv"},
+		Models:             catalogOptions(runtime.Catalog, groups),
+		Enabled:            true,
+		TasksEnabled:       s.agent.Ready(ctx),
+		OfficeTasksEnabled: s.agent.OfficeReady(ctx),
+		TaskStatus:         s.agent.Availability(ctx),
+		TaskLimits:         WebAgentDefaultLimits(),
+		Groups:             groups,
+		ProjectsEnabled:    runtime.ProjectsEnabled,
+		TemplatesEnabled:   runtime.TemplatesEnabled,
+		HistoryEnabled:     runtime.HistoryEnabled,
+		FilesEnabled:       runtime.FilesEnabled,
+		FileFormats:        []string{"pdf", "docx", "xlsx", "txt", "md", "csv"},
 	}
 	if s.documents != nil {
 		options.FileLimits = s.documents.Limits(ctx)

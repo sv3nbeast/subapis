@@ -65,9 +65,12 @@ type WebAgentTaskEvent struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 type WebAgentCreateRequest struct {
-	TemplateID       *int64  `json:"template_id,omitempty"`
-	GroupID          *int64  `json:"group_id,omitempty"`
-	Model            string  `json:"model,omitempty"`
+	TemplateID *int64 `json:"template_id,omitempty"`
+	GroupID    *int64 `json:"group_id,omitempty"`
+	Model      string `json:"model,omitempty"`
+	// A catalog selection, resolved server-side to a real group and model. The
+	// browser sends this instead of a group so it never names an internal route.
+	ChatModelID      string  `json:"chat_model_id,omitempty"`
 	SourceArtifactID *int64  `json:"source_artifact_id,omitempty"`
 	Kind             string  `json:"kind"`
 	Prompt           string  `json:"prompt"`
@@ -105,6 +108,10 @@ func normalizeWebAgentRequest(req WebAgentCreateRequest) (WebAgentCreateRequest,
 	if len(req.Model) > 200 {
 		return req, ErrWebAgentInvalid
 	}
+	req.ChatModelID = strings.TrimSpace(req.ChatModelID)
+	if len(req.ChatModelID) > 200 {
+		return req, ErrWebAgentInvalid
+	}
 	if req.SourceArtifactID != nil && *req.SourceArtifactID <= 0 {
 		return req, ErrWebAgentInvalid
 	}
@@ -113,6 +120,12 @@ func normalizeWebAgentRequest(req WebAgentCreateRequest) (WebAgentCreateRequest,
 	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
 	switch req.Kind {
 	case "slides", "spreadsheet", "document":
+	case "image":
+		// Reference documents shape an Office plan; an image request is the prompt
+		// alone, and editing an existing image is a separate capability.
+		if len(req.DocumentIDs) > 0 || req.SourceArtifactID != nil {
+			return req, ErrWebAgentInvalid
+		}
 	default:
 		return req, ErrWebAgentInvalid
 	}

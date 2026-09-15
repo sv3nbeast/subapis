@@ -48,20 +48,23 @@ type WebChatGroupOption struct {
 }
 
 type WebChatOptions struct {
-	Models           []WebChatCatalogOption `json:"models"`
-	TaskStatus       string                 `json:"task_status,omitempty"`
-	TaskLimits       *WebAgentLimits        `json:"task_limits,omitempty"`
-	TasksEnabled     bool                   `json:"tasks_enabled"`
-	Enabled          bool                   `json:"enabled"`
-	Groups           []WebChatGroupOption   `json:"groups"`
-	DefaultGroupID   *int64                 `json:"default_group_id,omitempty"`
-	DefaultModel     string                 `json:"default_model,omitempty"`
-	ProjectsEnabled  bool                   `json:"projects_enabled"`
-	TemplatesEnabled bool                   `json:"templates_enabled"`
-	HistoryEnabled   bool                   `json:"history_enabled"`
-	FilesEnabled     bool                   `json:"files_enabled"`
-	FileFormats      []string               `json:"file_formats,omitempty"`
-	FileLimits       WebChatDocumentLimits  `json:"file_limits"`
+	Models       []WebChatCatalogOption `json:"models"`
+	TaskStatus   string                 `json:"task_status,omitempty"`
+	TaskLimits   *WebAgentLimits        `json:"task_limits,omitempty"`
+	TasksEnabled bool                   `json:"tasks_enabled"`
+	// Renderer-backed kinds (slides/spreadsheet/document) can be unavailable
+	// while image tasks work, so the browser gates each group separately.
+	OfficeTasksEnabled bool                  `json:"office_tasks_enabled"`
+	Enabled            bool                  `json:"enabled"`
+	Groups             []WebChatGroupOption  `json:"groups"`
+	DefaultGroupID     *int64                `json:"default_group_id,omitempty"`
+	DefaultModel       string                `json:"default_model,omitempty"`
+	ProjectsEnabled    bool                  `json:"projects_enabled"`
+	TemplatesEnabled   bool                  `json:"templates_enabled"`
+	HistoryEnabled     bool                  `json:"history_enabled"`
+	FilesEnabled       bool                  `json:"files_enabled"`
+	FileFormats        []string              `json:"file_formats,omitempty"`
+	FileLimits         WebChatDocumentLimits `json:"file_limits"`
 }
 
 type WebChatSession struct {

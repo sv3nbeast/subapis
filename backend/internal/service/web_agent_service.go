@@ -43,6 +43,16 @@ func (s *WebAgentService) Ready(ctx context.Context) bool {
 	return s.configured(ctx) && s.running.Load()
 }
 
+// OfficeReady reports whether renderer-backed kinds can run. Image tasks need no
+// renderer, so a deployment without one still serves them.
+func (s *WebAgentService) OfficeReady(ctx context.Context) bool {
+	if !s.Ready(ctx) {
+		return false
+	}
+	office, ok := s.executor.(interface{ OfficeAvailable() bool })
+	return !ok || office.OfficeAvailable()
+}
+
 type WebAgentLimits struct {
 	MaxActiveTasks   int `json:"max_active_tasks"`
 	MaxModelCalls    int `json:"max_model_calls"`
@@ -119,9 +129,23 @@ func (s *WebAgentService) Create(ctx context.Context, userID, sessionID int64, i
 	if req.Model != "" {
 		modelName = req.Model
 	}
+	// A catalog selection wins over the session target: a file task runs on the
+	// model the browser picked for its mode, not the conversation's chat model.
+	if req.ChatModelID != "" {
+		groupID, modelName, err = s.chat.resolveCatalogSelection(ctx, req.ChatModelID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	group, model, err := s.chat.validateGroupModel(ctx, userID, groupID, modelName)
 	if err != nil {
 		return nil, err
+	}
+	// A conversation model cannot serve an image task and vice versa: the images
+	// endpoint rejects chat models, and Chat Completions rejects image models
+	// before account selection. Fail here rather than after the task is queued.
+	if isImage := req.Kind == "image"; isImage != isOpenAIImageGenerationModel(model.Name) {
+		return nil, ErrWebAgentInvalid
 	}
 	// File jobs can use a different model without racing another browser's
 	// conversation target. Freeze the explicit selection in this task only.

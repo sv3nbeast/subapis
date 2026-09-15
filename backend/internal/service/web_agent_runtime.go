@@ -14,15 +14,43 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 )
 
+// Both executors publish artifacts through the same storage journal; only the
+// way they produce bytes differs.
+type webAgentKindExecutor interface {
+	Execute(context.Context, *WebAgentTask, func(string, string) error) (*WebAgentArtifact, error)
+	Discard(context.Context, *WebAgentArtifact) error
+}
+
 type webAgentRuntime struct {
 	*WebAgentOfficeExecutor
-	probe     func(context.Context) error
-	mu        sync.Mutex
-	available atomic.Bool
-	busy      bool
+	image *WebAgentImageExecutor
+	// Office work needs the renderer; image work only needs the local gateway.
+	// Tracking them apart keeps images usable where no renderer is deployed.
+	probe       func(context.Context) error
+	officeProbe func(context.Context) error
+	mu          sync.Mutex
+	available   atomic.Bool
+	office      atomic.Bool
+	busy        bool
 }
 
 func (r *webAgentRuntime) Available() bool { return r.available.Load() }
+
+// OfficeAvailable reports whether the renderer-backed kinds can run.
+func (r *webAgentRuntime) OfficeAvailable() bool { return r.office.Load() }
+
+func (r *webAgentRuntime) executorFor(kind string) (webAgentKindExecutor, error) {
+	if kind == "image" {
+		if r.image == nil {
+			return nil, ErrWebAgentUnavailable
+		}
+		return r.image, nil
+	}
+	if !r.office.Load() || r.WebAgentOfficeExecutor == nil {
+		return nil, ErrWebAgentUnavailable
+	}
+	return r.WebAgentOfficeExecutor, nil
+}
 func (r *webAgentRuntime) check(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -33,6 +61,11 @@ func (r *webAgentRuntime) check(ctx context.Context) error {
 	}
 	err := r.probe(ctx)
 	r.available.Store(err == nil)
+	if r.officeProbe == nil {
+		r.office.Store(false)
+	} else {
+		r.office.Store(err == nil && r.officeProbe(ctx) == nil)
+	}
 	return err
 }
 func (r *webAgentRuntime) WaitReady(ctx context.Context) error {
@@ -53,19 +86,31 @@ func (r *webAgentRuntime) WaitReady(ctx context.Context) error {
 	}
 }
 func (r *webAgentRuntime) Execute(ctx context.Context, t *WebAgentTask, p func(string, string) error) (*WebAgentArtifact, error) {
+	if t == nil {
+		return nil, ErrWebAgentInvalid
+	}
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	err := r.check(probeCtx)
 	cancel()
 	if err != nil {
 		return nil, ErrWebAgentUnavailable
 	}
-	r.mu.Lock()
-	r.busy = true
-	r.mu.Unlock()
-	defer func() { r.mu.Lock(); r.busy = false; r.mu.Unlock() }()
-	return r.WebAgentOfficeExecutor.Execute(ctx, t, p)
+	executor, err := r.executorFor(t.Kind)
+	if err != nil {
+		return nil, err
+	}
+	// busy guards the renderer's single render slot. An image task never touches
+	// the renderer, so holding that flag would serialise unrelated work.
+	if t.Kind != "image" {
+		r.mu.Lock()
+		r.busy = true
+		r.mu.Unlock()
+		defer func() { r.mu.Lock(); r.busy = false; r.mu.Unlock() }()
+	}
+	return executor.Execute(ctx, t, p)
 }
 func (r *webAgentRuntime) Maintain(ctx context.Context) error {
+	// One storage journal backs both executors, so a single sweep covers both.
 	cleanupErr := r.WebAgentOfficeExecutor.Maintain(ctx)
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -97,9 +142,16 @@ func (s *WebChatService) ConfigureAgent(cfg config.WebAgentConfig, port int) err
 	if strings.TrimSpace(cfg.StoragePath) == "" {
 		return ErrWebAgentInvalid
 	}
-	renderer, err := NewWebAgentOfficeClient(cfg.RendererURL, cfg.RendererToken)
-	if err != nil {
-		return err
+	// A deployment may enable image tasks without running the Office renderer.
+	// Only reject a renderer that is configured but invalid; an absent one just
+	// leaves the renderer-backed kinds unavailable.
+	var renderer *WebAgentOfficeClient
+	if strings.TrimSpace(cfg.RendererURL) != "" || strings.TrimSpace(cfg.RendererToken) != "" {
+		client, err := NewWebAgentOfficeClient(cfg.RendererURL, cfg.RendererToken)
+		if err != nil {
+			return err
+		}
+		renderer = client
 	}
 	model, err := NewWebAgentModelClient(port)
 	if err != nil {
@@ -114,15 +166,26 @@ func (s *WebChatService) ConfigureAgent(cfg config.WebAgentConfig, port int) err
 	if err = storage.RegisterArtifactStore(ctx, store.StorageID()); err != nil {
 		return err
 	}
-	runtime := &webAgentRuntime{WebAgentOfficeExecutor: NewWebAgentOfficeExecutor(NewWebAgentModelPlanner(s, model), renderer, store, artifacts)}
+	// A nil renderer leaves Execute's guard tripping on e.renderer == nil, and
+	// officeProbe stays unset so OfficeAvailable never reports true.
+	var officeRenderer WebAgentRenderer
+	if renderer != nil {
+		officeRenderer = renderer
+	}
+	runtime := &webAgentRuntime{
+		WebAgentOfficeExecutor: NewWebAgentOfficeExecutor(NewWebAgentModelPlanner(s, model), officeRenderer, store, artifacts),
+		image:                  NewWebAgentImageExecutor(s, model, store, artifacts),
+	}
 	runtime.probe = func(ctx context.Context) error {
 		if err := storage.RegisterArtifactStore(ctx, store.StorageID()); err != nil {
 			return err
 		}
-		if err := probeAgentHealth(ctx, model.http, model.origin+"/health", ""); err != nil {
-			return err
+		return probeAgentHealth(ctx, model.http, model.origin+"/health", "")
+	}
+	if renderer != nil {
+		runtime.officeProbe = func(ctx context.Context) error {
+			return probeAgentHealth(ctx, renderer.http, renderer.endpoint+"/health", renderer.token)
 		}
-		return probeAgentHealth(ctx, renderer.http, renderer.endpoint+"/health", renderer.token)
 	}
 	s.artifacts = NewWebAgentArtifactService(artifacts, s, store)
 	s.agent = NewWebAgentService(repo, s, runtime)

@@ -1,7 +1,7 @@
 import { apiClient } from './client'
 
-export interface WebChatCatalogOption { id:string; name:string; brand:string; description:string; model:string; billing_type:string; recommended:boolean }
-export interface WebChatCatalogEntry { id:string; name:string; brand:string; description:string; group_id:number; model:string; enabled:boolean; recommended:boolean; sort_order:number }
+export interface WebChatCatalogOption { id:string; name:string; brand:string; description:string; model:string; billing_type:string; recommended:boolean; capabilities?:string[] }
+export interface WebChatCatalogEntry { id:string; name:string; brand:string; description:string; group_id:number; model:string; enabled:boolean; recommended:boolean; sort_order:number; capabilities?:string[] }
 export interface WebChatCatalogConfig { entries:WebChatCatalogEntry[] }
 export async function getModelCatalog():Promise<WebChatCatalogConfig> { return (await apiClient.get('/admin/settings/web-chat-models')).data }
 export async function saveModelCatalog(config:WebChatCatalogConfig):Promise<WebChatCatalogConfig> { return (await apiClient.put('/admin/settings/web-chat-models',config)).data }
@@ -51,6 +51,7 @@ export interface WebChatGroupOption {
 export interface WebChatOptions {
   models?: WebChatCatalogOption[]
   tasks_enabled?: boolean
+  office_tasks_enabled?: boolean
   task_status?: 'ready' | 'starting' | 'unavailable' | 'disabled' | 'not_configured'
   task_limits?: { max_active_tasks: number; max_model_calls: number; max_input_bytes: number; max_output_tokens: number; max_artifact_bytes: number; deadline_seconds: number }
   enabled: boolean

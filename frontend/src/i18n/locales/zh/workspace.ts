@@ -16,11 +16,11 @@ export default { workspace: {
   focus: '专注模式', exitFocus: '退出专注', modeChat: '对话', inputLabel: '任务或消息', actions: '会话操作', projectSettings: '项目设置',
 }, webAgent: {
   library:'成果文件', libraryHint:'跨会话查看成果；默认展示每份文件最新的已加载版本。', searchLoaded:'搜索已加载的成果', allKinds:'全部类型', loadedVersions:'已加载 {count} 个版本', noLoadedMatch:'已加载的成果中没有匹配项，可继续加载更早的文件。', moreFiles:'加载更早的文件', sessionFallback:'会话 #{id}', referenceLibrary:'项目参考资料',
-  chat: '聊天', slides: 'PPT', spreadsheet: '表格', document: '文档', mode: '任务类型',
+  chat: '聊天', image: '图片', slides: 'PPT', spreadsheet: '表格', document: '文档', mode: '任务类型',
   unavailable: '文件任务暂不可用，普通聊天不受影响。', refresh: '刷新状态',
   budget: '每个任务最多 1 次模型生成，最长 {minutes} 分钟；按所选模型正常计费。',
   budgetDetails: '输入上限 {input} KiB，输出上限 {output} Token；文件与预览合计最多 {file} MiB。',
-  chatHint: '聊天生成文本。需要可下载文件，请选择 PPT、表格或文档。',
+  imageHint: '图片模式直接生成图片，可在右侧预览、下载，或在「文件」中找到。', noImageModel: '管理员尚未配置图片模型。', chatHint: '聊天生成文本。需要可下载文件，请选择 PPT、表格或文档。',
   empty: '描述要生成的文件', emptyHint: '文件生成后可在右侧预览、下载，或继续修改。',
   tasks: '文件任务', files: '成果文件', preview: '预览', versions: '版本', details: '执行记录', technicalDetails: '技术细节', 
   queued: '排队中', running: '进行中', cancel_requested: '正在取消', succeeded: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断',

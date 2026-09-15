@@ -35,7 +35,7 @@ const props = defineProps<{ enabled: boolean; userId?: number; sessions: WebChat
 const emit = defineEmits<{ open: [number]; conversation: [WebAgentArtifact]; loaded: [WebAgentArtifact[]] }>()
 const { t, locale } = useI18n()
 const records = ref<WebAgentArtifact[]>([]), query = ref(''), kind = ref<WebAgentTaskKind | ''>(''), nextBefore = ref(0), loading = ref(false), error = ref('')
-const kinds: WebAgentTaskKind[] = ['slides', 'spreadsheet', 'document']
+const kinds: WebAgentTaskKind[] = ['image', 'slides', 'spreadsheet', 'document']
 let epoch = 0, controller = new AbortController()
 const removed = new Set<number>()
 const visible = computed(() => {

@@ -134,3 +134,47 @@ func TestWebAgentInvalidConfigurationDoesNotDisableOrdinaryChat(t *testing.T) {
 	require.True(t, chat.FeatureEnabled(context.Background()))
 	require.False(t, chat.Agent().Ready(context.Background()))
 }
+
+// A deployment may run image tasks without the Office renderer. The renderer's
+// absence must not take image generation down with it.
+func TestRuntimeKeepsImagesAvailableWithoutTheOfficeRenderer(t *testing.T) {
+	runtime := &webAgentRuntime{
+		WebAgentOfficeExecutor: NewWebAgentOfficeExecutor(nil, nil, nil, nil),
+		image:                  &WebAgentImageExecutor{},
+		probe:                  func(context.Context) error { return nil },
+	}
+	require.NoError(t, runtime.check(context.Background()))
+	require.True(t, runtime.Available())
+	require.False(t, runtime.OfficeAvailable(), "no renderer probe means no Office capability")
+
+	_, err := runtime.executorFor("image")
+	require.NoError(t, err, "image work only needs the local gateway")
+	_, err = runtime.executorFor("slides")
+	require.ErrorIs(t, err, ErrWebAgentUnavailable, "renderer-backed kinds must be refused, not attempted")
+}
+
+func TestRuntimeReportsOfficeSeparatelyFromTheGateway(t *testing.T) {
+	rendererUp := true
+	runtime := &webAgentRuntime{
+		WebAgentOfficeExecutor: NewWebAgentOfficeExecutor(nil, agentRenderFunc(nil), nil, nil),
+		image:                  &WebAgentImageExecutor{},
+		probe:                  func(context.Context) error { return nil },
+		officeProbe: func(context.Context) error {
+			if rendererUp {
+				return nil
+			}
+			return errors.New("renderer down")
+		},
+	}
+	require.NoError(t, runtime.check(context.Background()))
+	require.True(t, runtime.OfficeAvailable())
+	_, err := runtime.executorFor("slides")
+	require.NoError(t, err)
+
+	rendererUp = false
+	require.NoError(t, runtime.check(context.Background()), "a renderer outage is not a gateway outage")
+	require.True(t, runtime.Available(), "image tasks stay available")
+	require.False(t, runtime.OfficeAvailable())
+	_, err = runtime.executorFor("slides")
+	require.ErrorIs(t, err, ErrWebAgentUnavailable)
+}

@@ -21,7 +21,7 @@
           </ol>
           <div class="wc-task-arts">
             <button v-for="artifact in taskArtifacts(task)" :key="artifact.id" type="button" class="wc-art" @click="emit('open', artifact.id)">
-              <span class="wc-art-ic"><Icon name="presentation" size="md" /></span>
+              <span class="wc-art-ic"><Icon :name="artifact.kind === 'image' ? 'image' : 'presentation'" size="md" /></span>
               <span class="min-w-0"><span class="wc-art-n trunc">{{ artifact.title }}</span><span class="wc-art-d trunc">{{ artifact.filename }} · v{{ artifact.version }}</span></span>
               <span class="wc-thumbs" aria-hidden="true"><i v-for="n in 4" :key="n" /></span>
               <span class="wc-art-o">{{ t('webAgent.open') }}<Icon name="chevronRight" size="xs" /></span>

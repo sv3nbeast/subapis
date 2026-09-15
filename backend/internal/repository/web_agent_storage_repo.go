@@ -45,11 +45,25 @@ func scanAgentStage(row interface{ Scan(...any) error }) (*service.WebAgentBlobS
 	err := row.Scan(&b.ID, &b.TaskID, &b.UserID, &b.LeaseToken, &b.BlobKey, &b.PreviewKey, &b.State, &b.ReservedBytes)
 	return &b, err
 }
+
+// Image artifacts are their own preview, so they reserve one key and leave the
+// preview slot empty; Office artifacts pair a file with a rendered PDF.
+func webAgentArtifactExtension(kind string) string {
+	return map[string]string{"slides": "pptx", "document": "docx", "spreadsheet": "xlsx", "image": "png"}[kind]
+}
+
+func webAgentPreviewKey(kind string) string {
+	if kind == "image" {
+		return ""
+	}
+	return uuid.NewString() + ".pdf"
+}
+
 func (r *webChatRepository) ReserveArtifactStorage(ctx context.Context, t *service.WebAgentTask) (*service.WebAgentBlobStage, error) {
 	if t == nil || t.ID <= 0 || t.UserID <= 0 {
 		return nil, service.ErrWebAgentInvalid
 	}
-	ext := map[string]string{"slides": "pptx", "document": "docx", "spreadsheet": "xlsx"}[t.Kind]
+	ext := webAgentArtifactExtension(t.Kind)
 	if ext == "" {
 		return nil, service.ErrWebAgentInvalid
 	}
@@ -78,7 +92,7 @@ func (r *webChatRepository) ReserveArtifactStorage(ctx context.Context, t *servi
 	}
 	b, err := scanAgentStage(tx.QueryRowContext(ctx, `INSERT INTO web_agent_blob_stages AS b(task_id,user_id,lease_token,blob_key,preview_key,state,reserved_bytes)
  VALUES($1,$2,$3,$4,$5,'allocated',$6) ON CONFLICT(task_id) DO NOTHING RETURNING `+agentStageColumns,
-		t.ID, t.UserID, t.LeaseToken, uuid.NewString()+"."+ext, uuid.NewString()+".pdf", service.WebAgentStorageReservationBytes))
+		t.ID, t.UserID, t.LeaseToken, uuid.NewString()+"."+ext, webAgentPreviewKey(t.Kind), service.WebAgentStorageReservationBytes))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, service.ErrWebAgentLeaseLost
 	}

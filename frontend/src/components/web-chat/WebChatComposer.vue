@@ -54,7 +54,7 @@ import Icon from '@/components/icons/Icon.vue'
 import type { WebChatDocument } from '@/api/webChat'
 import type { WebChatFailedAttachment } from '@/composables/useWebChatDocuments'
 
-type TaskMode = 'chat' | 'slides' | 'spreadsheet' | 'document'
+type TaskMode = 'chat' | 'image' | 'slides' | 'spreadsheet' | 'document'
 
 const props = withDefaults(defineProps<{
   modelValue: string
@@ -85,8 +85,9 @@ const emit = defineEmits<{
   'remove-failed-attachment': [string]
 }>()
 const { t } = useI18n()
-const modeIcon: Record<TaskMode, 'chat' | 'presentation' | 'chartBar' | 'document'> = {
+const modeIcon: Record<TaskMode, 'chat' | 'image' | 'presentation' | 'chartBar' | 'document'> = {
   chat: 'chat',
+  image: 'image',
   slides: 'presentation',
   spreadsheet: 'chartBar',
   document: 'document',

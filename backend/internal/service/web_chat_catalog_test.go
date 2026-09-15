@@ -146,3 +146,46 @@ func TestWebChatCatalogPreservesLegacyContextAndKeyIdentity(t *testing.T) {
 	require.Equal(t, legacy.Session.Model, catalog.Session.Model)
 	require.Equal(t, legacy.APIKey, catalog.APIKey)
 }
+
+// The capability an administrator declares must match what the model family can
+// actually do. Chat Completions rejects image models before account selection,
+// and the images endpoint rejects chat models, so a mismatch would only surface
+// after a user sent a prompt.
+func TestCatalogRejectsCapabilityMismatchedModels(t *testing.T) {
+	svc, _, _ := chatCatalogFixture()
+	svc.catalogGroups = chatCatalogGroupsStub{group: &Group{ID: 3, Platform: PlatformOpenAI, Status: StatusActive}}
+	svc.channelService = webChatCatalogStub{modelsByGroup: map[int64][]SupportedModel{3: {{Name: "gpt-image-1.5"}, {Name: "gpt-5.5"}}}}
+
+	entry := func(model string, capabilities ...string) WebChatCatalogConfig {
+		return WebChatCatalogConfig{Entries: []WebChatCatalogEntry{{
+			ID: "entry", Name: "Entry", GroupID: 3, Model: model, Enabled: true, Capabilities: capabilities,
+		}}}
+	}
+
+	err := svc.ValidateModelCatalog(context.Background(), entry("gpt-image-1.5", WebChatCapabilityChat))
+	require.ErrorContains(t, err, "must declare the image capability", "an image model on the chat path is refused upstream")
+
+	err = svc.ValidateModelCatalog(context.Background(), entry("gpt-5.5", WebChatCapabilityImage))
+	require.ErrorContains(t, err, "does not generate images")
+
+	err = svc.ValidateModelCatalog(context.Background(), entry("gpt-5.5", "video"))
+	require.ErrorContains(t, err, "unknown capability")
+
+	require.NoError(t, svc.ValidateModelCatalog(context.Background(), entry("gpt-image-1.5", WebChatCapabilityImage)))
+	require.NoError(t, svc.ValidateModelCatalog(context.Background(), entry("gpt-5.5", WebChatCapabilityChat)))
+	require.NoError(t, svc.ValidateModelCatalog(context.Background(), entry("gpt-5.5")), "an entry with no declared capability stays a chat model")
+}
+
+// Catalogs published before image support carry no capability field. They must
+// keep working and keep reporting themselves as chat models.
+func TestCatalogWithoutCapabilitiesRemainsChat(t *testing.T) {
+	entry := WebChatCatalogEntry{ID: "opus", Model: "claude-opus-5", Enabled: true}
+	require.Equal(t, []string{WebChatCapabilityChat}, entry.capabilities())
+	require.True(t, entry.supports(WebChatCapabilityChat))
+	require.False(t, entry.supports(WebChatCapabilityImage))
+
+	options := catalogOptions(&WebChatCatalogConfig{Entries: []WebChatCatalogEntry{entry}},
+		[]WebChatGroupOption{{ID: 0, Models: []WebChatModelOption{{Name: "claude-opus-5"}}}})
+	require.Len(t, options, 1)
+	require.Equal(t, []string{WebChatCapabilityChat}, options[0].Capabilities, "the browser needs a capability to filter on")
+}

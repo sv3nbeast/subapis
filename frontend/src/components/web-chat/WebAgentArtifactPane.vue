@@ -10,7 +10,8 @@
     </div>
     <p v-if="error" class="artifact-error wc-notice error" role="alert">{{ error }}</p>
     <div class="artifact-body wc-pane-body">
-      <WebAgentPdfPreview v-if="tab === 'preview'" :key="artifact.id" :artifact-id="artifact.id" />
+      <WebAgentImagePreview v-if="tab === 'preview' && artifact.kind === 'image'" :key="`image-${artifact.id}`" :artifact-id="artifact.id" :alt="artifact.title" />
+      <WebAgentPdfPreview v-else-if="tab === 'preview'" :key="artifact.id" :artifact-id="artifact.id" />
       <div v-else-if="tab === 'files'" class="file-list wc-file-list"><button v-for="file in files" :key="file.id" :class="{ on: file.id === artifact.id }" :aria-pressed="file.id === artifact.id" @click="emit('select', file.id)"><Icon name="document" size="sm" class="vv" /><strong>{{ file.filename }}</strong><small>v{{ file.version }} · {{ bytes(file.size_bytes) }}</small></button></div>
       <div v-else class="file-list wc-file-list"><button v-for="version in versions" :key="version.id" :class="{ on: version.id === artifact.id }" :aria-pressed="version.id === artifact.id" @click="emit('select', version.id)"><i class="vv">v{{ version.version }}</i><strong>{{ version.title }}</strong><small>{{ new Date(version.created_at).toLocaleString() }}</small></button><button v-if="nextBefore" class="wc-btn wc-btn-ghost" :disabled="busy" @click="loadVersions(true)">{{ t('webAgent.more') }}</button></div>
     </div>
@@ -30,6 +31,7 @@ import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import WebAgentPdfPreview from './WebAgentPdfPreview.vue'
+import WebAgentImagePreview from './WebAgentImagePreview.vue'
 import { getArtifactBlob, getArtifactVersions, deleteArtifact, type WebAgentArtifact } from '@/api/webAgent'
 import { extractApiErrorMessage } from '@/utils/apiError'
 const props = defineProps<{ artifact: WebAgentArtifact; files: WebAgentArtifact[]; canRevise: boolean }>()

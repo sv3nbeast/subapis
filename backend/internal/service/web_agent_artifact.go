@@ -36,7 +36,13 @@ var webAgentArtifactTypes = map[string]struct{ ext, mime, entry string }{
 	"slides":      {"pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", "ppt/presentation.xml"},
 	"document":    {"docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "word/document.xml"},
 	"spreadsheet": {"xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xl/workbook.xml"},
+	// An image is its own preview, so it carries no separate PDF and no zip entry.
+	"image": {"png", "image/png", ""},
 }
+
+// Office artifacts pair a file with a rendered PDF preview. An image is already
+// displayable, so it stores one blob and leaves the preview slot empty.
+func webAgentArtifactHasPreview(kind string) bool { return kind != "image" }
 
 type WebAgentOfficeClient struct {
 	endpoint string
@@ -201,7 +207,7 @@ type WebAgentBlobStore interface {
 }
 type WebAgentFileStore struct{ root, storageID string }
 
-var webAgentBlobKey = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(pptx|xlsx|docx|pdf)$`)
+var webAgentBlobKey = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(pptx|xlsx|docx|pdf|png)$`)
 
 func NewWebAgentFileStore(root string) (*WebAgentFileStore, error) {
 	root = filepath.Clean(root)

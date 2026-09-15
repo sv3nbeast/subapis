@@ -1,7 +1,9 @@
 import { apiClient } from './client'
 
 export type WebAgentTaskStatus = 'queued' | 'running' | 'cancel_requested' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
-export type WebAgentTaskKind = 'slides' | 'spreadsheet' | 'document'
+export type WebAgentTaskKind = 'slides' | 'spreadsheet' | 'document' | 'image'
+/** Renderer-backed kinds. An image needs no Office renderer. */
+export const WEB_AGENT_OFFICE_KINDS: WebAgentTaskKind[] = ['slides', 'spreadsheet', 'document']
 export interface WebAgentTask {
   id: number
   session_id: number
@@ -31,6 +33,8 @@ export interface WebAgentCreateRequest {
   template_id?: number
   group_id?: number
   model?: string
+  /** Catalog selection. Resolves server-side to a real group and model. */
+  chat_model_id?: string
   kind: WebAgentTaskKind
   prompt: string
   document_ids?: number[]

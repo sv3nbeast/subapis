@@ -47,6 +47,11 @@ func CollectWebAgentStorage(ctx context.Context, repo WebAgentStorageRepository,
 			if e := store.Remove(ctx, stage.BlobKey); e != nil {
 				return e
 			}
+			// Image stages reserve no preview blob; an empty key is nothing to
+			// remove, and passing it through would fail the whole sweep.
+			if stage.PreviewKey == "" {
+				return nil
+			}
 			return store.Remove(ctx, stage.PreviewKey)
 		})
 		return e

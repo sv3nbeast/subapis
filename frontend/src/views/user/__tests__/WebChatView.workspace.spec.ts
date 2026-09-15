@@ -92,11 +92,13 @@ describe('MONO workspace real entry',()=>{
   const options=await mocks.api.getOptions();mocks.api.getOptions.mockResolvedValue({...options,tasks_enabled:true})
   mocks.agent.createTask.mockResolvedValue({id:20,session_id:3,kind:'document',prompt:'create my document',model:'test-model',status:'queued'})
   const wrapper=render();await flushPromises()
-  await wrapper.findAll('.task-modebar button')[3]!.trigger('click')
+  await wrapper.findAll('.task-modebar button').find(b=>b.text()==='webAgent.document')!.trigger('click')
   await wrapper.find('.composer-input').setValue('create my document')
   await wrapper.find('.composer').trigger('submit');await flushPromises()
   expect(mocks.api.streamMessage).not.toHaveBeenCalled()
-  expect(mocks.agent.createTask).toHaveBeenCalledWith(3,expect.objectContaining({kind:'document',prompt:'create my document',group_id:1,model:'test-model'}))
+  expect(mocks.agent.createTask).toHaveBeenCalledWith(3,expect.objectContaining({kind:'document',prompt:'create my document',chat_model_id:'route-1'}))
+  // A file task must not name an internal group; the catalog id resolves it.
+  expect(mocks.agent.createTask.mock.calls[0][1]).not.toHaveProperty('group_id')
   expect((wrapper.find('.composer-input').element as HTMLTextAreaElement).value).toBe('')
   expect(wrapper.text()).toContain('webAgent.queued')
   wrapper.unmount()
@@ -111,6 +113,45 @@ describe('MONO workspace real entry',()=>{
   expect(mocks.api.streamMessage.mock.calls[0][1]).toMatchObject({chat_model_id:'route-1',content:'hello'})
   expect(mocks.api.streamMessage.mock.calls[0][1]).not.toHaveProperty('group_id')
   expect(wrapper.text()).not.toContain('INTERNAL-GROUP')
+  wrapper.unmount()
+ })
+ it('offers image mode only with an image-capable model and sends that selection',async()=>{
+  const options=await mocks.api.getOptions()
+  mocks.api.getOptions.mockResolvedValue({...options,models:[
+   {id:'chat-1',name:'Chat',brand:'OpenAI',description:'',model:'test-model',billing_type:'standard',recommended:true,capabilities:['chat']},
+   {id:'image-1',name:'GPT Image',brand:'OpenAI',description:'',model:'gpt-image-1.5',billing_type:'standard',recommended:false,capabilities:['image']},
+  ]})
+  mocks.agent.createTask.mockResolvedValue({id:30,session_id:3,kind:'image',prompt:'a cat in a hat',model:'gpt-image-1.5',status:'queued'})
+  const wrapper=render();await flushPromises()
+  const imageMode=wrapper.findAll('.task-modebar button').find(b=>b.text()==='webAgent.image')
+  expect(imageMode,'image mode is offered when an image model exists').toBeTruthy()
+  await imageMode!.trigger('click');await flushPromises()
+  await wrapper.find('.composer-input').setValue('a cat in a hat')
+  await wrapper.find('.composer').trigger('submit');await flushPromises()
+  expect(mocks.api.streamMessage,'an image request must not go through chat completions').not.toHaveBeenCalled()
+  // Switching to image mode must swap the target: the chat model is refused by
+  // the images endpoint, so sending it would fail upstream.
+  expect(mocks.agent.createTask).toHaveBeenCalledWith(3,expect.objectContaining({kind:'image',prompt:'a cat in a hat',chat_model_id:'image-1'}))
+  expect(mocks.agent.createTask.mock.calls[0][1]).not.toHaveProperty('document_ids')
+  wrapper.unmount()
+ })
+ it('hides image mode when no catalog entry can generate images',async()=>{
+  const options=await mocks.api.getOptions()
+  mocks.api.getOptions.mockResolvedValue({...options,models:[{id:'chat-1',name:'Chat',brand:'OpenAI',description:'',model:'test-model',billing_type:'standard',recommended:true,capabilities:['chat']}]})
+  const wrapper=render();await flushPromises()
+  expect(wrapper.findAll('.task-modebar button').some(b=>b.text()==='webAgent.image')).toBe(false)
+  wrapper.unmount()
+ })
+ it('hides renderer-backed modes while keeping images when no renderer is deployed',async()=>{
+  const options=await mocks.api.getOptions()
+  mocks.api.getOptions.mockResolvedValue({...options,office_tasks_enabled:false,models:[
+   {id:'chat-1',name:'Chat',brand:'OpenAI',description:'',model:'test-model',billing_type:'standard',recommended:true,capabilities:['chat']},
+   {id:'image-1',name:'GPT Image',brand:'OpenAI',description:'',model:'gpt-image-1.5',billing_type:'standard',recommended:false,capabilities:['image']},
+  ]})
+  const wrapper=render();await flushPromises()
+  const labels=wrapper.findAll('.task-modebar button').map(b=>b.text())
+  expect(labels).toContain('webAgent.image')
+  expect(labels).not.toContain('webAgent.slides')
   wrapper.unmount()
  })
  it('opens artifacts without reference storage and returns to their original conversation',async()=>{

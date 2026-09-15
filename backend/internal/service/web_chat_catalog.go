@@ -16,6 +16,13 @@ const webChatCatalogKey = "web_chat_model_catalog"
 
 var webChatCatalogIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,60}$`)
 
+// Capabilities an entry may advertise. An empty list means chat, so catalogs
+// published before image support keep working untouched.
+const (
+	WebChatCapabilityChat  = "chat"
+	WebChatCapabilityImage = "image"
+)
+
 // A catalog entry is a single, explicit route. It never grants group access.
 type WebChatCatalogEntry struct {
 	ID          string `json:"id"`
@@ -27,6 +34,27 @@ type WebChatCatalogEntry struct {
 	Enabled     bool   `json:"enabled"`
 	Recommended bool   `json:"recommended"`
 	SortOrder   int    `json:"sort_order"`
+	// Declared by an administrator rather than inferred from the model name, so
+	// a newly named image model needs a catalog edit, not a release.
+	Capabilities []string `json:"capabilities,omitempty"`
+}
+
+// An entry with no declared capability is a chat model, which is what every
+// catalog contained before image tasks existed.
+func (e WebChatCatalogEntry) capabilities() []string {
+	if len(e.Capabilities) == 0 {
+		return []string{WebChatCapabilityChat}
+	}
+	return e.Capabilities
+}
+
+func (e WebChatCatalogEntry) supports(capability string) bool {
+	for _, c := range e.capabilities() {
+		if c == capability {
+			return true
+		}
+	}
+	return false
 }
 
 type WebChatCatalogConfig struct {
@@ -34,13 +62,14 @@ type WebChatCatalogConfig struct {
 }
 
 type WebChatCatalogOption struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Brand       string `json:"brand"`
-	Description string `json:"description"`
-	Model       string `json:"model"`
-	BillingType string `json:"billing_type"`
-	Recommended bool   `json:"recommended"`
+	Capabilities []string `json:"capabilities"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Brand        string   `json:"brand"`
+	Description  string   `json:"description"`
+	Model        string   `json:"model"`
+	BillingType  string   `json:"billing_type"`
+	Recommended  bool     `json:"recommended"`
 }
 
 type webChatCatalogWriter interface {
@@ -109,6 +138,25 @@ func (s *WebChatService) ValidateModelCatalog(ctx context.Context, cfg WebChatCa
 			return infraerrors.BadRequest("WEB_CHAT_CATALOG_INVALID", "invalid or duplicate catalog entry: "+e.ID)
 		}
 		seen[e.ID] = true
+		image := false
+		for _, c := range e.capabilities() {
+			switch c {
+			case WebChatCapabilityChat:
+			case WebChatCapabilityImage:
+				image = true
+			default:
+				return infraerrors.BadRequest("WEB_CHAT_CATALOG_INVALID", "unknown capability on entry: "+e.ID)
+			}
+		}
+		// Reject a mismatch at save time: an image model on the chat path is
+		// refused before account selection, and a chat model on the images path
+		// fails upstream. Either way the user would only see it after sending.
+		if image != isOpenAIImageGenerationModel(e.Model) {
+			if image {
+				return infraerrors.BadRequest("WEB_CHAT_CATALOG_MODEL_INVALID", "model does not generate images: "+e.ID)
+			}
+			return infraerrors.BadRequest("WEB_CHAT_CATALOG_MODEL_INVALID", "image model must declare the image capability: "+e.ID)
+		}
 		route := fmt.Sprintf("%d:%s", e.GroupID, e.Model)
 		if routes[route] {
 			return infraerrors.BadRequest("WEB_CHAT_CATALOG_INVALID", "duplicate model route: "+e.ID)
@@ -198,7 +246,7 @@ func catalogOptions(cfg *WebChatCatalogConfig, groups []WebChatGroupOption) []We
 			}
 			for _, m := range g.Models {
 				if m.Name == e.Model {
-					out = append(out, WebChatCatalogOption{ID: e.selectionID(), Name: e.Name, Brand: e.Brand, Description: e.Description, Model: e.Model, BillingType: g.SubscriptionType, Recommended: e.Recommended})
+					out = append(out, WebChatCatalogOption{Capabilities: e.capabilities(), ID: e.selectionID(), Name: e.Name, Brand: e.Brand, Description: e.Description, Model: e.Model, BillingType: g.SubscriptionType, Recommended: e.Recommended})
 					break
 				}
 			}
