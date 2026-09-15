@@ -5429,6 +5429,8 @@ func getAccountPlatform(accountPlatform string) string {
 		return "Kiro"
 	case PlatformDroid:
 		return "Droid"
+	case PlatformCursor:
+		return "Cursor"
 	default:
 		return ""
 	}

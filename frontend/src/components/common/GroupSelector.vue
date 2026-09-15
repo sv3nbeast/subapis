@@ -114,7 +114,11 @@ const filteredGroups = computed(() => {
       if (props.platform === 'antigravity') {
         allowedPlatforms.add('anthropic')
         allowedPlatforms.add('gemini')
-      } else if (props.platform === 'kiro' || props.platform === 'droid') {
+      } else if (
+        props.platform === 'kiro' ||
+        props.platform === 'droid' ||
+        props.platform === 'cursor'
+      ) {
         allowedPlatforms.add('anthropic')
       }
     }
