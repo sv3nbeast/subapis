@@ -11,6 +11,7 @@ package cursor
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -59,7 +60,7 @@ func TestE2EChat(t *testing.T) {
 
 	resp, err := client.StreamChat(ctx, []ChatMessage{
 		{Role: "user", Content: "Reply with the single word OK."},
-	}, model)
+	}, model, nil)
 	if err != nil {
 		t.Fatalf("StreamChat: %v", err)
 	}
@@ -182,4 +183,90 @@ func hasParameterizedSlug(picker string, slugs []string) bool {
 		}
 	}
 	return false
+}
+
+// TestE2EAgentToolCall 验证 Agent 模式：工具定义能上行、上游会回传工具调用、
+// 控制回路（exec 拒绝 / 网络 query 批准）不会让这一轮卡住。
+// 这是纯对话之外唯一无法靠单测覆盖的部分。
+func TestE2EAgentToolCall(t *testing.T) {
+	creds := e2eCredentials(t)
+	client := NewClient(creds)
+	client.ProxyURL = os.Getenv("CURSOR_PROXY_URL")
+
+	model := strings.TrimSpace(os.Getenv("CURSOR_E2E_TOOL_MODEL"))
+	if model == "" {
+		model = "claude-sonnet-5"
+	}
+	if resolved := ResolveRunModel(model, RunOpts{}, nil); resolved.RunSlug != "" {
+		model = resolved.RunSlug
+	}
+	t.Logf("requesting model %q in agent mode", model)
+
+	tools := []Tool{{
+		Name:        "get_weather",
+		Description: "Get the current weather for a city.",
+		Schema:      `{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}`,
+	}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	resp, err := client.StreamChat(ctx, []ChatMessage{{
+		Role:    "user",
+		Content: "What is the weather in Paris? Use the get_weather tool.",
+	}}, model, tools)
+	if err != nil {
+		t.Fatalf("StreamChat: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var text strings.Builder
+	var calls []*ToolCall
+	usage, connectErr := ConsumeAssistantStream(resp.Body, func(ev StreamEvent) error {
+		switch ev.Type {
+		case "text":
+			text.WriteString(ev.Text)
+		case "tool_call":
+			calls = append(calls, ev.Tool)
+		}
+		return nil
+	})
+	if connectErr != "" {
+		t.Fatalf("upstream error: %s", connectErr)
+	}
+	t.Logf("text=%q tool_events=%d usage=%+v", text.String(), len(calls), usage)
+	for i, call := range calls {
+		t.Logf("  event[%d] id=%q name=%q partial=%v args=%q", i, call.ID, call.Name, call.Partial, call.ArgsRaw)
+	}
+
+	// 没有工具事件说明工具定义没被上游接受，或事件字段号不对——这正是本测试
+	// 要暴露的。此时 Claude Code 会一直等一个不会到来的工具调用。
+	if len(calls) == 0 {
+		t.Fatal("agent turn produced no tool call events; tools did not reach the model or the event field numbers are wrong")
+	}
+	// 一次可用的工具调用必须同时具备名字与合法 JSON 参数，否则客户端无法执行。
+	var usable bool
+	for _, call := range calls {
+		if strings.TrimSpace(call.Name) == "" || strings.TrimSpace(call.ArgsRaw) == "" {
+			continue
+		}
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(call.ArgsRaw), &parsed); err != nil {
+			t.Errorf("call %q arguments are not JSON: %q", call.Name, call.ArgsRaw)
+			continue
+		}
+		if _, ok := parsed["city"]; !ok {
+			t.Errorf("call %q arguments %v are missing the city the model was asked for", call.Name, parsed)
+			continue
+		}
+		usable = true
+	}
+	if !usable {
+		t.Fatal("no tool event carried both a name and usable JSON arguments; the client could not execute the call")
+	}
+	// 模型把工具当成"执行失败"就说明控制回路答错了：一次正常的调用不该让模型
+	// 转而向用户解释工具不可用。
+	if strings.Contains(text.String(), "not executed by this gateway") {
+		t.Error("the model saw the gateway's refusal as a tool failure; the exec control reply is wrong")
+	}
 }

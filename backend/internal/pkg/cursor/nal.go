@@ -45,6 +45,39 @@ const (
 
 	fieldReqCtxEnv = 4
 
+	// MCP 工具定义（run field 4 的每个条目）。name 同时出现在 1 与 5：
+	// Cursor 用 5 作为调用时回传的标识，1 是展示名。
+	fieldToolDefName        = 1
+	fieldToolDefDescription = 2
+	fieldToolDefCallName    = 5
+	fieldToolDefSchema      = 6
+	fieldMcpToolEntry       = 1
+
+	// 工具调用事件（interaction 内）。
+	fieldInteractionToolStart  = 2
+	fieldInteractionToolEnd    = 3
+	fieldInteractionToolDelta  = 7
+	fieldInteractionToolDelta2 = 15
+
+	// 工具调用的载荷结构（2026-09-15 对真实账号 composer-2.5 抓包实测）：
+	//   tool_start = { 1: callID, 2: { 15: { 1: <invocation> } } }
+	//   exec       = { 11: <invocation> }        ← 工具调用本身走这条通道
+	//   <invocation> = { 1: name, 2: <参数>, 3: callID, 5: callName }
+	//   <参数>       = 重复的 { 1: key, 2: <值> }，值为 { 3: string } 等
+	fieldToolCallID       = 1
+	fieldToolCallPayload  = 2
+	fieldToolCallMcpWrap  = 15
+	fieldToolInvocation   = 1
+	fieldExecInvocation   = 11
+	fieldInvocationName   = 1
+	fieldInvocationArgs   = 2
+	fieldInvocationCallID = 3
+	fieldInvocationArgKey = 1
+	fieldInvocationArgVal = 2
+	fieldArgValueString   = 3
+	fieldArgValueNumber   = 2
+	fieldArgValueBool     = 4
+
 	fieldNALEnvOSVersion = 1
 	fieldNALEnvShell     = 3
 	fieldNALEnvTimezone  = 10
@@ -87,23 +120,40 @@ const (
 	AgentModeAsk         = 2
 )
 
+// Tool is one tool definition offered to the Cursor agent. Schema must be the
+// JSON Schema text for the tool's parameters, exactly as the client sent it.
+type Tool struct {
+	Name        string
+	Description string
+	Schema      string
+}
+
 // BuildAgentClientMessage encodes agent.v1.AgentClientMessage{run_request}.
-func BuildAgentClientMessage(messages []ChatMessage, model string) (payload []byte, conversationID, runID string) {
+//
+// Passing tools switches the turn to Agent mode: Ask mode neither accepts tool
+// definitions nor emits tool calls, so a tool-carrying request has to run as an
+// agent turn to come back with anything the client can act on.
+func BuildAgentClientMessage(messages []ChatMessage, model string, tools []Tool) (payload []byte, conversationID, runID string) {
 	if model == "" {
 		model = "default"
 	}
 	conversationID = uuid.New().String()
 	runID = uuid.New().String()
 
+	mode := AgentModeAsk
+	if len(tools) > 0 {
+		mode = AgentModeAgent
+	}
+
 	systemPrompt, userText, prior := splitAskMessages(messages)
 
 	var state ProtobufWriter
-	state.Varint(fieldConvStateMode, AgentModeAsk)
+	state.Varint(fieldConvStateMode, mode)
 
 	var userMsg ProtobufWriter
 	userMsg.String(fieldUserMsgText, userText)
 	userMsg.String(fieldUserMsgID, uuid.New().String())
-	userMsg.Varint(fieldUserMsgMode, AgentModeAsk)
+	userMsg.Varint(fieldUserMsgMode, mode)
 
 	var env ProtobufWriter
 	if rel := osRelease(); rel != "" {
@@ -124,7 +174,7 @@ func BuildAgentClientMessage(messages []ChatMessage, model string) (payload []by
 		var pre ProtobufWriter
 		pre.String(fieldUserMsgText, p)
 		pre.String(fieldUserMsgID, uuid.New().String())
-		pre.Varint(fieldUserMsgMode, AgentModeAsk)
+		pre.Varint(fieldUserMsgMode, mode)
 		userAction.Bytes(fieldUserMsgActionPrepend, pre.Result())
 	}
 
@@ -141,7 +191,7 @@ func BuildAgentClientMessage(messages []ChatMessage, model string) (payload []by
 	run.Bytes(fieldRunConversationState, state.Result())
 	run.Bytes(fieldRunAction, action.Result())
 	run.Bytes(fieldRunModelDetails, modelDetails.Result())
-	run.Bytes(fieldRunMcpTools, nil)
+	run.Bytes(fieldRunMcpTools, encodeTools(tools))
 	run.String(fieldRunConversationID, conversationID)
 	if systemPrompt != "" {
 		run.String(fieldRunCustomSystem, systemPrompt)
@@ -275,5 +325,151 @@ func encodeKVSetResult(id uint64) []byte {
 	kv.Bytes(fieldKVSetResult, nil)
 	var client ProtobufWriter
 	client.Bytes(fieldAgentClientKV, kv.Result())
+	return client.Result()
+}
+
+// encodeTools encodes the MCP tool list carried in run field 4. Returns nil for
+// an empty list so the field stays the empty message Ask mode expects.
+func encodeTools(tools []Tool) []byte {
+	if len(tools) == 0 {
+		return nil
+	}
+	var mcp ProtobufWriter
+	for _, tool := range tools {
+		name := strings.TrimSpace(tool.Name)
+		if name == "" {
+			continue
+		}
+		var def ProtobufWriter
+		def.String(fieldToolDefName, name)
+		def.String(fieldToolDefDescription, tool.Description)
+		// Cursor echoes field 5 back as the call name; keep both in sync so a
+		// returned tool_call can be matched to what the client asked for.
+		def.String(fieldToolDefCallName, name)
+		if schema := strings.TrimSpace(tool.Schema); schema != "" {
+			def.String(fieldToolDefSchema, schema)
+		}
+		mcp.Bytes(fieldMcpToolEntry, def.Result())
+	}
+	return mcp.Result()
+}
+
+// Agent 模式下上游不只是回内容，它会反过来要求客户端做事：执行命令
+// （AgentServerMessage field 2）或回答一个交互式询问（field 7）。不应答会让
+// 这一轮永远停在等待上，所以必须逐条回复。字段号来自 PR #7121 的抓包。
+const (
+	fieldAgentServerExec  = 2
+	fieldAgentServerQuery = 7
+
+	fieldAgentClientExecControl = 5
+	fieldAgentClientQueryReply  = 6
+
+	fieldExecControlThrow = 2
+	fieldExecThrowID      = 1
+	fieldExecThrowMessage = 2
+
+	fieldQueryReplyID       = 1
+	fieldQueryReplyApprove  = 1
+	fieldQueryReplyRejected = 2
+	fieldQueryRejectReason  = 1
+)
+
+// ServerControl 是一条需要客户端应答的上游控制消息。
+type ServerControl struct {
+	Kind       string // "exec" | "query"
+	ID         uint64
+	QueryField uint32
+	// CarriesToolCall 表示这条 exec 里装的是工具调用而不是待执行命令。
+	// 这类不能拒绝：拒绝等于告诉模型"工具执行失败"。
+	CarriesToolCall bool
+}
+
+// ParseServerControls 提取本帧里需要应答的控制消息。
+func ParseServerControls(data []byte) []ServerControl {
+	var controls []ServerControl
+	pr := NewProtobufReader(data)
+	for {
+		f, err := pr.Next()
+		if f == nil || err != nil {
+			break
+		}
+		if f.WireType != WireBytes {
+			continue
+		}
+		switch f.Num {
+		case fieldAgentServerExec:
+			controls = append(controls, ServerControl{
+				Kind:            "exec",
+				ID:              getVarint(f.Data, fieldExecThrowID),
+				CarriesToolCall: GetNested(f.Data, fieldExecInvocation) != nil,
+			})
+		case fieldAgentServerQuery:
+			controls = append(controls, ServerControl{
+				Kind:       "query",
+				ID:         getVarint(f.Data, fieldQueryReplyID),
+				QueryField: firstNestedFieldNum(f.Data),
+			})
+		}
+	}
+	return controls
+}
+
+// firstNestedFieldNum 返回除 id 之外的第一个嵌套字段号，它标明这是哪一类询问。
+func firstNestedFieldNum(data []byte) uint32 {
+	pr := NewProtobufReader(data)
+	for {
+		f, err := pr.Next()
+		if f == nil || err != nil {
+			return 0
+		}
+		if f.WireType == WireBytes && f.Num != fieldQueryReplyID {
+			return f.Num
+		}
+	}
+}
+
+// IsNetworkQuery 报告该询问是否只是"上游要自己联网"。这类可以批准：动作发生在
+// Cursor 侧，网关不需要做任何事。其余询问需要一个真实答案，网关代答等于编造。
+func IsNetworkQuery(queryField uint32) bool {
+	switch queryField {
+	case 2, 5, 6, 9:
+		return true
+	default:
+		return false
+	}
+}
+
+// EncodeQueryReply 编码一次询问应答。
+func EncodeQueryReply(queryID uint64, queryField uint32, approve bool, reason string) []byte {
+	var inner ProtobufWriter
+	if approve {
+		inner.Bytes(fieldQueryReplyApprove, nil)
+	} else {
+		var rejected ProtobufWriter
+		rejected.String(fieldQueryRejectReason, reason)
+		inner.Bytes(fieldQueryReplyRejected, rejected.Result())
+	}
+	var resp ProtobufWriter
+	resp.Varint(fieldQueryReplyID, int(queryID))
+	resp.Bytes(queryField, inner.Result())
+	var client ProtobufWriter
+	client.Bytes(fieldAgentClientQueryReply, resp.Result())
+	return client.Result()
+}
+
+// EncodeExecReject 拒绝一次命令执行请求。
+//
+// 这个拒绝不是可配置项。上游要求的"执行"发生在收到消息的一侧——在这里就是
+// 网关容器。批准它等于让 Cursor 上游在生产服务器上跑任意命令。真正的工具执行
+// 必须由客户端完成：网关把 tool_use 交给 Claude Code，由它在用户机器上征得
+// 许可后执行。
+func EncodeExecReject(execID uint64, message string) []byte {
+	var throw ProtobufWriter
+	throw.Varint(fieldExecThrowID, int(execID))
+	throw.String(fieldExecThrowMessage, message)
+	var control ProtobufWriter
+	control.Bytes(fieldExecControlThrow, throw.Result())
+	var client ProtobufWriter
+	client.Bytes(fieldAgentClientExecControl, control.Result())
 	return client.Result()
 }

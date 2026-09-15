@@ -83,10 +83,11 @@ func TestCursorUnsupportedCapability(t *testing.T) {
 	if got := cursorUnsupportedCapability(cursorRunRequest{}); got != "" {
 		t.Errorf("plain text request reported %q, want it servable", got)
 	}
-	// Silently dropping tools would leave Claude Code / Codex waiting forever
-	// for a tool call the Ask-mode upstream can never emit.
-	if got := cursorUnsupportedCapability(cursorRunRequest{HasTools: true}); got != "tool use" {
-		t.Errorf("tools reported %q, want %q", got, "tool use")
+	// Tools are served now: a tool-carrying request runs as an agent turn.
+	if got := cursorUnsupportedCapability(cursorRunRequest{
+		Tools: []cursor.Tool{{Name: "Read"}},
+	}); got != "" {
+		t.Errorf("tool request reported %q, want it servable via Agent mode", got)
 	}
 	// Dropping images silently is worse than failing: the model answers
 	// confidently about an image it never received.
@@ -99,7 +100,7 @@ func TestCursorCapabilityErrorStaysFailoverableWhenMixedScheduled(t *testing.T) 
 	// Mixed scheduling: the group has other accounts that can serve this, so the
 	// error must be failoverable. A plain error would end the request instead.
 	var failoverErr *UpstreamFailoverError
-	if !errors.As(cursorCapabilityError("tool use", true), &failoverErr) {
+	if !errors.As(cursorCapabilityError("image input", true), &failoverErr) {
 		t.Fatal("mixed-scheduled capability error is not an UpstreamFailoverError; the request could not move to another account")
 	}
 	if !failoverErr.RequestScopedTransient {
@@ -108,7 +109,7 @@ func TestCursorCapabilityErrorStaysFailoverableWhenMixedScheduled(t *testing.T) 
 
 	// A dedicated Cursor group has nobody to defer to; failing over would only
 	// burn a cycle, so the client should be told why.
-	if errors.As(cursorCapabilityError("tool use", false), &failoverErr) {
+	if errors.As(cursorCapabilityError("image input", false), &failoverErr) {
 		t.Error("dedicated-group capability error is failoverable; it should terminate with a reason")
 	}
 }

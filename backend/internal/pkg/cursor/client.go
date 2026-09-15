@@ -225,8 +225,10 @@ func dialHTTPConnect(ctx context.Context, d *net.Dialer, u *url.URL, addr string
 
 // StreamChat sends a chat completion request and returns the raw HTTP response
 // whose body contains Connect-RPC streaming frames. The caller must close the body.
-func (c *Client) StreamChat(ctx context.Context, messages []ChatMessage, model string) (*http.Response, error) {
-	payload, _, runID := BuildAgentClientMessage(messages, model)
+//
+// Passing tools runs the turn in Agent mode; nil keeps it in Ask mode.
+func (c *Client) StreamChat(ctx context.Context, messages []ChatMessage, model string, tools []Tool) (*http.Response, error) {
+	payload, _, runID := BuildAgentClientMessage(messages, model, tools)
 	frame, err := EncodeFrame(payload, false)
 	if err != nil {
 		return nil, fmt.Errorf("cursor: encode NAL frame: %w", err)
@@ -397,6 +399,9 @@ func (n *nalReadCloser) Read(p []byte) (int, error) {
 		if n.handleKV(frame.Payload) {
 			continue
 		}
+		// 控制消息必须应答，否则这一轮会停在等待上。应答后仍把帧交给上层，
+		// 因为同一帧里可能还带着内容或工具事件。
+		n.answerControls(frame.Payload)
 		n.pending = raw
 	}
 }
@@ -462,4 +467,40 @@ func summarizeCursorError(prefix []byte) string {
 		return string(s)
 	}
 	return "blocked stream"
+}
+
+// answerControls 回复上游的执行/询问请求。
+//
+// exec 通道实测承载的是**工具调用本身**（field 11 里就是调用体），不是"在本机跑
+// 一条命令"。拒绝它会让模型以为工具执行失败并向用户道歉，所以带调用体的 exec
+// 不在这里作答——它由响应解析交给客户端，真正的执行发生在客户端那侧。
+//
+// 不带调用体的 exec 才是真的要求本地执行：那一律拒绝，因为"本地"在这里是网关
+// 容器，批准等于让上游在生产服务器上跑任意命令。
+func (n *nalReadCloser) answerControls(payload []byte) {
+	for _, control := range ParseServerControls(payload) {
+		var reply []byte
+		switch control.Kind {
+		case "exec":
+			if control.CarriesToolCall {
+				continue
+			}
+			reply = EncodeExecReject(control.ID, "commands are executed by the client, not by this gateway")
+		case "query":
+			if IsNetworkQuery(control.QueryField) {
+				// 联网发生在 Cursor 侧，批准不需要网关做任何事。
+				reply = EncodeQueryReply(control.ID, control.QueryField, true, "")
+			} else {
+				reply = EncodeQueryReply(control.ID, control.QueryField, false,
+					"interactive queries are not answered by this gateway")
+			}
+		default:
+			continue
+		}
+		frame, err := EncodeFrame(reply, false)
+		if err != nil {
+			continue
+		}
+		_, _ = n.writer.Write(frame)
+	}
 }

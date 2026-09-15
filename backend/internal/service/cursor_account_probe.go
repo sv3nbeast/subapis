@@ -58,7 +58,7 @@ func (s *AccountTestService) testCursorAccountConnection(c *gin.Context, account
 
 	client := cursor.NewClient(creds)
 	client.ProxyURL = cursorAccountProxyURL(account)
-	resp, err := client.StreamChat(ctx, []cursor.ChatMessage{{Role: "user", Content: testPrompt}}, upstreamModel)
+	resp, err := client.StreamChat(ctx, []cursor.ChatMessage{{Role: "user", Content: testPrompt}}, upstreamModel, nil)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Cursor request failed: %s", err.Error()))
 	}

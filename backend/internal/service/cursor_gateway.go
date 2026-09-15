@@ -19,7 +19,9 @@ import (
 
 // Cursor 订阅账号经 agent.v1.AgentService/Run 转发。该端点是 Cursor IDE 的
 // Ask 模式对话协议：只接受文本轮次，不接受工具定义，也不回传 tool_use。
-// 三条入站协议（Anthropic / Chat Completions / Responses）因此共用同一条
+// 带 tools 的请求切到 Agent 模式：上游接受 MCP 工具定义并回传工具调用，网关把
+// 它翻成客户端协议的 tool_use / tool_calls，由客户端执行（网关从不执行）。
+// 三条入站协议（Anthropic / Chat Completions / Responses）共用同一条
 // "压平成文本 → 消费流 → 按入站协议回写"的管线。
 
 // cursorRunRequest 是三条入站协议归一后的上游输入。
@@ -27,7 +29,7 @@ type cursorRunRequest struct {
 	Messages      []cursor.ChatMessage
 	RequestModel  string // 客户端请求的模型（用于回写与计费口径）
 	Opts          cursor.RunOpts
-	HasTools      bool
+	Tools         []cursor.Tool
 	HasImages     bool
 	RequestStream bool
 	StartTime     time.Time
@@ -65,7 +67,7 @@ func (s *GatewayService) forwardCursorMessages(ctx context.Context, c *gin.Conte
 		Messages:      messages,
 		RequestModel:  req.Model,
 		Opts:          cursorRunOptsFromAnthropic(&req),
-		HasTools:      len(req.Tools) > 0,
+		Tools:         cursorToolsFromAnthropic(req.Tools),
 		HasImages:     droppedImages,
 		RequestStream: req.Stream,
 		StartTime:     startTime,
@@ -110,7 +112,7 @@ func (s *GatewayService) forwardCursorAsChatCompletions(ctx context.Context, c *
 		Messages:      messages,
 		RequestModel:  req.Model,
 		Opts:          cursorRunOptsFromChat(&req),
-		HasTools:      len(req.Tools) > 0 || len(req.Functions) > 0,
+		Tools:         cursorToolsFromChat(req.Tools, req.Functions),
 		HasImages:     droppedImages,
 		RequestStream: req.Stream,
 		StartTime:     startTime,
@@ -160,7 +162,7 @@ func (s *GatewayService) forwardCursorAsResponses(ctx context.Context, c *gin.Co
 		Messages:      messages,
 		RequestModel:  req.Model,
 		Opts:          cursorRunOptsFromResponses(&req),
-		HasTools:      len(req.Tools) > 0,
+		Tools:         cursorToolsFromChat(ccReq.Tools, nil),
 		HasImages:     droppedImages,
 		RequestStream: req.Stream,
 		StartTime:     startTime,
@@ -186,23 +188,18 @@ func (s *GatewayService) forwardCursorAsResponses(ctx context.Context, c *gin.Co
 	return s.bufferCursorAsResponses(c, stream, run)
 }
 
-// cursorUnsupportedCapability 描述这条请求用到了 Ask 模式承载不了的能力。
+// cursorUnsupportedCapability 描述这条请求用到了 Cursor 承载不了的能力。
 //
-// 工具：Run 在 Ask 模式下既不接受工具定义也不产出 tool_use，静默丢弃会让
-// Claude Code / Codex 一直等一个永远不会到来的工具调用。
-// 图片：Run 的用户消息没有图片字段（Cursor 的图片走另一条 StreamUnifiedChat
-// 链路），继续发只会让模型看不到图却照常作答，答案错得毫无提示。
+// 工具已支持（带 tools 的请求走 Agent 模式）。图片仍不行：Run 的用户消息没有
+// 图片字段，Cursor 的图片走另一条 StreamUnifiedChat 链路，继续发只会让模型
+// 看不到图却照常作答，答案错得毫无提示。
 //
 // 返回空串表示这条请求 Cursor 能承载。
 func cursorUnsupportedCapability(run cursorRunRequest) string {
-	switch {
-	case run.HasTools:
-		return "tool use"
-	case run.HasImages:
+	if run.HasImages {
 		return "image input"
-	default:
-		return ""
 	}
+	return ""
 }
 
 // cursorMixedScheduled 报告这个 Cursor 账号是否由非 cursor 分组顺带选中。
@@ -255,14 +252,14 @@ func (s *GatewayService) startCursorRun(ctx context.Context, c *gin.Context, acc
 	}
 
 	upstreamModel := s.resolveCursorRunModel(ctx, c, account, run)
-	resp, err := cursorStreamRun(ctx, account, accessToken, run.Messages, upstreamModel)
+	resp, err := cursorStreamRun(ctx, account, accessToken, run, upstreamModel)
 	if err != nil && isCursorAuthError(err) {
 		refreshedToken, refreshedAccount, refreshErr := s.cursorForceRefresh(ctx, account)
 		if refreshErr != nil {
 			logger.LegacyPrintf("service.cursor", "[Cursor] auth retry refresh account=%d: %v", account.ID, refreshErr)
 		} else {
 			account = refreshedAccount
-			resp, err = cursorStreamRun(ctx, account, refreshedToken, run.Messages, upstreamModel)
+			resp, err = cursorStreamRun(ctx, account, refreshedToken, run, upstreamModel)
 		}
 	}
 	if err != nil {
@@ -304,12 +301,12 @@ func (s *GatewayService) cursorForceRefresh(ctx context.Context, account *Accoun
 }
 
 // cursorStreamRun 用账号凭证 + 当前 access_token 发起一次 AgentService/Run。
-func cursorStreamRun(ctx context.Context, account *Account, accessToken string, messages []cursor.ChatMessage, model string) (*http.Response, error) {
+func cursorStreamRun(ctx context.Context, account *Account, accessToken string, run cursorRunRequest, model string) (*http.Response, error) {
 	creds := CursorCredentialsFromAccount(account)
 	creds.AccessToken = accessToken
 	client := cursor.NewClient(creds)
 	client.ProxyURL = cursorAccountProxyURL(account)
-	return client.StreamChat(ctx, messages, model)
+	return client.StreamChat(ctx, run.Messages, model, run.Tools)
 }
 
 // cursorAccountProxyURL 取账号已水合的代理地址。
@@ -542,6 +539,11 @@ func cursorForwardResult(run cursorRunRequest, upstreamModel string, firstTokenM
 		FirstTokenMs: firstTokenMs,
 		Usage:        claudeUsageFromCursor(usage),
 	}
+	// 工具轮次提前收尾拿不到 turn_ended 统计；缓存读命中说明上下文确实上行了，
+	// 此时把 0 记成 0 就是漏计。
+	if result.Usage.InputTokens == 0 {
+		result.Usage.InputTokens = cursorInputTokensFallback(run)
+	}
 	if !strings.EqualFold(upstreamModel, run.RequestModel) {
 		result.UpstreamModel = upstreamModel
 	}
@@ -557,6 +559,25 @@ func claudeUsageFromCursor(u cursor.TokenUsage) ClaudeUsage {
 		CacheCreationInputTokens: u.CacheWriteTokens,
 		CacheReadInputTokens:     u.CacheReadTokens,
 	}
+}
+
+// cursorInputTokensFallback 在上游没报输入 token 时按请求内容估算。
+//
+// 工具调用轮次必然走到这里：网关收到完整工具调用就收尾（否则与上游互等造成死锁），
+// 因此拿不到 turn_ended 里的输入统计。照实记 0 等于把一次真实消耗的轮次免费送出，
+// 估算值偏差远小于漏计。
+func cursorInputTokensFallback(run cursorRunRequest) int {
+	var sb strings.Builder
+	for _, msg := range run.Messages {
+		sb.WriteString(msg.Content)
+		sb.WriteByte('\n')
+	}
+	for _, tool := range run.Tools {
+		sb.WriteString(tool.Name)
+		sb.WriteString(tool.Description)
+		sb.WriteString(tool.Schema)
+	}
+	return estimateTokensForText(sb.String())
 }
 
 // cursorOutputTokens 在 turn_ended 只报了推理 token 时回落到该值，避免把一次

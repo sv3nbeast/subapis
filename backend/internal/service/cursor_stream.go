@@ -17,29 +17,49 @@ import (
 // 出站协议因此共用同一套经过验证的流状态机，而不是各写一份 SSE 拼装。
 
 // cursorEmitter 把一次上游流消费成出站字节；返回累计 usage 与端流错误。
-type cursorEmitter func(kind, text string) error
+// toolCall 非 nil 表示一次参数已完整的工具调用。
+type cursorEmitter func(kind, text string, toolCall *apicompat.ChatToolCall) error
 
-func consumeCursorStream(stream *cursorRunStream, emit cursorEmitter) (cursor.TokenUsage, string) {
-	return cursor.ConsumeAssistantStream(stream.Body, func(ev cursor.StreamEvent) error {
+// consumeCursorStream 消费一次上游流。工具调用在这里聚合：Cursor 分片给参数，
+// 只有拼完才交给 emit——客户端无法处理半截 JSON 参数。
+func consumeCursorStream(stream *cursorRunStream, emit cursorEmitter) (cursor.TokenUsage, string, *cursorToolAggregator) {
+	tools := newCursorToolAggregator()
+	usage, connectErr := cursor.ConsumeAssistantStream(stream.Body, func(ev cursor.StreamEvent) error {
 		switch ev.Type {
 		case "text", "thinking":
-			return emit(ev.Type, ev.Text)
+			return emit(ev.Type, ev.Text, nil)
+		case "tool_call":
+			if done := tools.Observe(ev.Tool); done != nil {
+				return emit("tool_call", "", done)
+			}
 		}
 		return nil
 	})
+	// 上游常在 turn_ended 前就停发工具事件而不给 end：残留的调用必须补交，
+	// 否则客户端会等一个永远不到来的工具调用。
+	for _, pending := range tools.Pending() {
+		call := pending
+		if err := emit("tool_call", "", &call); err != nil {
+			break
+		}
+	}
+	return usage, connectErr, tools
 }
 
-func collectCursorAssistant(stream *cursorRunStream) (text, thinking string, usage cursor.TokenUsage, connectErr string) {
+func collectCursorAssistant(stream *cursorRunStream) (text, thinking string, toolCalls []apicompat.ChatToolCall, usage cursor.TokenUsage, connectErr string) {
 	var textBuf, thinkingBuf strings.Builder
-	usage, connectErr = consumeCursorStream(stream, func(kind, payload string) error {
-		if kind == "thinking" {
+	usage, connectErr, _ = consumeCursorStream(stream, func(kind, payload string, call *apicompat.ChatToolCall) error {
+		switch {
+		case call != nil:
+			toolCalls = append(toolCalls, *call)
+		case kind == "thinking":
 			thinkingBuf.WriteString(payload)
-		} else {
+		default:
 			textBuf.WriteString(payload)
 		}
 		return nil
 	})
-	return textBuf.String(), thinkingBuf.String(), usage, connectErr
+	return textBuf.String(), thinkingBuf.String(), toolCalls, usage, connectErr
 }
 
 func cursorCompletionID() string {
@@ -47,13 +67,7 @@ func cursorCompletionID() string {
 }
 
 func cursorTextChunk(id, model, text, thinking string) *apicompat.ChatCompletionsChunk {
-	chunk := &apicompat.ChatCompletionsChunk{
-		ID:      id,
-		Object:  "chat.completion.chunk",
-		Created: time.Now().Unix(),
-		Model:   model,
-		Choices: []apicompat.ChatChunkChoice{{Index: 0}},
-	}
+	chunk := cursorEmptyChunk(id, model)
 	if thinking != "" {
 		chunk.Choices[0].Delta.ReasoningContent = &thinking
 	}
@@ -61,6 +75,24 @@ func cursorTextChunk(id, model, text, thinking string) *apicompat.ChatCompletion
 		chunk.Choices[0].Delta.Content = &text
 	}
 	return chunk
+}
+
+// cursorToolChunk 把一次完整的工具调用包成 chunk。参数一次性给全，因为聚合
+// 已经完成——apicompat 的桥接器据此产出 tool_use / tool_calls。
+func cursorToolChunk(id, model string, call apicompat.ChatToolCall) *apicompat.ChatCompletionsChunk {
+	chunk := cursorEmptyChunk(id, model)
+	chunk.Choices[0].Delta.ToolCalls = []apicompat.ChatToolCall{call}
+	return chunk
+}
+
+func cursorEmptyChunk(id, model string) *apicompat.ChatCompletionsChunk {
+	return &apicompat.ChatCompletionsChunk{
+		ID:      id,
+		Object:  "chat.completion.chunk",
+		Created: time.Now().Unix(),
+		Model:   model,
+		Choices: []apicompat.ChatChunkChoice{{Index: 0}},
+	}
 }
 
 func cursorUsageChunk(id, model string, usage cursor.TokenUsage) *apicompat.ChatCompletionsChunk {
@@ -78,8 +110,12 @@ func cursorUsageChunk(id, model string, usage cursor.TokenUsage) *apicompat.Chat
 	}
 }
 
-func cursorChatCompletion(id, model, text, thinking string, usage cursor.TokenUsage) *apicompat.ChatCompletionsResponse {
+func cursorChatCompletion(id, model, text, thinking string, toolCalls []apicompat.ChatToolCall, usage cursor.TokenUsage) *apicompat.ChatCompletionsResponse {
 	content, _ := json.Marshal(text)
+	finishReason := "stop"
+	if len(toolCalls) > 0 {
+		finishReason = "tool_calls"
+	}
 	return &apicompat.ChatCompletionsResponse{
 		ID:      id,
 		Object:  "chat.completion",
@@ -91,8 +127,9 @@ func cursorChatCompletion(id, model, text, thinking string, usage cursor.TokenUs
 				Role:             "assistant",
 				Content:          content,
 				ReasoningContent: thinking,
+				ToolCalls:        toolCalls,
 			},
-			FinishReason: "stop",
+			FinishReason: finishReason,
 		}},
 		Usage: chatUsageFromCursor(usage),
 	}
@@ -133,8 +170,12 @@ func (s *GatewayService) streamCursorAsChatCompletions(c *gin.Context, stream *c
 		c.Writer.Flush()
 	}
 
-	usage, connectErr := consumeCursorStream(stream, func(kind, payload string) error {
+	usage, connectErr, tools := consumeCursorStream(stream, func(kind, payload string, call *apicompat.ChatToolCall) error {
 		markCursorFirstToken(&firstTokenMs, run.StartTime)
+		if call != nil {
+			writeChunk(cursorToolChunk(completionID, run.RequestModel, *call))
+			return nil
+		}
 		text, thinking := payload, ""
 		if kind == "thinking" {
 			text, thinking = "", payload
@@ -153,7 +194,11 @@ func (s *GatewayService) streamCursorAsChatCompletions(c *gin.Context, stream *c
 		fmt.Fprintf(c.Writer, "data: %s\n\n", errPayload)
 	} else {
 		stopChunk := cursorTextChunk(completionID, run.RequestModel, "", "")
+		// 有工具调用的轮次必须报 tool_calls：客户端据此决定是执行工具还是收尾。
 		stop := "stop"
+		if tools.HasCalls() {
+			stop = "tool_calls"
+		}
 		stopChunk.Choices[0].FinishReason = &stop
 		writeChunk(stopChunk)
 		if includeUsage {
@@ -167,13 +212,13 @@ func (s *GatewayService) streamCursorAsChatCompletions(c *gin.Context, stream *c
 }
 
 func (s *GatewayService) bufferCursorAsChatCompletions(c *gin.Context, stream *cursorRunStream, run cursorRunRequest) (*ForwardResult, error) {
-	text, thinking, usage, connectErr := collectCursorAssistant(stream)
-	if connectErr != "" && text == "" {
+	text, thinking, toolCalls, usage, connectErr := collectCursorAssistant(stream)
+	if connectErr != "" && text == "" && len(toolCalls) == 0 {
 		status, errType, message := classifyCursorConnectError(connectErr)
 		writeGatewayCCError(c, status, errType, message)
 		return nil, fmt.Errorf("cursor chat: %s", message)
 	}
-	c.JSON(http.StatusOK, cursorChatCompletion(cursorCompletionID(), run.RequestModel, text, thinking, usage))
+	c.JSON(http.StatusOK, cursorChatCompletion(cursorCompletionID(), run.RequestModel, text, thinking, toolCalls, usage))
 	return cursorForwardResult(run, stream.UpstreamModel, nil, usage), nil
 }
 
@@ -194,8 +239,12 @@ func (s *GatewayService) streamCursorAsAnthropic(c *gin.Context, stream *cursorR
 		c.Writer.Flush()
 	}
 
-	usage, connectErr := consumeCursorStream(stream, func(kind, payload string) error {
+	usage, connectErr, _ := consumeCursorStream(stream, func(kind, payload string, call *apicompat.ChatToolCall) error {
 		markCursorFirstToken(&firstTokenMs, run.StartTime)
+		if call != nil {
+			writeEvents(apicompat.ChatCompletionsChunkToAnthropicEvents(cursorToolChunk(completionID, run.RequestModel, *call), state))
+			return nil
+		}
 		text, thinking := payload, ""
 		if kind == "thinking" {
 			text, thinking = "", payload
@@ -220,13 +269,13 @@ func (s *GatewayService) streamCursorAsAnthropic(c *gin.Context, stream *cursorR
 }
 
 func (s *GatewayService) bufferCursorAsAnthropic(c *gin.Context, stream *cursorRunStream, run cursorRunRequest) (*ForwardResult, error) {
-	text, thinking, usage, connectErr := collectCursorAssistant(stream)
-	if connectErr != "" && text == "" {
+	text, thinking, toolCalls, usage, connectErr := collectCursorAssistant(stream)
+	if connectErr != "" && text == "" && len(toolCalls) == 0 {
 		status, errType, message := classifyCursorConnectError(connectErr)
 		writeAnthropicError(c, status, errType, message)
 		return nil, fmt.Errorf("cursor anthropic: %s", message)
 	}
-	ccResp := cursorChatCompletion(cursorCompletionID(), run.RequestModel, text, thinking, usage)
+	ccResp := cursorChatCompletion(cursorCompletionID(), run.RequestModel, text, thinking, toolCalls, usage)
 	c.JSON(http.StatusOK, apicompat.ChatCompletionsResponseToAnthropic(ccResp, run.RequestModel))
 	return cursorForwardResult(run, stream.UpstreamModel, nil, usage), nil
 }
@@ -248,8 +297,12 @@ func (s *GatewayService) streamCursorAsResponses(c *gin.Context, stream *cursorR
 		c.Writer.Flush()
 	}
 
-	usage, connectErr := consumeCursorStream(stream, func(kind, payload string) error {
+	usage, connectErr, _ := consumeCursorStream(stream, func(kind, payload string, call *apicompat.ChatToolCall) error {
 		markCursorFirstToken(&firstTokenMs, run.StartTime)
+		if call != nil {
+			writeEvents(apicompat.ChatCompletionsChunkToResponsesEvents(cursorToolChunk(completionID, run.RequestModel, *call), state))
+			return nil
+		}
 		text, thinking := payload, ""
 		if kind == "thinking" {
 			text, thinking = "", payload
@@ -274,13 +327,13 @@ func (s *GatewayService) streamCursorAsResponses(c *gin.Context, stream *cursorR
 }
 
 func (s *GatewayService) bufferCursorAsResponses(c *gin.Context, stream *cursorRunStream, run cursorRunRequest) (*ForwardResult, error) {
-	text, thinking, usage, connectErr := collectCursorAssistant(stream)
-	if connectErr != "" && text == "" {
+	text, thinking, toolCalls, usage, connectErr := collectCursorAssistant(stream)
+	if connectErr != "" && text == "" && len(toolCalls) == 0 {
 		status, errType, message := classifyCursorConnectError(connectErr)
 		writeResponsesError(c, status, errType, message)
 		return nil, fmt.Errorf("cursor responses: %s", message)
 	}
-	ccResp := cursorChatCompletion(cursorCompletionID(), run.RequestModel, text, thinking, usage)
+	ccResp := cursorChatCompletion(cursorCompletionID(), run.RequestModel, text, thinking, toolCalls, usage)
 	c.JSON(http.StatusOK, apicompat.ChatCompletionsResponseToResponses(ccResp, run.RequestModel, nil, nil, false, nil))
 	return cursorForwardResult(run, stream.UpstreamModel, nil, usage), nil
 }

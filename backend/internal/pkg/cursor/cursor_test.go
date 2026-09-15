@@ -186,7 +186,7 @@ func TestBuildAgentClientMessageCarriesAskModeTurn(t *testing.T) {
 		{Role: "user", Content: "first"},
 		{Role: "assistant", Content: "reply"},
 		{Role: "user", Content: "latest"},
-	}, "cursor-grok-4.6-medium")
+	}, "cursor-grok-4.6-medium", nil)
 
 	if conversationID == "" || runID == "" {
 		t.Fatalf("conversationID=%q runID=%q, both must be set", conversationID, runID)
@@ -574,5 +574,263 @@ func TestDefaultModelIDsMatchSnapshot(t *testing.T) {
 	}
 	if !seen["default"] {
 		t.Error(`DefaultModelIDs is missing "default" (Cursor's Auto picker)`)
+	}
+}
+
+func TestBuildAgentClientMessageSwitchesToAgentModeWithTools(t *testing.T) {
+	tools := []Tool{{
+		Name:        "Read",
+		Description: "Read a file",
+		Schema:      `{"type":"object","properties":{"path":{"type":"string"}}}`,
+	}}
+	payload, _, _ := BuildAgentClientMessage(
+		[]ChatMessage{{Role: "user", Content: "read main.go"}}, "claude-sonnet-5", tools)
+
+	run := GetNested(payload, fieldAgentClientRunRequest)
+	// Ask mode neither accepts tool definitions nor emits tool calls, so a
+	// tool-carrying turn has to run as an agent turn.
+	if got := getVarint(GetNested(run, fieldRunConversationState), fieldConvStateMode); got != AgentModeAgent {
+		t.Errorf("conversation mode = %d, want %d (agent)", got, AgentModeAgent)
+	}
+	userMsg := GetNested(GetNested(GetNested(run, fieldRunAction), fieldActionUserMessage), fieldUserMsgActionMessage)
+	if got := getVarint(userMsg, fieldUserMsgMode); got != AgentModeAgent {
+		t.Errorf("user message mode = %d, want %d (agent)", got, AgentModeAgent)
+	}
+
+	entry := GetNested(GetNested(run, fieldRunMcpTools), fieldMcpToolEntry)
+	if entry == nil {
+		t.Fatal("tool definition missing from run field 4")
+	}
+	if got := GetString(entry, fieldToolDefName); got != "Read" {
+		t.Errorf("tool name = %q, want %q", got, "Read")
+	}
+	// Cursor echoes field 5 back as the call name; both must carry it so a
+	// returned call can be matched to the tool the client offered.
+	if got := GetString(entry, fieldToolDefCallName); got != "Read" {
+		t.Errorf("tool call name = %q, want %q", got, "Read")
+	}
+	if got := GetString(entry, fieldToolDefDescription); got != "Read a file" {
+		t.Errorf("tool description = %q, want %q", got, "Read a file")
+	}
+	if !strings.Contains(GetString(entry, fieldToolDefSchema), `"path"`) {
+		t.Errorf("tool schema = %q, want the client's JSON Schema", GetString(entry, fieldToolDefSchema))
+	}
+}
+
+func TestBuildAgentClientMessageStaysInAskModeWithoutTools(t *testing.T) {
+	payload, _, _ := BuildAgentClientMessage(
+		[]ChatMessage{{Role: "user", Content: "hi"}}, "default", nil)
+	run := GetNested(payload, fieldAgentClientRunRequest)
+	if got := getVarint(GetNested(run, fieldRunConversationState), fieldConvStateMode); got != AgentModeAsk {
+		t.Errorf("conversation mode = %d, want %d (ask)", got, AgentModeAsk)
+	}
+	if entry := GetNested(GetNested(run, fieldRunMcpTools), fieldMcpToolEntry); entry != nil {
+		t.Error("a tool-free turn carries a tool definition")
+	}
+}
+
+// toolStartFrame builds a tool_start the way Cursor actually sends one (verified
+// against a live account): the invocation sits at 2.15.1 and carries the name,
+// structured arguments and the call id.
+func toolStartFrame(t *testing.T, callID, toolName, argKey, argValue string) []byte {
+	t.Helper()
+	return agentFrame(t, func(w *ProtobufWriter) {
+		w.Bytes(fieldInteractionToolStart, toolCallPayload(callID, toolName, argKey, argValue))
+	})
+}
+
+// toolEndFrame is the terminating event; it carries the id but no arguments.
+func toolEndFrame(t *testing.T, callID string) []byte {
+	t.Helper()
+	return agentFrame(t, func(w *ProtobufWriter) {
+		var call ProtobufWriter
+		call.String(fieldToolCallID, callID)
+		w.Bytes(fieldInteractionToolEnd, call.Result())
+	})
+}
+
+func toolCallPayload(callID, toolName, argKey, argValue string) []byte {
+	var value ProtobufWriter
+	value.String(fieldArgValueString, argValue)
+	var arg ProtobufWriter
+	arg.String(fieldInvocationArgKey, argKey)
+	arg.Bytes(fieldInvocationArgVal, value.Result())
+
+	var invocation ProtobufWriter
+	invocation.String(fieldInvocationName, toolName)
+	invocation.Bytes(fieldInvocationArgs, arg.Result())
+	invocation.String(fieldInvocationCallID, callID)
+
+	var mcp ProtobufWriter
+	mcp.Bytes(fieldToolInvocation, invocation.Result())
+	var payload ProtobufWriter
+	payload.Bytes(fieldToolCallMcpWrap, mcp.Result())
+
+	var call ProtobufWriter
+	call.String(fieldToolCallID, callID)
+	call.Bytes(fieldToolCallPayload, payload.Result())
+	return call.Result()
+}
+
+// execToolFrame is how a tool call arrives on the exec channel: the invocation
+// is at field 11 of the server message, with no interaction wrapper.
+func execToolFrame(t *testing.T, callID, toolName, argKey, argValue string) []byte {
+	t.Helper()
+	var value ProtobufWriter
+	value.String(fieldArgValueString, argValue)
+	var arg ProtobufWriter
+	arg.String(fieldInvocationArgKey, argKey)
+	arg.Bytes(fieldInvocationArgVal, value.Result())
+
+	var invocation ProtobufWriter
+	invocation.String(fieldInvocationName, toolName)
+	invocation.Bytes(fieldInvocationArgs, arg.Result())
+	invocation.String(fieldInvocationCallID, callID)
+
+	var exec ProtobufWriter
+	exec.Bytes(fieldExecInvocation, invocation.Result())
+	var msg ProtobufWriter
+	msg.Bytes(fieldAgentServerExec, exec.Result())
+	frame, err := EncodeFrame(msg.Result(), false)
+	if err != nil {
+		t.Fatalf("EncodeFrame: %v", err)
+	}
+	return frame
+}
+
+func TestConsumeAssistantStreamEmitsToolCalls(t *testing.T) {
+	var stream bytes.Buffer
+	stream.Write(textDeltaFrame(t, "checking", false))
+	stream.Write(toolStartFrame(t, "call_1", "get_weather", "city", "Paris"))
+	stream.Write(toolEndFrame(t, "call_1"))
+	stream.Write(turnEndedFrame(t, TokenUsage{InputTokens: 5, OutputTokens: 7}))
+
+	var text strings.Builder
+	var calls []*ToolCall
+	_, connectErr := ConsumeAssistantStream(&stream, func(ev StreamEvent) error {
+		switch ev.Type {
+		case "text":
+			text.WriteString(ev.Text)
+		case "tool_call":
+			calls = append(calls, ev.Tool)
+		}
+		return nil
+	})
+	if connectErr != "" {
+		t.Fatalf("connect error = %q, want none", connectErr)
+	}
+	if text.String() != "checking" {
+		t.Errorf("text = %q, want %q", text.String(), "checking")
+	}
+	if len(calls) == 0 {
+		t.Fatal("no tool call events; a tool-using turn would look like plain text")
+	}
+	if calls[0].Name != "get_weather" || calls[0].ID != "call_1" {
+		t.Errorf("first event = %+v, want get_weather/call_1", calls[0])
+	}
+	// Cursor sends structured key/value pairs, not JSON text. Clients need JSON
+	// in tool_use.input / tool_calls.arguments, so it has to be rebuilt here.
+	if calls[0].ArgsRaw != `{"city":"Paris"}` {
+		t.Errorf("arguments = %q, want the rebuilt JSON object", calls[0].ArgsRaw)
+	}
+	terminal := false
+	for _, call := range calls {
+		if !call.Partial {
+			terminal = true
+		}
+	}
+	if !terminal {
+		t.Error("no terminal event; the call would never be delivered")
+	}
+}
+
+func TestConsumeAssistantStreamReadsToolCallsOffTheExecChannel(t *testing.T) {
+	// The exec channel carries the tool call itself, not a command to run. Not
+	// parsing it here leaves the client with prose and no tool_use at all.
+	var stream bytes.Buffer
+	stream.Write(execToolFrame(t, "call_9", "get_weather", "city", "Paris"))
+	stream.Write(turnEndedFrame(t, TokenUsage{OutputTokens: 3}))
+
+	var calls []*ToolCall
+	if _, connectErr := ConsumeAssistantStream(&stream, func(ev StreamEvent) error {
+		if ev.Type == "tool_call" {
+			calls = append(calls, ev.Tool)
+		}
+		return nil
+	}); connectErr != "" {
+		t.Fatalf("connect error = %q, want none", connectErr)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("got %d tool calls off the exec channel, want 1", len(calls))
+	}
+	if calls[0].Name != "get_weather" || calls[0].ArgsRaw != `{"city":"Paris"}` {
+		t.Errorf("exec tool call = %+v, want get_weather with rebuilt arguments", calls[0])
+	}
+	if calls[0].Partial {
+		t.Error("exec tool call is partial; it would never be delivered to the client")
+	}
+}
+
+func TestParseServerControlsAndReplies(t *testing.T) {
+	// exec: the upstream asks the receiving side to run a command. Here that is
+	// the gateway container, so it must always be refused.
+	var throw ProtobufWriter
+	throw.Varint(fieldExecThrowID, 42)
+	var execMsg ProtobufWriter
+	execMsg.Bytes(fieldAgentServerExec, throw.Result())
+
+	controls := ParseServerControls(execMsg.Result())
+	if len(controls) != 1 || controls[0].Kind != "exec" || controls[0].ID != 42 {
+		t.Fatalf("controls = %+v, want one exec with id 42", controls)
+	}
+	if controls[0].CarriesToolCall {
+		t.Error("a bare exec was flagged as carrying a tool call; it would go unanswered")
+	}
+	reject := EncodeExecReject(controls[0].ID, "nope")
+	control := GetNested(reject, fieldAgentClientExecControl)
+	rejected := GetNested(control, fieldExecControlThrow)
+	if got := getVarint(rejected, fieldExecThrowID); got != 42 {
+		t.Errorf("reject id = %d, want 42", got)
+	}
+	if got := GetString(rejected, fieldExecThrowMessage); got != "nope" {
+		t.Errorf("reject message = %q, want %q", got, "nope")
+	}
+
+	// query: network queries are the upstream doing its own fetching, so they
+	// can be approved; anything else needs a real answer we cannot invent.
+	var inner ProtobufWriter
+	inner.Bytes(1, nil)
+	var query ProtobufWriter
+	query.Varint(fieldQueryReplyID, 7)
+	query.Bytes(5, inner.Result())
+	var queryMsg ProtobufWriter
+	queryMsg.Bytes(fieldAgentServerQuery, query.Result())
+
+	controls = ParseServerControls(queryMsg.Result())
+	if len(controls) != 1 || controls[0].Kind != "query" || controls[0].ID != 7 {
+		t.Fatalf("controls = %+v, want one query with id 7", controls)
+	}
+	if controls[0].QueryField != 5 {
+		t.Errorf("QueryField = %d, want 5", controls[0].QueryField)
+	}
+	if !IsNetworkQuery(controls[0].QueryField) {
+		t.Error("field 5 is not treated as a network query")
+	}
+	if IsNetworkQuery(3) {
+		t.Error("field 3 was treated as a network query; it needs a real answer")
+	}
+
+	approve := EncodeQueryReply(7, 5, true, "")
+	resp := GetNested(approve, fieldAgentClientQueryReply)
+	if got := getVarint(resp, fieldQueryReplyID); got != 7 {
+		t.Errorf("reply id = %d, want 7", got)
+	}
+	if GetNested(GetNested(resp, 5), fieldQueryReplyRejected) != nil {
+		t.Error("an approval carries a rejection payload")
+	}
+	deny := EncodeQueryReply(7, 3, false, "unsupported")
+	resp = GetNested(deny, fieldAgentClientQueryReply)
+	if got := GetString(GetNested(GetNested(resp, 3), fieldQueryReplyRejected), fieldQueryRejectReason); got != "unsupported" {
+		t.Errorf("rejection reason = %q, want %q", got, "unsupported")
 	}
 }
