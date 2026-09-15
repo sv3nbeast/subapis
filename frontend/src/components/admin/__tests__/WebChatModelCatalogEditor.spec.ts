@@ -22,6 +22,27 @@ describe('WebChat admin catalog',()=>{
     expect(mocks.save).toHaveBeenCalledWith({entries:[expect.objectContaining({name:'Opus Latest',group_id:2,model:'claude-opus-5'})]})
     expect(wrapper.text()).toContain('模型目录已发布');wrapper.unmount()
   })
+  // An image entry is unusable until it declares the capability, and the mismatch
+  // is otherwise only reported by the server after publish.
+  it('publishes the image capability picked in the UI',async()=>{
+    mocks.get.mockResolvedValue({entries:[{id:'img',name:'GPT Image',brand:'OpenAI',description:'',group_id:2,model:'gpt-image-2',enabled:true,recommended:false,sort_order:0}]})
+    const wrapper=mount(WebChatModelCatalogEditor);await flushPromises()
+    // A published image model without the flag must be flagged on screen.
+    expect(wrapper.text()).toContain('必须勾选')
+    const box=wrapper.findAll('label').find(l=>l.text().includes('图片生成'))!.get('input')
+    await box.setValue(true);await flushPromises()
+    expect(wrapper.text()).not.toContain('必须勾选')
+    await wrapper.findAll('button').find(b=>b.text()==='发布模型目录')!.trigger('click');await flushPromises()
+    expect(mocks.save).toHaveBeenCalledWith({entries:[expect.objectContaining({model:'gpt-image-2',capabilities:['image']})]})
+    wrapper.unmount()
+  })
+  it('warns when a chat model is marked as an image model',async()=>{
+    const wrapper=mount(WebChatModelCatalogEditor);await flushPromises()
+    const box=wrapper.findAll('label').find(l=>l.text().includes('图片生成'))!.get('input')
+    await box.setValue(true);await flushPromises()
+    expect(wrapper.text()).toContain('该模型不生成图片')
+    wrapper.unmount()
+  })
   it('validation errors are visible and do not publish',async()=>{
     mocks.validate.mockRejectedValue(new Error('invalid route'))
     const wrapper=mount(WebChatModelCatalogEditor);await flushPromises()
