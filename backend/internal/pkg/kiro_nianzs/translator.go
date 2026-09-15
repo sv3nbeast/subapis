@@ -289,6 +289,15 @@ type KiroRequestContext struct {
 	// ContextWindowSource is "upstream_model_metadata" when ListAvailableModels
 	// supplied the limit and "static_fallback" otherwise.
 	ContextWindowSource string
+	// ClientDeclaredExtendedContext records that the caller asked for the 1M
+	// context window via the "context-1m" beta token. Kiro grants ~1M to these
+	// models either way, so the token changes nothing upstream — but it is the
+	// only reliable evidence that the client sizes compaction against 1M rather
+	// than Anthropic's default 200k, which decides whether the client-visible
+	// input figure should be the request side or Kiro's own occupancy. Claude
+	// Code strips a "[1m]" model suffix before sending, so the model string
+	// cannot carry this.
+	ClientDeclaredExtendedContext bool
 	// CompletedToolHistoryFlattened is safe response-side telemetry describing
 	// the request representation selected before the upstream call. It never
 	// changes parsing, usage reconciliation, or client-visible output.
@@ -643,6 +652,7 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 	requestCtx.EmitProtocolPing = anthropicBetaHeaderContains(headers, "claude-code-20250219")
 	requestCtx.ReportUsageIterations = requestCtx.EmitProtocolPing
 	requestCtx.ReportContextManagement = anthropicBetaHeaderContains(headers, "context-management-2025-06-27")
+	requestCtx.ClientDeclaredExtendedContext = anthropicBetaHeaderHasPrefix(headers, "context-1m")
 	origin := strings.TrimSpace(options.Origin)
 	if origin == "" {
 		origin = "AI_EDITOR"
@@ -844,6 +854,21 @@ func anthropicBetaHeaderContains(headers http.Header, token string) bool {
 	return false
 }
 
+// anthropicBetaHeaderHasPrefix matches a beta family whose tokens carry a
+// version date, such as "context-1m-2025-08-07". Matching the family keeps a
+// future revision of the same feature working without a code change.
+func anthropicBetaHeaderHasPrefix(headers http.Header, prefix string) bool {
+	if headers == nil || prefix == "" {
+		return false
+	}
+	for _, part := range strings.Split(headers.Get("Anthropic-Beta"), ",") {
+		if strings.HasPrefix(strings.TrimSpace(strings.ToLower(part)), prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, requestCtx KiroRequestContext) (*ParseResult, error) {
 	content, toolUses, usage, stopReason, reasoningArtifacts, err := parseEventStream(body, model, requestCtx)
 	if err != nil {
@@ -868,7 +893,7 @@ func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, reque
 		usage.InputTokens = requestCtx.EstimatedInputTokens
 	}
 	usage = addKiroPriorCredits(usage, requestCtx)
-	clientUsage := clientVisibleKiroUsage(usage, model, requestCtx.ContextWindowTokens)
+	clientUsage := clientVisibleKiroUsage(usage, model, requestCtx)
 	return &ParseResult{
 		ResponseBody: buildClaudeResponse(content, toolUses, model, clientUsage, stopReason, reasoningArtifacts, requestCtx),
 		Usage:        usage,
@@ -2086,7 +2111,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	// framing twice (once here and once inside ensureMessageStart).
 	usage = normalizeClaudeCodeSimulatedInputUsage(usage, requestCtx)
 	usage.TotalTokens = usage.InputTokens + usage.OutputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
-	clientUsage := clientVisibleKiroUsage(usage, model, requestCtx.ContextWindowTokens)
+	clientUsage := clientVisibleKiroUsage(usage, model, requestCtx)
 	if err := releaseStreamOutput(); err != nil {
 		return nil, err
 	}
@@ -7293,41 +7318,51 @@ func addKiroPriorCredits(usage Usage, requestCtx KiroRequestContext) Usage {
 // Which figure is correct depends on how big the caller believes its context
 // window is, because Kiro grants all of these models ~1M regardless:
 //
-//   - Claude models without "[1m]": the caller assumes Anthropic's 200k, far
-//     under Kiro's capacity, so the request-side figure reconciles with
-//     count_tokens and still compacts with room to spare (200k request-side is
-//     ~325k of Kiro context). Kiro's occupancy made them compact at ~20%.
-//   - "[1m]" models: the caller also assumes 1M, so only Kiro's occupancy
-//     yields the right ratio. The request-side figure would let a session
-//     reach ~1.6M of Kiro context before compacting.
+//   - Claude clients on the default window: the caller assumes Anthropic's
+//     200k, far under Kiro's capacity, so the request-side figure reconciles
+//     with count_tokens and still compacts with room to spare (200k
+//     request-side is ~325k of Kiro context). Kiro's occupancy made these
+//     clients compact at ~20% of their window.
+//   - Clients that declared the 1M window: they size compaction against the
+//     same ~1M Kiro enforces, so only the occupancy ratio is meaningful. The
+//     request-side figure would let a session reach ~1.6M of Kiro context
+//     before compacting, i.e. straight into the provider limit.
 //   - GPT models on the Responses route: Codex sizes compaction against the
 //     ~872k-922k it reads from the model manifest, near enough to Kiro's
-//     capacity that it has the same problem as "[1m]".
+//     capacity to have the same problem.
 //
 // The provider percentage also stays as the fallback whenever the request side
 // yields nothing at all.
-func clientVisibleKiroUsage(usage Usage, model string, contextWindowTokens int) Usage {
-	if !kiroModelReportsRequestSideInput(model) {
-		return reconcileKiroUsageWithContext(usage, contextWindowTokens)
+func clientVisibleKiroUsage(usage Usage, model string, requestCtx KiroRequestContext) Usage {
+	if !kiroReportsRequestSideInput(model, requestCtx) {
+		return reconcileKiroUsageWithContext(usage, requestCtx.ContextWindowTokens)
 	}
 	if usage.InputTokens > 0 || usage.CacheReadInputTokens > 0 || usage.CacheCreationInputTokens > 0 {
 		return usage
 	}
-	return reconcileKiroUsageWithContext(usage, contextWindowTokens)
+	return reconcileKiroUsageWithContext(usage, requestCtx.ContextWindowTokens)
 }
 
-// kiroModelReportsRequestSideInput reports whether the caller's own context
-// window is small enough relative to Kiro's that the request-side input figure
-// can be reported without delaying compaction past Kiro's capacity.
-func kiroModelReportsRequestSideInput(model string) bool {
-	if kiroModelDeclaresExtendedContext(model) {
+// kiroReportsRequestSideInput reports whether the caller's own context window is
+// small enough relative to Kiro's that the request-side input figure can be
+// reported without delaying compaction past Kiro's capacity.
+//
+// The extended-context signal has to come from the request context, not the
+// model string: Claude Code treats "[1m]" as a client-side selector and strips
+// it before sending, so only the "context-1m" beta token survives the wire. The
+// model string is still checked so a leaked suffix is not misread as a default
+// window request.
+func kiroReportsRequestSideInput(model string, requestCtx KiroRequestContext) bool {
+	if requestCtx.ClientDeclaredExtendedContext || kiroModelDeclaresExtendedContext(model) {
 		return false
 	}
 	return strings.Contains(strings.ToLower(strings.TrimSpace(model)), "claude")
 }
 
-// kiroModelDeclaresExtendedContext reports whether the caller asked for the 1M
-// context variant, where the client's own window matches Kiro's.
+// kiroModelDeclaresExtendedContext reports whether the model string itself asks
+// for the 1M variant. Claude Code strips this suffix before sending, so it only
+// catches callers that pass it through verbatim; the beta token is the reliable
+// signal.
 func kiroModelDeclaresExtendedContext(model string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(model))
 	normalized = strings.TrimSuffix(normalized, "-thinking")

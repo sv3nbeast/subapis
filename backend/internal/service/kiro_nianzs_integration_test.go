@@ -553,12 +553,13 @@ func nianzsKiroSemanticTailResponse(t *testing.T, content string, percentage flo
 	}
 }
 
-// Claude callers without "[1m]" size compaction against Anthropic's 200k, so
-// they compact long before Kiro's ~1M runs out even when we report the much
-// smaller request-side input. Reporting Kiro's own occupancy instead made them
-// compact at ~20% of the window, and left usage.input_tokens irreconcilable
-// with both count_tokens and the invoice. "[1m]" and the Codex/Responses route
-// keep the occupancy projection — see the Responses test below.
+// Claude callers on the default window size compaction against Anthropic's
+// 200k, so they compact long before Kiro's ~1M runs out even when we report the
+// much smaller request-side input. Reporting Kiro's own occupancy instead made
+// them compact at ~20% of the window, and left usage.input_tokens irreconcilable
+// with both count_tokens and the invoice. Callers that declared the 1M window
+// and the Codex/Responses route keep the occupancy projection — see the two
+// tests below.
 func TestNianzsMessagesRouteReturns85PercentContextUsageForClaudeCompaction(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, stream := range []bool{false, true} {
@@ -599,11 +600,41 @@ func TestNianzsMessagesRouteReturns85PercentContextUsageForClaudeCompaction(t *t
 	}
 }
 
+// A Claude Code caller that opened the 1M window sends "context-1m" and sizes
+// compaction against the same ~1M Kiro enforces, so it has to keep receiving
+// Kiro's occupancy. The suffix form of this request ("claude-opus-5[1m]") is
+// stripped from the model before it reaches the gateway, so this beta token is
+// the only signal that survives the wire — the split has to read the request
+// context, not the model string.
+func TestNianzsMessagesRouteKeepsContextOccupancyForDeclared1MClients(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"messages":[{"role":"user","content":"context threshold"}],"stream":true}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Anthropic-Beta", "claude-code-20250219,context-1m-2025-08-07")
+	svc, _, account := newNianzsKiroRouteTestRuntime(t, nianzsKiroContextUsageResponse(t, 85.0, 10))
+
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	billingTotal := result.Usage.InputTokens + result.Usage.CacheReadInputTokens + result.Usage.CacheCreationInputTokens + result.Usage.OutputTokens
+	require.Less(t, billingTotal, 850_000,
+		"declaring the 1M window must not make the provider occupancy billable")
+	wire := recorder.Body.String()
+	require.Contains(t, wire, `"input_tokens":849990`,
+		"a declared 1M client needs Kiro's occupancy to compact at the right point")
+	require.Equal(t, 1, strings.Count(wire, "event: message_stop"))
+}
+
 // Codex sizes compaction against the model manifest's max_context_window
 // (≈872k-922k), which is close enough to Kiro's ~1M that the request-side figure
 // would let a session run past the provider window. So the Responses route keeps
-// reporting Kiro's occupancy, exactly like the "[1m]" Claude models do — the
-// split lives in kiroModelReportsRequestSideInput, not in client sniffing.
+// reporting Kiro's occupancy, exactly like a declared 1M Claude client does —
+// the split lives in kiroReportsRequestSideInput, not in client sniffing.
 func TestNianzsResponsesRouteReturns85PercentContextUsageWithoutBillingIt(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"gpt-5.6-sol","input":[{"role":"user","content":"context threshold"}],"stream":true}`)

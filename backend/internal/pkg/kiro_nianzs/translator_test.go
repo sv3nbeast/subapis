@@ -4418,7 +4418,8 @@ func TestClientVisibleKiroUsagePrefersRequestSideInput(t *testing.T) {
 		HasContextUsage:        true,
 		ContextUsagePercentage: 0.8,
 	}
-	visible := clientVisibleKiroUsage(withEstimate, "claude-opus-5", 872_000)
+	defaultWindow := KiroRequestContext{ContextWindowTokens: 872_000}
+	visible := clientVisibleKiroUsage(withEstimate, "claude-opus-5", defaultWindow)
 	require.Equal(t, 13, visible.InputTokens, "request-side input must survive a context percentage")
 	require.False(t, visible.InputTokensFromContext)
 
@@ -4429,7 +4430,7 @@ func TestClientVisibleKiroUsagePrefersRequestSideInput(t *testing.T) {
 		HasContextUsage:        true,
 		ContextUsagePercentage: 1.55,
 	}
-	visibleCached := clientVisibleKiroUsage(cached, "claude-opus-5", 872_000)
+	visibleCached := clientVisibleKiroUsage(cached, "claude-opus-5", defaultWindow)
 	require.Equal(t, 25, visibleCached.InputTokens)
 	require.Equal(t, 4_757, visibleCached.CacheReadInputTokens,
 		"emulated cache buckets must not be rescaled to Kiro occupancy")
@@ -4440,30 +4441,83 @@ func TestClientVisibleKiroUsagePrefersRequestSideInput(t *testing.T) {
 		HasContextUsage:        true,
 		ContextUsagePercentage: 85,
 	}
-	fallback := clientVisibleKiroUsage(blank, "claude-opus-5", 1_000_000)
+	fallback := clientVisibleKiroUsage(blank, "claude-opus-5",
+		KiroRequestContext{ContextWindowTokens: 1_000_000})
 	require.Equal(t, 849_990, fallback.InputTokens)
 	require.True(t, fallback.InputTokensFromContext)
 }
 
-// A "[1m]" caller sizes compaction against the same 1M window Kiro enforces,
-// so it must keep seeing Kiro's occupancy. Handing it the request-side figure
+// A caller on the 1M window sizes compaction against the same ~1M Kiro
+// enforces, so it must keep seeing Kiro's occupancy; the request-side figure
 // would let the session grow to ~1.6M of Kiro context before it compacts.
-func TestClientVisibleKiroUsageKeepsOccupancyForExtendedContextModels(t *testing.T) {
+//
+// Claude Code strips "[1m]" from the model before sending and signals the wider
+// window with the "context-1m" beta token instead, so the beta token is the
+// signal that actually arrives. Keying this on the model string alone left the
+// branch unreachable in production.
+func TestClientVisibleKiroUsageKeepsOccupancyForExtendedContextClients(t *testing.T) {
 	usage := Usage{
 		InputTokens:            624_500,
 		OutputTokens:           10,
 		HasContextUsage:        true,
 		ContextUsagePercentage: 85,
 	}
+
+	declared := KiroRequestContext{ContextWindowTokens: 1_000_000, ClientDeclaredExtendedContext: true}
+	visible := clientVisibleKiroUsage(usage, "claude-opus-5", declared)
+	require.Equal(t, 849_990, visible.InputTokens,
+		"a client that declared the 1M window needs Kiro's occupancy ratio")
+	require.True(t, visible.InputTokensFromContext)
+
+	// A leaked "[1m]" suffix means the same thing and must not be read as a
+	// default-window request.
 	for _, model := range []string{"claude-opus-5[1m]", "claude-opus-5-1m", "claude-opus-5[1m]-thinking"} {
-		visible := clientVisibleKiroUsage(usage, model, 1_000_000)
-		require.Equal(t, 849_990, visible.InputTokens, model)
-		require.True(t, visible.InputTokensFromContext, model)
+		leaked := clientVisibleKiroUsage(usage, model, KiroRequestContext{ContextWindowTokens: 1_000_000})
+		require.Equal(t, 849_990, leaked.InputTokens, model)
+		require.True(t, leaked.InputTokensFromContext, model)
 	}
+
+	// Without either signal the caller is on Anthropic's 200k and gets the
+	// request side.
+	plain := clientVisibleKiroUsage(usage, "claude-opus-5", KiroRequestContext{ContextWindowTokens: 1_000_000})
+	require.Equal(t, 624_500, plain.InputTokens)
+	require.False(t, plain.InputTokensFromContext)
+
 	require.True(t, kiroModelDeclaresExtendedContext("claude-opus-5[1m]"))
 	require.False(t, kiroModelDeclaresExtendedContext("claude-opus-5"))
 	// The window resolver and the usage split must agree on what "1m" means.
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-opus-5[1m]"))
+}
+
+// The 1M beta token carries a version date, so the family prefix has to match —
+// pinning the exact string would silently disable the split on the next
+// revision. The token must also survive into the request context built for the
+// upstream call, which is what the two parse entry points read.
+func TestBuildKiroPayloadRecordsContext1MBetaToken(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-5","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
+
+	for _, header := range []string{
+		"context-1m-2025-08-07",
+		"claude-code-20250219,context-1m-2025-08-07",
+		"context-1m-2099-01-01",
+		"CONTEXT-1M-2025-08-07",
+	} {
+		headers := http.Header{}
+		headers.Set("Anthropic-Beta", header)
+		result, err := BuildKiroPayloadWithContext(body, "claude-opus-5", "", "AI_EDITOR", headers)
+		require.NoError(t, err)
+		require.True(t, result.Context.ClientDeclaredExtendedContext, header)
+	}
+
+	for _, header := range []string{"", "claude-code-20250219", "context-management-2025-06-27"} {
+		headers := http.Header{}
+		if header != "" {
+			headers.Set("Anthropic-Beta", header)
+		}
+		result, err := BuildKiroPayloadWithContext(body, "claude-opus-5", "", "AI_EDITOR", headers)
+		require.NoError(t, err)
+		require.False(t, result.Context.ClientDeclaredExtendedContext, header)
+	}
 }
 
 func TestKiroContextUsageBoundaryStaysBelow85UntilProviderReachesIt(t *testing.T) {

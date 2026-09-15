@@ -55,9 +55,19 @@ func TestNianzsKiroStreamWireReconcilesWithBillingUsage(t *testing.T) {
 			ctx:   nianzskiro.KiroRequestContext{ContextWindowTokens: 1_000_000},
 		},
 		{
-			name:  "extended context model keeps provider occupancy",
+			name:  "leaked 1m model suffix keeps provider occupancy",
 			model: "claude-opus-5[1m]",
 			ctx:   nianzskiro.KiroRequestContext{ContextWindowTokens: 1_000_000},
+		},
+		{
+			// The signal that actually arrives in production: Claude Code strips
+			// "[1m]" and sends the beta token instead.
+			name:  "declared 1m client keeps provider occupancy",
+			model: "claude-opus-5",
+			ctx: nianzskiro.KiroRequestContext{
+				ContextWindowTokens:           1_000_000,
+				ClientDeclaredExtendedContext: true,
+			},
 		},
 		{
 			name:  "emulated cache buckets",
