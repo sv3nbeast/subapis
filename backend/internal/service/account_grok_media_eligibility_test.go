@@ -231,3 +231,45 @@ func TestGrokMediaEligibilityTrustsProvenPaidPlanWithoutQuotaFields(t *testing.T
 	require.False(t, eligible)
 	require.Equal(t, "billing_inconclusive", reason)
 }
+
+// Scheduling reads a projected account: the cache keeps the Grok billing and
+// quota snapshots but strips credentials, so the access-token JWT is gone by
+// then. A paid plan must still be provable from the snapshot alone, or the
+// candidate filter rejects the account that direct calls happily accept.
+func TestGrokMediaEligibilityTrustsSnapshotTierWithoutCredentials(t *testing.T) {
+	tokenLimit := int64(53_000_000)
+	projected := &Account{
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+		// Credentials deliberately absent: filterSchedulerCredentials drops
+		// access_token, so nothing here may depend on it.
+		Extra: map[string]any{
+			grokBillingExtraKey: &xai.BillingSummary{
+				StatusCode:       http.StatusOK,
+				SubscriptionTier: "SuperGrok Heavy",
+			},
+			grokQuotaSnapshotExtraKey: &xai.QuotaSnapshot{
+				StatusCode: http.StatusOK,
+				Tokens:     &xai.QuotaWindow{Limit: &tokenLimit},
+			},
+		},
+	}
+	eligible, reason := projected.GrokMediaGenerationEligibility()
+	require.True(t, eligible, "a paid tier in the billing snapshot is provable without credentials")
+	require.Equal(t, "eligible", reason)
+	require.True(t, projected.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityGrokMediaGeneration))
+
+	free := &Account{
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			grokBillingExtraKey: &xai.BillingSummary{
+				StatusCode:       http.StatusOK,
+				SubscriptionTier: "Free",
+			},
+		},
+	}
+	eligible, reason = free.GrokMediaGenerationEligibility()
+	require.False(t, eligible, "the upstream does not generate images for free accounts")
+	require.Equal(t, "billing_free_tier", reason)
+}

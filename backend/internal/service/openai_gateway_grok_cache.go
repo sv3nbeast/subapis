@@ -345,7 +345,15 @@ func grokSubscriptionEvidenceOf(account *Account) grokSubscriptionEvidence {
 	paidSignal := false
 	inferredFreeSignal := false
 	if billing, err := grokBillingSnapshotFromExtra(account.Extra); err == nil && billing != nil {
-		if tier := strings.TrimSpace(billing.Plan); tier != "" {
+		// The provider reports the plan under either name. Scheduling reads a
+		// projected account whose credentials are stripped, so the snapshot's
+		// tier is the only plan evidence left on that path; missing it rejected
+		// paid accounts at candidate selection while direct calls accepted them.
+		for _, tier := range []string{billing.Plan, billing.SubscriptionTier} {
+			tier = strings.TrimSpace(tier)
+			if tier == "" {
+				continue
+			}
 			if isGrokFreeSubscriptionTier(tier) {
 				freeSignal = true
 			} else if !isGrokUnknownSubscriptionTier(tier) {
