@@ -4,6 +4,8 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -177,4 +179,55 @@ func TestNormalizeGrokMediaEligibilityUpdateExtra(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, normalized, got)
 	})
+}
+
+// grokJWTWithTier builds an unsigned token whose payload carries the numeric
+// prod_auth subscription tier; only the payload is decoded by the reader.
+func grokJWTWithTier(tier int) string {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"sub":"u","tier":%d}`, tier)))
+	return "h." + payload + ".s"
+}
+
+// A paid plan proven by the live access token must not need allowance numbers:
+// production account 2611 (SuperGrok Heavy) carried a tier but no quota fields
+// and was rejected as billing_inconclusive, which blocked every image request.
+func TestGrokMediaEligibilityTrustsProvenPaidPlanWithoutQuotaFields(t *testing.T) {
+	paidNoQuota := &Account{
+		Platform:    PlatformGrok,
+		Type:        AccountTypeOAuth,
+		Credentials: map[string]any{"access_token": grokJWTWithTier(5)},
+		Extra: map[string]any{grokBillingExtraKey: &xai.BillingSummary{
+			StatusCode: http.StatusOK,
+		}},
+	}
+	eligible, reason := paidNoQuota.GrokMediaGenerationEligibility()
+	require.True(t, eligible, "a proven paid tier is the positive evidence this gate wants")
+	require.Equal(t, "eligible", reason)
+	require.True(t, paidNoQuota.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityGrokMediaGeneration))
+
+	free := &Account{
+		Platform:    PlatformGrok,
+		Type:        AccountTypeOAuth,
+		Credentials: map[string]any{"access_token": grokJWTWithTier(0)},
+		Extra: map[string]any{grokBillingExtraKey: &xai.BillingSummary{
+			StatusCode: http.StatusOK,
+		}},
+	}
+	eligible, reason = free.GrokMediaGenerationEligibility()
+	require.False(t, eligible, "free tiers cannot generate media")
+	require.Equal(t, "billing_free_tier", reason)
+
+	// No plan evidence at all still fails closed on the quota fields, keeping
+	// inconclusive accounts out of the media pool.
+	inconclusive := &Account{
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{grokBillingExtraKey: &xai.BillingSummary{
+			StatusCode: http.StatusOK,
+			Partial:    true,
+		}},
+	}
+	eligible, reason = inconclusive.GrokMediaGenerationEligibility()
+	require.False(t, eligible)
+	require.Equal(t, "billing_inconclusive", reason)
 }

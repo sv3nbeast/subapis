@@ -313,17 +313,33 @@ func applyGrokFreeToolCacheRoute(body, intentSourceBody []byte, account *Account
 	return appendGrokFreeCacheNativeToolsWithPolicy(body, allowPureClientTools, allowFunctionSearch)
 }
 
-// isKnownGrokFreeAccount recognizes free-tier Grok accounts, used for
-// Free cache routing / media free_tier blocks (broader than soft-gate).
-// Soft-gate uses isExplicitGrokFreeOAuthAccount (exact "free" only).
-func isKnownGrokFreeAccount(account *Account) bool {
+// grokSubscriptionEvidence is what the observations actually prove about a
+// Grok account's plan. Media eligibility needs the paid verdict, not just the
+// absence of a free one, so the signals are collapsed once and shared.
+type grokSubscriptionEvidence int
+
+const (
+	grokSubscriptionInconclusive grokSubscriptionEvidence = iota
+	grokSubscriptionFree
+	grokSubscriptionPaid
+)
+
+// grokSubscriptionEvidenceOf weighs every plan observation for an OAuth Grok
+// account. Only free/paid verdicts are asserted; anything else stays
+// inconclusive so callers keep failing closed on their own terms.
+func grokSubscriptionEvidenceOf(account *Account) grokSubscriptionEvidence {
 	if account == nil || !account.IsGrokOAuth() {
-		return false
+		return grokSubscriptionInconclusive
 	}
 	// Live access-token JWT wins over stale billing/credential snapshots
 	// so a downgrade to free is visible as soon as the AT is refreshed.
 	if jwtTier := xai.SubscriptionTierFromJWT(account.GetCredential("access_token")); jwtTier != "" {
-		return isGrokFreeSubscriptionTier(jwtTier)
+		if isGrokFreeSubscriptionTier(jwtTier) {
+			return grokSubscriptionFree
+		}
+		if !isGrokUnknownSubscriptionTier(jwtTier) {
+			return grokSubscriptionPaid
+		}
 	}
 	freeSignal := false
 	paidSignal := false
@@ -370,7 +386,19 @@ func isKnownGrokFreeAccount(account *Account) bool {
 		}
 	}
 	// Explicit paid evidence always wins over an inferred Free signal.
-	return !paidSignal && (freeSignal || inferredFreeSignal)
+	if paidSignal {
+		return grokSubscriptionPaid
+	}
+	if freeSignal || inferredFreeSignal {
+		return grokSubscriptionFree
+	}
+	return grokSubscriptionInconclusive
+}
+
+// isKnownGrokFreeAccount recognizes free-tier Grok accounts, used for
+// cache-simulation and media-routing decisions.
+func isKnownGrokFreeAccount(account *Account) bool {
+	return grokSubscriptionEvidenceOf(account) == grokSubscriptionFree
 }
 
 func isGrokFreeSubscriptionTier(tier string) bool {

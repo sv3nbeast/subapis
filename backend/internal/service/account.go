@@ -130,8 +130,14 @@ func (a *Account) GrokMediaGenerationEligibility() (bool, string) {
 	if billing.StatusCode == http.StatusForbidden || billing.WeeklyStatusCode == http.StatusForbidden || billing.MonthlyStatusCode == http.StatusForbidden {
 		return false, "billing_forbidden"
 	}
-	if isKnownGrokFreeAccount(a) {
+	// A proven paid plan is the positive evidence this gate asks for; requiring
+	// quota fields on top of it rejected paid accounts whose billing snapshot
+	// carried a tier but no allowance numbers.
+	switch grokSubscriptionEvidenceOf(a) {
+	case grokSubscriptionFree:
 		return false, "billing_free_tier"
+	case grokSubscriptionPaid:
+		return true, "eligible"
 	}
 	if !grokBillingHasAuthoritativeQuota(billing) {
 		return false, "billing_inconclusive"
