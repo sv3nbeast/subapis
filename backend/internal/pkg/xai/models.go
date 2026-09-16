@@ -11,7 +11,12 @@ var runtimeMappingOpts atomic.Value // ModelMappingOptions
 var runtimeMappingVersion atomic.Uint64
 
 func init() {
-	runtimeMappingOpts.Store(ModelMappingOptions{})
+	// Must match how settings parse an absent grok_cross_client_model_map_enabled
+	// row: absent means enabled. Nothing loads settings during startup, so a
+	// zero value here left gpt-*/claude-* unmapped until an administrator
+	// happened to open the settings page — a Grok group answered Claude Code
+	// with "no available accounts supporting model: claude-opus-5" in between.
+	runtimeMappingOpts.Store(ModelMappingOptions{EnableCrossClientMap: true})
 	runtimeMappingVersion.Store(1)
 }
 

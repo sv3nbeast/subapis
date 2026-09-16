@@ -862,6 +862,13 @@ func ProvideSettingService(settingRepo SettingRepository, groupRepo GroupReposit
 	if err := svc.MigrateGrokDefaultTextModel(context.Background()); err != nil {
 		logger.LegacyPrintf("service.setting", "Warning: migrate Grok default text model failed: %v", err)
 	}
+	// Grok's model mapping lives in process state that only settings writes and
+	// settings reads populate. Without this load, a restarted gateway served the
+	// package default until an administrator opened the settings page, so an
+	// operator who turned the cross-client map off got it back on every restart.
+	if err := svc.LoadGrokRuntimeSettings(context.Background()); err != nil {
+		logger.LegacyPrintf("service.setting", "Warning: load Grok runtime settings failed: %v", err)
+	}
 	antigravity.SetUserAgentVersionResolver(svc.GetAntigravityUserAgentVersion)
 	// enforceCodexIdentityHeaders 是所有 Codex 出站路径共用的纯函数收口点，拿不到 ctx，
 	// 故注入无参解析器；解析器内部自带 60s TTL 缓存，热路径不触库。

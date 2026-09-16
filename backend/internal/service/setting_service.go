@@ -3340,6 +3340,22 @@ func (s *SettingService) buildAuthSourceDefaultUpdates(ctx context.Context, sett
 	return updates, nil
 }
 
+// LoadGrokRuntimeSettings publishes the stored Grok model-mapping settings into
+// process state at startup. Every other caller reaches applyGrokRuntimeSettings
+// through a settings read or write, which means a freshly started gateway ran on
+// the package defaults until an administrator happened to open the settings page.
+func (s *SettingService) LoadGrokRuntimeSettings(ctx context.Context) error {
+	if s == nil || s.settingRepo == nil {
+		return nil
+	}
+	stored, err := s.settingRepo.GetAll(ctx)
+	if err != nil {
+		return fmt.Errorf("get all settings: %w", err)
+	}
+	applyGrokRuntimeSettings(s.parseSettings(stored))
+	return nil
+}
+
 func applyGrokRuntimeSettings(settings *SystemSettings) {
 	if settings == nil {
 		return
