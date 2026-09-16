@@ -2231,3 +2231,21 @@ func TestOpenAIGatewayServiceForwardImages_OAuthStreamingDrainsAfterClientDiscon
 	require.Equal(t, 9, result.Usage.OutputTokens)
 	require.Equal(t, 4, result.Usage.ImageOutputTokens)
 }
+
+// The Responses envelope carries two distinct models: the conversation model
+// that drives the call, and the image_generation tool's own model. Sending the
+// requested image model as the driver — or a driver a ChatGPT account rejects —
+// fails upstream with a 400 for every account in the pool.
+func TestImagesResponsesSeparatesDriverModelFromImageModel(t *testing.T) {
+	parsed := &OpenAIImagesRequest{Prompt: "a cat in a hat", Model: "gpt-image-2", N: 1}
+	body, err := buildOpenAIImagesResponsesRequest(parsed, "gpt-image-2")
+	require.NoError(t, err)
+
+	require.Equal(t, openAIImagesResponsesMainModel, gjson.GetBytes(body, "model").String(),
+		"the envelope must be driven by the configured conversation model")
+	require.Equal(t, "gpt-image-2", gjson.GetBytes(body, "tools.0.model").String(),
+		"the tool must still request the image model the caller asked for")
+	require.NotEqual(t, "gpt-5.4-mini", openAIImagesResponsesMainModel,
+		"ChatGPT accounts refuse gpt-5.4-mini as the driver; every OAuth image request 400s")
+	require.Equal(t, "image_generation", gjson.GetBytes(body, "tool_choice.type").String())
+}
