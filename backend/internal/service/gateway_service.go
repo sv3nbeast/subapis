@@ -13410,6 +13410,15 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		return nil
 	}
 
+	// Cursor 没有 Anthropic 的 count_tokens。把 Cursor 的 JWT 交给
+	// api.anthropic.com 会得到 401 "jwt auth is not yet supported on
+	// count_tokens"，OAuth 401 处理再把账号打成临时不可调度——Claude Code
+	// 每次会话开头都打这条，随后的 /v1/messages 就会空池 503。
+	if account != nil && account.Platform == PlatformCursor {
+		c.JSON(http.StatusOK, gin.H{"input_tokens": max(estimateAnthropicCountTokens(parsed), 1)})
+		return nil
+	}
+
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
 		passthroughBody := parsed.Body.Bytes()
 		originalModel := parsed.Model
