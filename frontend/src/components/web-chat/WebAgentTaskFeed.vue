@@ -20,12 +20,29 @@
             </li>
           </ol>
           <div class="wc-task-arts">
-            <button v-for="artifact in taskArtifacts(task)" :key="artifact.id" type="button" class="wc-art" @click="emit('open', artifact.id)">
-              <span class="wc-art-ic"><Icon :name="artifact.kind === 'image' ? 'image' : 'presentation'" size="md" /></span>
-              <span class="min-w-0"><span class="wc-art-n trunc">{{ artifact.title }}</span><span class="wc-art-d trunc">{{ artifact.filename }} · v{{ artifact.version }}</span></span>
-              <span class="wc-thumbs" aria-hidden="true"><i v-for="n in 4" :key="n" /></span>
-              <span class="wc-art-o">{{ t('webAgent.open') }}<Icon name="chevronRight" size="xs" /></span>
-            </button>
+            <template v-for="artifact in taskArtifacts(task)" :key="artifact.id">
+              <!-- An image is its own result: show it here instead of making the
+                   reader open a pane to find out what was generated. -->
+              <button
+                v-if="artifact.kind === 'image'"
+                type="button"
+                class="wc-art-img"
+                :aria-label="t('webAgent.open')"
+                @click="emit('open', artifact.id)"
+              >
+                <WebAgentImagePreview :artifact-id="artifact.id" :alt="artifact.title" />
+                <span class="wc-art-img-meta">
+                  <span class="wc-art-n trunc">{{ artifact.title }}</span>
+                  <span class="wc-art-d trunc">{{ artifact.filename }} · v{{ artifact.version }}</span>
+                </span>
+              </button>
+              <button v-else type="button" class="wc-art" @click="emit('open', artifact.id)">
+                <span class="wc-art-ic"><Icon name="presentation" size="md" /></span>
+                <span class="min-w-0"><span class="wc-art-n trunc">{{ artifact.title }}</span><span class="wc-art-d trunc">{{ artifact.filename }} · v{{ artifact.version }}</span></span>
+                <span class="wc-thumbs" aria-hidden="true"><i v-for="n in 4" :key="n" /></span>
+                <span class="wc-art-o">{{ t('webAgent.open') }}<Icon name="chevronRight" size="xs" /></span>
+              </button>
+            </template>
           </div>
           <div class="wc-task-acts">
             <button v-if="task.status === 'succeeded' && artifactID(task)" type="button" class="wc-btn" @click="emit('open', artifactID(task)!)"><Icon name="eye" size="sm" />{{ t('webAgent.open') }}</button>
@@ -49,6 +66,7 @@
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import WebChatSources from './WebChatSources.vue'
+import WebAgentImagePreview from './WebAgentImagePreview.vue'
 import type { WebChatSource } from '@/api/webChat'
 import { isTaskTerminal, type WebAgentArtifact, type WebAgentTask, type WebAgentTaskEvent } from '@/api/webAgent'
 import { formatTokens } from '@/utils/webChatTokens'
@@ -82,4 +100,8 @@ function onDetails(event: Event, id: number) { if ((event.target as HTMLDetailsE
 .wc-feed { flex: 1; min-height: 0; }
 .wc-empty { min-height: 15rem; }
 @media (max-width: 767px) { .wc-task-acts .wc-btn { min-height: 40px; } }
+.wc-art-img{display:flex;flex-direction:column;gap:.5rem;align-items:stretch;width:100%;max-width:26rem;padding:.5rem;border:1px solid var(--wc-line,rgba(15,23,42,.1));border-radius:.75rem;background:var(--wc-panel,#fff);box-shadow:0 1px 2px rgba(15,23,42,.05);text-align:left;cursor:pointer}
+.wc-art-img:hover{border-color:var(--wc-line-s,rgba(15,23,42,.16));box-shadow:0 2px 8px rgba(15,23,42,.08)}
+.wc-art-img :deep(.image-preview img){max-height:22rem;width:100%;object-fit:contain}
+.wc-art-img-meta{display:flex;flex-direction:column;min-width:0;gap:.1rem;padding:0 .25rem .15rem}
 </style>
