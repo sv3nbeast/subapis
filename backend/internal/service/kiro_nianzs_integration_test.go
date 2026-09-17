@@ -1176,6 +1176,154 @@ func TestNianzsMessagesContextLimitExceptionSignalsCompactionWithoutAccountFailo
 	}
 }
 
+func TestNianzsKiroAnthropicContextBudgetUsesTranslatorLimits(t *testing.T) {
+	tests := []struct {
+		name        string
+		model       string
+		body        string
+		inputTokens int
+		wantOutput  int
+		wantWindow  int
+		wantLimited bool
+	}{
+		{
+			name:        "production regression exceeds one million before translation",
+			model:       "claude-opus-5",
+			body:        `{"max_tokens":32000}`,
+			inputTokens: 1_030_947,
+			wantOutput:  32_000,
+			wantWindow:  1_000_000,
+			wantLimited: true,
+		},
+		{
+			name:        "output reservation crosses the window",
+			model:       "claude-opus-5",
+			body:        `{"max_tokens":128000}`,
+			inputTokens: 900_000,
+			wantOutput:  128_000,
+			wantWindow:  1_000_000,
+			wantLimited: true,
+		},
+		{
+			name:        "output request is clamped exactly like the translator",
+			model:       "claude-opus-5",
+			body:        `{"max_tokens":999999}`,
+			inputTokens: 800_000,
+			wantOutput:  128_000,
+			wantWindow:  1_000_000,
+			wantLimited: false,
+		},
+		{
+			name:        "minus one reserves the model output cap",
+			model:       "claude-sonnet-4-6",
+			body:        `{"max_tokens":-1}`,
+			inputTokens: 950_000,
+			wantOutput:  64_000,
+			wantWindow:  1_000_000,
+			wantLimited: true,
+		},
+		{
+			name:        "request within the window proceeds",
+			model:       "claude-opus-5",
+			body:        `{"max_tokens":32000}`,
+			inputTokens: 900_000,
+			wantOutput:  32_000,
+			wantWindow:  1_000_000,
+			wantLimited: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			budget := nianzsKiroAnthropicContextBudgetForRequest([]byte(test.body), test.model, test.inputTokens)
+			require.Equal(t, test.inputTokens, budget.InputTokens)
+			require.Equal(t, test.wantOutput, budget.MaxOutputTokens)
+			require.Equal(t, test.wantWindow, budget.WindowTokens)
+			if test.wantLimited {
+				var contextErr *nianzskiro.ContextLimitError
+				require.ErrorAs(t, budget.contextLimitError(), &contextErr)
+				require.Equal(t, nianzsKiroAnthropicContextLimitReason, contextErr.Reason)
+				return
+			}
+			require.NoError(t, budget.contextLimitError())
+		})
+	}
+}
+
+func TestNianzsMessagesPreflightContextLimitSignalsCompactionBeforeUpstream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	historicalSignature := strings.Repeat("N43QRR", 270_000)
+
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream_%t", stream), func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{
+				"model":      "claude-opus-5",
+				"max_tokens": 32_000,
+				"stream":     stream,
+				"messages": []any{
+					map[string]any{"role": "user", "content": "start"},
+					map[string]any{"role": "assistant", "content": []any{
+						map[string]any{"type": "thinking", "thinking": "done", "signature": historicalSignature},
+					}},
+					map[string]any{"role": "user", "content": "continue"},
+				},
+			})
+			require.NoError(t, err)
+			estimatedInput := nianzsEstimateKiroInputTokens(context.Background(), body)
+			require.Greater(t, estimatedInput+32_000, 1_000_000, "fixture must exceed the Anthropic-side window")
+
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+			require.NoError(t, err)
+			svc, upstream, account := newNianzsKiroRouteTestRuntime(t, kiroEventStreamResponse(t, "must not run", 1, 1))
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+			result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+
+			require.Nil(t, result)
+			var contextErr *nianzskiro.ContextLimitError
+			require.ErrorAs(t, forwardErr, &contextErr)
+			require.Equal(t, nianzsKiroAnthropicContextLimitReason, contextErr.Reason)
+			require.Equal(t, http.StatusBadRequest, recorder.Code)
+			require.Equal(t, "invalid_request_error", gjson.Get(recorder.Body.String(), "error.type").String())
+			require.Equal(t, "prompt is too long", gjson.Get(recorder.Body.String(), "error.message").String())
+			require.Empty(t, upstream.requests, "Anthropic-side context overflow must fail before the Kiro payload is built or sent")
+			require.True(t, HasOpsClientBusinessLimitedReason(c, OpsClientBusinessLimitedReasonContextLimit))
+		})
+	}
+}
+
+func TestNianzsInternalStreamOpenDoesNotApplyNativeMessagesContextContract(t *testing.T) {
+	historicalSignature := strings.Repeat("N43QRR", 270_000)
+	body, err := json.Marshal(map[string]any{
+		"model":      "claude-opus-5",
+		"max_tokens": 32_000,
+		"stream":     true,
+		"messages": []any{
+			map[string]any{"role": "user", "content": "start"},
+			map[string]any{"role": "assistant", "content": []any{
+				map[string]any{"type": "thinking", "thinking": "done", "signature": historicalSignature},
+			}},
+			map[string]any{"role": "user", "content": "continue"},
+		},
+	})
+	require.NoError(t, err)
+
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+	svc, upstream, account := newNianzsKiroRouteTestRuntime(t, kiroEventStreamResponse(t, "ok", 1, 1))
+
+	resp, estimatedInput, openErr := svc.openKiroAnthropicStreamResponseNianzs(
+		context.Background(), account, parsed, body, "claude-opus-5", "claude-opus-5", nil, parsed.Group, nil,
+	)
+	require.NoError(t, openErr)
+	require.NotNil(t, resp)
+	require.NoError(t, resp.Body.Close())
+	require.Greater(t, estimatedInput+32_000, 1_000_000)
+	require.Len(t, upstream.requests, 1, "internal OpenAI bridges must not inherit the native Anthropic compaction contract")
+}
+
 func TestNianzsMessagesContextLimitAfterOutputTerminatesInBandExactlyOnce(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"claude-opus-5","max_tokens":8192,"stream":true,"messages":[{"role":"user","content":"long context"}]}`)

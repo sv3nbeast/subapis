@@ -566,6 +566,7 @@ func (s *GatewayService) executeKiroCodeExecutionNianzs(
 	group *Group,
 	anthropicBody []byte,
 	mappedModel, requestModel, token string,
+	inputTokens int,
 	headers http.Header,
 	runner nianzsKiroCodeExecutionRunner,
 ) (*nianzsKiroCodeExecution, error) {
@@ -574,7 +575,6 @@ func (s *GatewayService) executeKiroCodeExecutionNianzs(
 	if err != nil {
 		return nil, nianzsErrKiroCodeExecutionFallback
 	}
-	inputTokens := nianzsEstimateKiroInputTokens(ctx, anthropicBody)
 	indicators := make([]nianzskiro.CodeExecutionIndicator, 0, 2)
 	requestID := ""
 	plan := s.prepareKiroCacheEmulationUsageNianzs(ctx, account, group, anthropicBody, mappedModel, inputTokens)

@@ -38,6 +38,8 @@ type nianzsKiroEndpointConfig struct {
 
 const nianzsKiroInvalidModelTempUnschedDuration = time.Minute
 
+const nianzsKiroAnthropicContextLimitReason = "ANTHROPIC_CONTEXT_WINDOW_EXCEEDED"
+
 const nianzsKiroHiddenThinkingProgressInterval = 10 * time.Second
 
 type nianzsKiroHiddenThinkingProgressContextKey struct{}
@@ -120,6 +122,63 @@ func nianzsResolveKiroUpstreamModel(mappedModel string) string {
 		upstreamModel = mappedModel
 	}
 	return upstreamModel
+}
+
+type nianzsKiroAnthropicContextBudget struct {
+	InputTokens     int
+	MaxOutputTokens int
+	WindowTokens    int
+}
+
+func nianzsKiroAnthropicContextBudgetForRequest(body []byte, model string, inputTokens int) nianzsKiroAnthropicContextBudget {
+	outputCap := nianzskiro.MaxOutputTokensForModel(model)
+	maxOutputTokens := int(gjson.GetBytes(body, "max_tokens").Int())
+	if maxOutputTokens == -1 || maxOutputTokens > outputCap {
+		maxOutputTokens = outputCap
+	}
+	if maxOutputTokens < 0 {
+		maxOutputTokens = 0
+	}
+	return nianzsKiroAnthropicContextBudget{
+		InputTokens:     max(inputTokens, 0),
+		MaxOutputTokens: maxOutputTokens,
+		WindowTokens:    nianzskiro.ContextWindowTokensForModel(model),
+	}
+}
+
+func (b nianzsKiroAnthropicContextBudget) contextLimitError() error {
+	if b.WindowTokens <= 0 || int64(b.InputTokens)+int64(b.MaxOutputTokens) <= int64(b.WindowTokens) {
+		return nil
+	}
+	return &nianzskiro.ContextLimitError{
+		Reason: nianzsKiroAnthropicContextLimitReason,
+		Message: fmt.Sprintf(
+			"estimated input tokens (%d) plus max_tokens (%d) exceed context window (%d)",
+			b.InputTokens,
+			b.MaxOutputTokens,
+			b.WindowTokens,
+		),
+	}
+}
+
+func nianzsKiroAnthropicContextLimitForRequest(account *Account, body []byte, model string, inputTokens int) error {
+	budget := nianzsKiroAnthropicContextBudgetForRequest(body, model, inputTokens)
+	contextErr := budget.contextLimitError()
+	if contextErr == nil {
+		return nil
+	}
+	accountID := int64(0)
+	if account != nil {
+		accountID = account.ID
+	}
+	logger.L().Info("kiro.anthropic_context_preflight_rejected",
+		zap.Int64("selected_account_id", accountID),
+		zap.String("model", strings.TrimSpace(model)),
+		zap.Int("estimated_input_tokens", budget.InputTokens),
+		zap.Int("max_output_tokens", budget.MaxOutputTokens),
+		zap.Int("context_window_tokens", budget.WindowTokens),
+	)
+	return contextErr
 }
 
 // nianzsKiroFirstSemanticTimeoutForRequest keeps the Nianzs streaming adapter
@@ -207,6 +266,11 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 		zap.String("mapped_model", mappedModel),
 		zap.Bool("has_profile_arn", strings.TrimSpace(account.GetCredential("profile_arn")) != ""),
 	)
+	inputTokens := nianzsEstimateKiroInputTokens(ctx, body)
+	if contextErr := nianzsKiroAnthropicContextLimitForRequest(account, body, mappedModel, inputTokens); contextErr != nil {
+		s.handleKiroContextLimitError(c, account, contextErr)
+		return nil, contextErr
+	}
 
 	if s.shouldEmulateWebSearch(ctx, account, parsed.GroupID, body) {
 		parsedForEmulation, err := parsed.CloneForBody(body)
@@ -217,7 +281,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 		return s.handleWebSearchEmulation(ctx, c, account, parsedForEmulation)
 	}
 	if parsed.Stream {
-		resp, _, err := s.openKiroAnthropicStreamResponseNianzs(ctx, account, parsed, body, mappedModel, originalModel, c.Request.Header, parsed.Group, nil)
+		resp, _, err := s.openKiroAnthropicStreamResponseNianzsWithEstimatedInput(ctx, account, parsed, body, mappedModel, originalModel, c.Request.Header, parsed.Group, nil, inputTokens)
 		if err != nil {
 			if ctx != nil && ctx.Err() != nil {
 				return nil, err
@@ -334,7 +398,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 	}
 	if runner := s.nianzsKiroCodeExecutionRunnerForRequest(); runner != nil && nianzskiro.IsOnlyLegacyCodeExecutionTool(body) {
 		codeResult, codeErr := s.executeKiroCodeExecutionNianzs(
-			ctx, account, parsed, parsed.Group, body, mappedModel, originalModel, token, c.Request.Header, runner,
+			ctx, account, parsed, parsed.Group, body, mappedModel, originalModel, token, inputTokens, c.Request.Header, runner,
 		)
 		switch {
 		case errors.Is(codeErr, nianzsErrKiroCodeExecutionFallback):
@@ -395,7 +459,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 		}
 	}
 	if isOnlyWebSearchToolInBody(body) {
-		webSearchResult, webSearchErr := s.executeKiroWebSearchNianzs(ctx, account, parsed.Group, body, mappedModel, originalModel, token, c.Request.Header)
+		webSearchResult, webSearchErr := s.executeKiroWebSearchNianzs(ctx, account, parsed.Group, body, mappedModel, originalModel, token, inputTokens, c.Request.Header)
 		switch {
 		case errors.Is(webSearchErr, nianzsErrKiroWebSearchFallback):
 		case webSearchErr == nil:
@@ -455,7 +519,6 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 		}
 	}
 
-	inputTokens := nianzsEstimateKiroInputTokens(ctx, body)
 	resp, requestCtx, err := s.executeKiroUpstreamWithParsedNianzs(ctx, account, parsed, body, mappedModel, originalModel, token, c.Request.Header)
 	if err != nil {
 		var failoverErr *UpstreamFailoverError
@@ -581,14 +644,24 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 }
 
 func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel string, headers http.Header, group *Group, cachePlanOverride *nianzsKiroCacheEmulationPlan) (*http.Response, int, error) {
+	return s.openKiroAnthropicStreamResponseNianzsWithEstimatedInput(
+		ctx, account, parsed, anthropicBody, mappedModel, requestModel, headers, group, cachePlanOverride, 0,
+	)
+}
+
+func (s *GatewayService) openKiroAnthropicStreamResponseNianzsWithEstimatedInput(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel string, headers http.Header, group *Group, cachePlanOverride *nianzsKiroCacheEmulationPlan, estimatedInputTokens int) (*http.Response, int, error) {
+	inputTokens := estimatedInputTokens
+	if inputTokens <= 0 {
+		inputTokens = nianzsEstimateKiroInputTokens(ctx, anthropicBody)
+	}
 	token, tokenType, err := s.getNianzsKiroAccessToken(ctx, account)
 	if err != nil {
-		return nil, 0, err
+		return nil, inputTokens, err
 	}
 	// Kiro 直连 AWS 支持两类 token:OAuth access_token 与 API Key(ksk_*)。
 	// API Key 模式下 GetAccessToken 返回 tokenType "apikey"(无需刷新)。
 	if tokenType != "oauth" && tokenType != "apikey" {
-		return nil, 0, fmt.Errorf("kiro requires oauth or apikey token, got %s", tokenType)
+		return nil, inputTokens, fmt.Errorf("kiro requires oauth or apikey token, got %s", tokenType)
 	}
 
 	// Retain an explicit upstream owner for native Messages streams. Unlike the
@@ -624,7 +697,6 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 		upstreamOwnershipTransferred = true
 	}
 
-	inputTokens := nianzsEstimateKiroInputTokens(ctx, anthropicBody)
 	if runner := s.nianzsKiroCodeExecutionRunnerForRequest(); runner != nil && nianzskiro.IsOnlyLegacyCodeExecutionTool(anthropicBody) {
 		plan := cachePlanOverride
 		if plan == nil {

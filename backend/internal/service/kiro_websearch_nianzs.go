@@ -299,7 +299,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 	return fmt.Errorf("kiro web search exceeded max iterations")
 }
 
-func (s *GatewayService) executeKiroWebSearchNianzs(ctx context.Context, account *Account, group *Group, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header) (*nianzsKiroWebSearchExecution, error) {
+func (s *GatewayService) executeKiroWebSearchNianzs(ctx context.Context, account *Account, group *Group, anthropicBody []byte, mappedModel, requestModel, token string, inputTokens int, headers http.Header) (*nianzsKiroWebSearchExecution, error) {
 	query := nianzskiro.ExtractSearchQuery(anthropicBody)
 	if strings.TrimSpace(query) == "" {
 		return nil, nianzsErrKiroWebSearchFallback
@@ -314,7 +314,6 @@ func (s *GatewayService) executeKiroWebSearchNianzs(ctx context.Context, account
 		currentBody = anthropicBody
 	}
 
-	inputTokens := nianzsEstimateKiroInputTokens(ctx, anthropicBody)
 	currentToolUseID := "srvtoolu_" + nianzskiro.GenerateToolUseID()
 	searchConfig := nianzskiro.ExtractWebSearchToolConfig(anthropicBody)
 	maxIterations := min(searchConfig.MaxUses, nianzsKiroMaxWebSearchIterations)

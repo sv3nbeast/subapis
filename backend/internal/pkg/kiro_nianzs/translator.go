@@ -607,6 +607,13 @@ func kiroMaxOutputTokensForModel(model string) int {
 	}
 }
 
+// MaxOutputTokensForModel exposes the same output cap used while constructing
+// Kiro requests so service-level context preflight cannot drift from the wire
+// payload.
+func MaxOutputTokensForModel(model string) int {
+	return kiroMaxOutputTokensForModel(model)
+}
+
 func contextWindowTokensForModel(model string) int {
 	if kiroModelDeclaresExtendedContext(model) {
 		return kiroExtendedContextTokens
@@ -625,6 +632,13 @@ func contextWindowTokensForModel(model string) int {
 	default:
 		return kiroDefaultContextTokens
 	}
+}
+
+// ContextWindowTokensForModel exposes the translator's model window for
+// request-side compatibility checks. Kiro's provider-side percentage is based
+// on a different payload and cannot enforce the Anthropic input contract.
+func ContextWindowTokensForModel(model string) int {
+	return contextWindowTokensForModel(model)
 }
 
 func clampFloat(value, minValue, maxValue float64) float64 {
