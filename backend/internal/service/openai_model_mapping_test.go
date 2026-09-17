@@ -1,6 +1,10 @@
 package service
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
+)
 
 func TestResolveOpenAIForwardModel(t *testing.T) {
 	tests := []struct {
@@ -317,10 +321,14 @@ func TestCanonicalOpenAIAccountSchedulingModelMatchesForwardSemantics(t *testing
 			want:  "public",
 		},
 		{
+			// The point is that Grok does not pick up OpenAI's Codex alias, which
+			// would make this "gpt-5.6-sol". It resolves through Grok's own gpt-*
+			// wildcard instead — that wildcard is what lets a Codex client talk to
+			// a Grok group at all.
 			name:    "Grok OAuth does not inherit OpenAI Codex aliases",
 			account: &Account{Platform: PlatformGrok, Type: AccountTypeOAuth},
 			model:   "gpt-5.6",
-			want:    "gpt-5.6",
+			want:    xai.DefaultTextModel,
 		},
 	}
 

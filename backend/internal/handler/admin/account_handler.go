@@ -2745,12 +2745,17 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 	}
 
 	if account.Platform == service.PlatformGrok {
-		mapping := account.GetModelMapping()
-		if len(mapping) == 0 {
-			response.Success(c, xai.DefaultModels())
+		// Ask whether the operator configured a mapping, not whether one exists:
+		// GetModelMapping synthesizes the platform default for a Grok account that
+		// has none, and that default carries the gpt-*/claude-* forwarding
+		// wildcards. Those are routing keys, not models anyone can pick, so
+		// treating them as a configured mapping offered "claude-*" in the admin
+		// model list.
+		if mapping := explicitAccountModelMapping(account); len(mapping) > 0 {
+			response.Success(c, buildMappedGrokModels(mapping))
 			return
 		}
-		response.Success(c, buildMappedGrokModels(mapping))
+		response.Success(c, xai.DefaultModels())
 		return
 	}
 
@@ -2944,6 +2949,30 @@ func buildMappedKiroModelsFromDefaults(mapping map[string]string, defaultModels 
 		}
 	}
 	return models
+}
+
+// explicitAccountModelMapping returns the mapping the operator configured, or
+// nil when there is none. Account.GetModelMapping cannot answer this: for
+// platforms with a default mapping it synthesizes one, so "has a mapping" is
+// always true there and callers that mean "was one configured" get the platform
+// default instead — including its forwarding wildcards.
+func explicitAccountModelMapping(account *service.Account) map[string]string {
+	if account == nil {
+		return nil
+	}
+	switch raw := account.Credentials["model_mapping"].(type) {
+	case map[string]any:
+		if len(raw) == 0 {
+			return nil
+		}
+	case map[string]string:
+		if len(raw) == 0 {
+			return nil
+		}
+	default:
+		return nil
+	}
+	return account.GetModelMapping()
 }
 
 func buildMappedGrokModels(mapping map[string]string) []xai.Model {

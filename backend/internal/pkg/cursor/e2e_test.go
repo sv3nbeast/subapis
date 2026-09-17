@@ -270,3 +270,63 @@ func TestE2EAgentToolCall(t *testing.T) {
 		t.Error("the model saw the gateway's refusal as a tool failure; the exec control reply is wrong")
 	}
 }
+
+// 判据必须是"遵从才会出现、且不与事实冲突"的可核查标记。
+// 用"回答错误的算术"当判据是错的：模型拒绝是安全对齐，不是没收到 system prompt。
+func TestE2ESystemPromptHonored(t *testing.T) {
+	creds := e2eCredentials(t)
+	client := NewClient(creds)
+	client.ProxyURL = os.Getenv("CURSOR_PROXY_URL")
+	model := strings.TrimSpace(os.Getenv("CURSOR_E2E_MODEL"))
+	if model == "" {
+		model = "composer-2.5"
+	}
+	const sys = "Prefix every reply with the exact tag [ZQX] before any other text."
+
+	cases := []struct {
+		name string
+		msgs []ChatMessage
+	}{
+		{"system_plus_user", []ChatMessage{
+			{Role: "system", Content: sys},
+			{Role: "user", Content: "What is 2+2?"},
+		}},
+		{"system_plus_history", []ChatMessage{
+			{Role: "system", Content: sys},
+			{Role: "user", Content: "hello"},
+			{Role: "assistant", Content: "[ZQX] Hi."},
+			{Role: "user", Content: "What is the capital of France?"},
+		}},
+		{"claude_code_shaped", []ChatMessage{
+			{Role: "system", Content: "You are Claude Code, Anthropic's official CLI for Claude.\n\nUsage: claude [options] [command]\nOptions:\n  --system-prompt <prompt>\n  -p, --print\n\n" + sys},
+			{Role: "user", Content: "What is 2+2?"},
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			resp, err := client.StreamChat(ctx, tc.msgs, model, nil)
+			if err != nil {
+				t.Fatalf("StreamChat: %v", err)
+			}
+			defer resp.Body.Close()
+			var text strings.Builder
+			usage, connectErr := ConsumeAssistantStream(resp.Body, func(ev StreamEvent) error {
+				if ev.Type == "text" {
+					text.WriteString(ev.Text)
+				}
+				return nil
+			})
+			if connectErr != "" {
+				t.Fatalf("upstream rejected the turn: %s", connectErr)
+			}
+			got := strings.TrimSpace(text.String())
+			t.Logf("  text=%q input_tokens=%d", got, usage.InputTokens)
+			if !strings.HasPrefix(got, "[ZQX]") {
+				t.Errorf("system prompt not obeyed: %q", got)
+			}
+		})
+	}
+}

@@ -28,8 +28,11 @@ const (
 	fieldRunMcpTools          = 4
 	fieldRunConversationID    = 5
 	fieldRunRequestedModel    = 9
-	fieldRunCustomSystem      = 8
-	fieldRunID                = 25
+	// fieldRunCustomSystem is deliberately unused: the field exists in the
+	// schema, but the service answers "unknown option '--system-prompt'" and
+	// fails the turn. Kept as documentation so it is not tried again.
+	fieldRunCustomSystem = 8
+	fieldRunID           = 25
 
 	fieldConvStateMode = 10
 
@@ -170,6 +173,18 @@ func BuildAgentClientMessage(messages []ChatMessage, model string, tools []Tool)
 	var userAction ProtobufWriter
 	userAction.Bytes(fieldUserMsgActionMessage, userMsg.Result())
 	userAction.Bytes(fieldUserMsgActionContext, reqCtx.Result())
+	// The system prompt leads the history as its own turn. Run field 8 exists but
+	// the service rejects it — "unknown option '--system-prompt'" — so it is a
+	// CLI-only argument, and sending it fails the whole turn. Live probing found
+	// no field number that carries a system prompt; only the message body does.
+	//
+	// It has to be a turn of its own. Prefixing it onto the user's text was also
+	// accepted, but the model then read it as an injected instruction and refused
+	// to follow it, which is exactly the case that matters: Claude Code sends its
+	// operating instructions this way and expects them obeyed.
+	if systemPrompt != "" {
+		prior = append([]string{systemPrompt}, prior...)
+	}
 	for _, p := range prior {
 		var pre ProtobufWriter
 		pre.String(fieldUserMsgText, p)
@@ -193,9 +208,6 @@ func BuildAgentClientMessage(messages []ChatMessage, model string, tools []Tool)
 	run.Bytes(fieldRunModelDetails, modelDetails.Result())
 	run.Bytes(fieldRunMcpTools, encodeTools(tools))
 	run.String(fieldRunConversationID, conversationID)
-	if systemPrompt != "" {
-		run.String(fieldRunCustomSystem, systemPrompt)
-	}
 	run.Bytes(fieldRunRequestedModel, requested.Result())
 	run.String(fieldRunID, runID)
 

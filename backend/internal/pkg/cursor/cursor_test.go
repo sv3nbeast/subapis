@@ -202,9 +202,11 @@ func TestBuildAgentClientMessageCarriesAskModeTurn(t *testing.T) {
 	if got := GetString(run, fieldRunID); got != runID {
 		t.Errorf("run id = %q, want %q", got, runID)
 	}
-	// System turns become the custom system prompt rather than a user message.
-	if got := GetString(run, fieldRunCustomSystem); got != "be terse" {
-		t.Errorf("custom system = %q, want %q", got, "be terse")
+	// Run field 8 must stay empty. The service rejects it with "unknown option
+	// '--system-prompt'" and fails the whole turn, so the system prompt rides in
+	// the message history instead.
+	if got := GetString(run, fieldRunCustomSystem); got != "" {
+		t.Errorf("custom system = %q, want it absent: the service rejects run field 8", got)
 	}
 	if got := GetString(GetNested(run, fieldRunModelDetails), fieldModelID); got != "cursor-grok-4.6-medium" {
 		t.Errorf("model id = %q, want %q", got, "cursor-grok-4.6-medium")
@@ -225,6 +227,34 @@ func TestBuildAgentClientMessageCarriesAskModeTurn(t *testing.T) {
 	}
 	if got := GetString(userAction, fieldUserMsgActionPrepend); got == "" {
 		t.Error("history was dropped: expected the earlier turns as prepends")
+	}
+
+	// The system prompt has to lead the history: it is the operating instruction
+	// for every turn that follows, and a model that reads it after the
+	// conversation treats it as one more remark in the transcript.
+	prepends := decodePrepends(t, userAction)
+	if len(prepends) != 3 {
+		t.Fatalf("prepends = %q, want the system prompt plus both history turns", prepends)
+	}
+	if prepends[0] != "be terse" {
+		t.Errorf("first prepend = %q, want the system prompt %q", prepends[0], "be terse")
+	}
+}
+
+// decodePrepends reads the repeated prepend turns in order. GetNested only
+// returns the first occurrence, and order is the point of this assertion.
+func decodePrepends(t *testing.T, userAction []byte) []string {
+	t.Helper()
+	var out []string
+	pr := NewProtobufReader(userAction)
+	for {
+		f, err := pr.Next()
+		if f == nil || err != nil {
+			return out
+		}
+		if f.Num == fieldUserMsgActionPrepend && f.WireType == WireBytes {
+			out = append(out, GetString(f.Data, fieldUserMsgText))
+		}
 	}
 }
 
