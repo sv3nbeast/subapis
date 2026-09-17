@@ -59,6 +59,7 @@ vi.mock('@/api/admin', () => ({
 
 vi.mock('@/api/admin/accounts', () => ({
   getAntigravityDefaultModelMapping: vi.fn().mockResolvedValue([]),
+  getKiroDefaultModelMapping: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -539,6 +540,50 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(payload?.upstream_billing_probe_enabled).toBe(true)
     // 创建成功后前端立即发起一次首探（与其他 apikey 平台一致）。
     expect(probeUpstreamBillingMock).toHaveBeenCalledWith(42)
+  })
+
+  it('creates a direct Kiro API Key account with cache and cross-group settings', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'Kiro')
+    await selectButtonByText(wrapper, 'API Key')
+
+    expect(wrapper.find('[data-testid="kiro-cache-emulation-settings"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="openai-kiro-bridge-toggle"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="mixed-scheduling-toggle"]').exists()).toBe(true)
+
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Kiro direct key')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('ksk_test')
+    await wrapper.get<HTMLInputElement>('[data-testid="kiro-cache-emulation-toggle"]').setValue(true)
+    await wrapper.get('[data-testid="kiro-cache-emulation-ratio"]').setValue('0.8')
+    await wrapper.get<HTMLInputElement>('[data-testid="mixed-scheduling-toggle"]').setValue(true)
+    await wrapper.get<HTMLInputElement>('[data-testid="openai-kiro-bridge-toggle"]').setValue(true)
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]).toMatchObject({
+      platform: 'kiro',
+      type: 'apikey',
+      credentials: {
+        api_key: 'ksk_test',
+        api_region: 'us-east-1'
+      },
+      extra: {
+        mixed_scheduling: true,
+        openai_kiro_bridge_enabled: true,
+        kiro_cache_emulation_enabled: true,
+        kiro_cache_emulation_ratio: 0.8
+      }
+    })
+  })
+
+  it('does not expose native Kiro settings for API Key relay accounts', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'Kiro')
+    await selectButtonByText(wrapper, 'API Key + Base URL')
+
+    expect(wrapper.find('[data-testid="kiro-cache-emulation-settings"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="openai-kiro-bridge-toggle"]').exists()).toBe(false)
   })
 
   it('leaves Codex session import billing ownership to the backend', async () => {

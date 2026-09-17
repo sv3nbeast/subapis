@@ -494,7 +494,7 @@ func IsOpenAIKiroBridgeModel(model string) bool {
 
 // IsOpenAIKiroBridgeEnabled is the account-level opt-in for serving OpenAI groups.
 func (a *Account) IsOpenAIKiroBridgeEnabled() bool {
-	if a == nil || a.Platform != PlatformKiro || a.Type != AccountTypeOAuth || a.Extra == nil {
+	if a == nil || !a.IsKiroDirect() || a.Extra == nil {
 		return false
 	}
 	enabled, _ := a.Extra["openai_kiro_bridge_enabled"].(bool)

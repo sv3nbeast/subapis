@@ -41,7 +41,8 @@ vi.mock('@/api/admin', () => ({
 }))
 
 vi.mock('@/api/admin/accounts', () => ({
-  getAntigravityDefaultModelMapping: vi.fn()
+  getAntigravityDefaultModelMapping: vi.fn(),
+  getKiroDefaultModelMapping: vi.fn().mockResolvedValue([])
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -1508,6 +1509,32 @@ describe('EditAccountModal', () => {
     expect(payload.extra).not.toHaveProperty('anthropic_passthrough')
   })
 
+  it('edits native Kiro API Key cache and cross-group settings', async () => {
+    const account = buildKiroAPIKeyAccount('')
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    expect(wrapper.find('[data-testid="kiro-cache-emulation-settings"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="mixed-scheduling-toggle"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-testid="openai-kiro-bridge-toggle"]').exists()).toBe(true)
+
+    await wrapper.get<HTMLInputElement>('[data-testid="kiro-cache-emulation-toggle"]').setValue(true)
+    await wrapper.get('[data-testid="kiro-cache-emulation-ratio"]').setValue('0.75')
+    await wrapper.get<HTMLInputElement>('[data-testid="mixed-scheduling-toggle"]').setValue(true)
+    await wrapper.get<HTMLInputElement>('[data-testid="openai-kiro-bridge-toggle"]').setValue(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).toMatchObject({
+      mixed_scheduling: true,
+      openai_kiro_bridge_enabled: true,
+      kiro_cache_emulation_enabled: true,
+      kiro_cache_emulation_ratio: 0.75
+    })
+  })
+
   it('edits Kiro OAuth auth and API regions independently', async () => {
     const account = buildKiroOAuthAccount()
     updateAccountMock.mockReset()
@@ -1555,12 +1582,21 @@ describe('EditAccountModal', () => {
 
   it('saves Kiro API Key relay mode with base URL passthrough and without credit unit price', async () => {
     const account = buildKiroAPIKeyAccount('https://relay.example.com')
+    account.extra = {
+      anthropic_passthrough: true,
+      openai_kiro_bridge_enabled: true,
+      kiro_cache_emulation_enabled: true,
+      kiro_cache_emulation_ratio: 1
+    }
     updateAccountMock.mockReset()
     checkMixedChannelRiskMock.mockReset()
     checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
+    expect(wrapper.find('[data-testid="kiro-cache-emulation-settings"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="openai-kiro-bridge-toggle"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="mixed-scheduling-toggle"]').attributes('disabled')).toBeDefined()
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
@@ -1568,6 +1604,9 @@ describe('EditAccountModal', () => {
     expect(payload.credentials?.base_url).toBe('https://relay.example.com')
     expect(payload.extra?.anthropic_passthrough).toBe(true)
     expect(payload.extra).not.toHaveProperty('kiro_credit_unit_price_usd')
+    expect(payload.extra).not.toHaveProperty('openai_kiro_bridge_enabled')
+    expect(payload.extra).not.toHaveProperty('kiro_cache_emulation_enabled')
+    expect(payload.extra).not.toHaveProperty('kiro_cache_emulation_ratio')
   })
 
   it('switches Kiro API Key relay mode back to direct mode when base URL is cleared', async () => {

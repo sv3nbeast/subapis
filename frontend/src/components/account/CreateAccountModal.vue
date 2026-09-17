@@ -1041,7 +1041,8 @@
       </div>
 
       <div
-        v-if="form.platform === 'kiro' && accountCategory === 'oauth-based'"
+        v-if="isKiroDirectAccountCategory"
+        data-testid="kiro-cache-emulation-settings"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <label class="block mb-2 font-medium text-gray-700 dark:text-gray-300">
@@ -1054,6 +1055,7 @@
           <input
             v-model="kiroCacheEmulationEnabled"
             type="checkbox"
+            data-testid="kiro-cache-emulation-toggle"
             class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
           />
           {{ t('admin.groups.kiroCache.enabled') }}
@@ -1066,6 +1068,7 @@
             step="0.01"
             min="0"
             max="1"
+            data-testid="kiro-cache-emulation-ratio"
             class="input"
             placeholder="1"
           />
@@ -4084,6 +4087,7 @@
             <input
               type="checkbox"
               v-model="mixedScheduling"
+              data-testid="mixed-scheduling-toggle"
               class="h-4 w-4 rounded border-gray-300 text-primary-500 focus:ring-primary-500 dark:border-dark-500"
             />
             <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -4113,11 +4117,12 @@
         >
           {{ t('admin.accounts.cursor.mixedSchedulingHint') }}
         </p>
-        <div v-if="form.platform === 'kiro' && accountCategory === 'oauth-based'" class="mt-3">
+        <div v-if="isKiroDirectAccountCategory" class="mt-3">
           <label class="flex cursor-pointer items-center gap-2">
             <input
               v-model="openAIKiroBridgeEnabled"
               type="checkbox"
+              data-testid="openai-kiro-bridge-toggle"
               class="h-4 w-4 rounded border-gray-300 text-primary-500 focus:ring-primary-500 dark:border-dark-500"
             />
             <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -5265,7 +5270,7 @@ function buildAntigravityExtra(): Record<string, unknown> | undefined {
 }
 
 function buildKiroExtra(base?: Record<string, unknown>): Record<string, unknown> | undefined {
-  if (form.platform !== 'kiro' || accountCategory.value !== 'oauth-based') {
+  if (!isKiroDirectAccountCategory.value) {
     return base
   }
 
@@ -5287,6 +5292,12 @@ function buildKiroExtra(base?: Record<string, unknown>): Record<string, unknown>
 
 const supportsMixedScheduling = computed(() =>
   ['antigravity', 'kiro', 'droid', 'cursor'].includes(form.platform)
+)
+
+const isKiroDirectAccountCategory = computed(
+  () =>
+    form.platform === 'kiro' &&
+    (accountCategory.value === 'oauth-based' || accountCategory.value === 'apikey')
 )
 
 function buildMixedSchedulingExtra(): Record<string, unknown> | undefined {
@@ -6923,7 +6934,7 @@ const handleSubmit = async () => {
       credentials.custom_error_codes = [...selectedErrorCodes.value]
     }
 
-    await createAccountAndFinish('kiro', 'apikey', credentials, buildMixedSchedulingExtra())
+    await createAccountAndFinish('kiro', 'apikey', credentials, buildKiroExtra(buildMixedSchedulingExtra()))
     return
   }
 

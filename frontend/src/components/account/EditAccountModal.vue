@@ -1001,7 +1001,8 @@
       </div>
 
       <div
-        v-if="account.platform === 'kiro' && account.type === 'oauth'"
+        v-if="isKiroDirectAccount"
+        data-testid="kiro-cache-emulation-settings"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <label class="block mb-2 font-medium text-gray-700 dark:text-gray-300">
@@ -1014,6 +1015,7 @@
           <input
             v-model="kiroCacheEmulationEnabled"
             type="checkbox"
+            data-testid="kiro-cache-emulation-toggle"
             class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
           />
           {{ t('admin.groups.kiroCache.enabled') }}
@@ -1026,6 +1028,7 @@
             step="0.01"
             min="0"
             max="1"
+            data-testid="kiro-cache-emulation-ratio"
             class="input"
             placeholder="1"
           />
@@ -3017,14 +3020,23 @@
           />
         </div>
 
-        <!-- Mixed Scheduling (read-only in edit mode) -->
+        <!-- Mixed scheduling remains read-only except for native Kiro accounts. -->
         <div v-if="supportsMixedScheduling" class="flex items-center gap-2">
-          <label class="flex cursor-not-allowed items-center gap-2 opacity-60">
+          <label
+            :class="[
+              'flex items-center gap-2',
+              isKiroDirectAccount ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
+            ]"
+          >
             <input
               type="checkbox"
               v-model="mixedScheduling"
-              disabled
-              class="h-4 w-4 cursor-not-allowed rounded border-gray-300 text-primary-500 focus:ring-primary-500 dark:border-dark-500"
+              :disabled="!isKiroDirectAccount"
+              data-testid="mixed-scheduling-toggle"
+              :class="[
+                'h-4 w-4 rounded border-gray-300 text-primary-500 focus:ring-primary-500 dark:border-dark-500',
+                !isKiroDirectAccount && 'cursor-not-allowed'
+              ]"
             />
             <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t('admin.accounts.mixedScheduling') }}
@@ -3053,11 +3065,12 @@
         >
           {{ t('admin.accounts.cursor.mixedSchedulingHint') }}
         </p>
-        <div v-if="account?.platform === 'kiro' && account?.type === 'oauth'" class="mt-3">
+        <div v-if="isKiroDirectAccount" class="mt-3">
           <label class="flex cursor-pointer items-center gap-2">
             <input
               v-model="openAIKiroBridgeEnabled"
               type="checkbox"
+              data-testid="openai-kiro-bridge-toggle"
               class="h-4 w-4 rounded border-gray-300 text-primary-500 focus:ring-primary-500 dark:border-dark-500"
             />
             <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -4108,7 +4121,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   if (newAccount.platform === 'anthropic' && (newAccount.type === 'oauth' || newAccount.type === 'setup-token')) {
     anthropicOAuthPassthroughEnabled.value = extra?.anthropic_oauth_passthrough === true
   }
-  if (newAccount.platform === 'kiro' && newAccount.type === 'oauth') {
+  if (isKiroDirect) {
     kiroCacheEmulationEnabled.value = extra?.kiro_cache_emulation_enabled === true
     const rawKiroRatio = extra?.kiro_cache_emulation_ratio
     kiroCacheEmulationRatio.value =
@@ -5562,8 +5575,8 @@ const handleSubmit = async () => {
           delete newExtra.tls_fingerprint_profile_id
         }
       }
-      if (props.account.platform === 'kiro' && props.account.type === 'oauth') {
-        if (openAIKiroBridgeEnabled.value) {
+      if (props.account.platform === 'kiro') {
+        if (isKiroDirectAccount.value && openAIKiroBridgeEnabled.value) {
           newExtra.openai_kiro_bridge_enabled = true
         } else {
           delete newExtra.openai_kiro_bridge_enabled
@@ -5704,11 +5717,11 @@ const handleSubmit = async () => {
       updatePayload.extra = newExtra
     }
 
-    if (props.account.platform === 'kiro' && props.account.type === 'oauth') {
+    if (props.account.platform === 'kiro') {
       const currentExtra =
         (updatePayload.extra as Record<string, unknown>) || (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
-      if (kiroCacheEmulationEnabled.value) {
+      if (isKiroDirectAccount.value && kiroCacheEmulationEnabled.value) {
         newExtra.kiro_cache_emulation_enabled = true
         newExtra.kiro_cache_emulation_ratio = kiroCacheEmulationRatio.value
       } else {

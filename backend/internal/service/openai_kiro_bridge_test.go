@@ -81,12 +81,22 @@ func TestAccountOpenAIKiroBridgeEligibilityRequiresEveryGate(t *testing.T) {
 		require.True(t, customClaudeMapping.IsEligibleForOpenAIKiroBridge(model), model)
 	}
 
+	directAPIKey := base
+	directAPIKey.Type = AccountTypeAPIKey
+	directAPIKey.Credentials["api_key"] = "ksk_direct"
+	require.True(t, directAPIKey.IsEligibleForOpenAIKiroBridge(OpenAIKiroBridgeModel))
+
 	tests := []struct {
 		name   string
 		mutate func(*Account)
 	}{
 		{name: "account opt-in disabled", mutate: func(a *Account) { a.Extra["openai_kiro_bridge_enabled"] = false }},
-		{name: "not OAuth", mutate: func(a *Account) { a.Type = AccountTypeAPIKey }},
+		{name: "relay API key", mutate: func(a *Account) {
+			a.Type = AccountTypeAPIKey
+			a.Credentials["api_key"] = "relay-key"
+			a.Credentials["base_url"] = "https://relay.example.com"
+		}},
+		{name: "unsupported account type", mutate: func(a *Account) { a.Type = AccountTypeUpstream }},
 		{name: "mapping target differs", mutate: func(a *Account) { a.Credentials["model_mapping"] = map[string]any{OpenAIKiroBridgeModel: "auto"} }},
 		{name: "different model", mutate: func(a *Account) {}},
 	}
@@ -154,6 +164,32 @@ func TestSelectAccountWithSchedulerForKiroBridgeUsesSharedPriority(t *testing.T)
 	)
 	require.NoError(t, err)
 	require.Equal(t, openAIAccount.ID, selection.Account.ID)
+}
+
+func TestSelectAccountWithSchedulerForKiroBridgeAllowsDirectAPIKey(t *testing.T) {
+	groupID := int64(17)
+	kiroAccount := bridgeTestAccount(1701, PlatformKiro, 1, groupID)
+	kiroAccount.Type = AccountTypeAPIKey
+	kiroAccount.Credentials["api_key"] = "ksk_direct"
+	repo := openAIKiroBridgeAccountRepo{schedulerTestOpenAIAccountRepo{accounts: []Account{kiroAccount}}}
+	svc := &OpenAIGatewayService{
+		accountRepo: repo,
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			OpenAIKiroBridgeEnabled: true,
+			OpenAIWS: config.GatewayOpenAIWSConfig{
+				LBTopK:                1,
+				SchedulerScoreWeights: config.GatewayOpenAIWSSchedulerScoreWeights{Priority: 1},
+			},
+		}},
+	}
+
+	selection, _, err := svc.SelectAccountWithSchedulerForKiroBridge(
+		context.Background(), &groupID, "", OpenAIKiroBridgeModel, OpenAIKiroBridgeModel, nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, kiroAccount.ID, selection.Account.ID)
 }
 
 func TestSelectAccountWithSchedulerForKiroBridgeWebSocketAllowsKiroButRejectsHTTPOnlyOpenAI(t *testing.T) {
