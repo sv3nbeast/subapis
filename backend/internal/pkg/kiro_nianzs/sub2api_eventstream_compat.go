@@ -2,6 +2,7 @@ package kiro
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
@@ -38,6 +39,46 @@ type KiroEventDiagnostic struct {
 	SemanticCandidateFrames int
 	HasCompletionEvidence   bool
 	ObservedEventTypes      []string
+}
+
+type EventStreamParseError struct {
+	Class                   string
+	Cause                   error
+	FrameCount              int
+	DecodedFrameCount       int
+	SemanticCandidateFrames int
+	HasCompletionEvidence   bool
+	ObservedEventTypes      []string
+}
+
+func (e *EventStreamParseError) Error() string {
+	if e == nil {
+		return "upstream event stream parse failed"
+	}
+	class := strings.TrimSpace(e.Class)
+	if class == "" {
+		class = "unknown"
+	}
+	message := fmt.Sprintf(
+		"upstream event stream parse failed: class=%s frames=%d decoded=%d semantic=%d completion=%t events=%s",
+		class,
+		e.FrameCount,
+		e.DecodedFrameCount,
+		e.SemanticCandidateFrames,
+		e.HasCompletionEvidence,
+		strings.Join(e.ObservedEventTypes, ","),
+	)
+	if e.Cause != nil {
+		return message + ": " + e.Cause.Error()
+	}
+	return message
+}
+
+func (e *EventStreamParseError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
 }
 
 type UpstreamExceptionError struct {
@@ -237,6 +278,7 @@ type nianzsKiroEventDiagnosticState struct {
 	semanticCandidateFrames int
 	hasCompletionEvidence   bool
 	observedEventTypes      map[string]struct{}
+	lastEventType           string
 }
 
 // nianzsKiroSemanticTailState recognizes the completion shape emitted by both
@@ -263,12 +305,12 @@ type nianzsKiroIncompleteStreamState struct {
 	sawNonMetadataOnly bool
 }
 
-func (s *nianzsKiroIncompleteStreamState) observe(msg *eventStreamMessage, event map[string]any, decodeStatus string) {
+func (s *nianzsKiroIncompleteStreamState) observe(msg *eventStreamMessage, decodeStatus string, semanticCandidate bool) {
 	if s == nil || msg == nil || decodeStatus != "decoded" {
 		return
 	}
 	s.decodedFrames++
-	if nianzsKiroDiagnosticHasSemanticCandidate(msg, event) {
+	if semanticCandidate {
 		s.sawSemantic = true
 	}
 	switch strings.TrimSpace(msg.EventType) {
@@ -354,18 +396,18 @@ func nianzsKiroSemanticTailResponseCandidate(eventType string, event map[string]
 }
 
 func newNianzsKiroEventDiagnosticState(requestCtx KiroRequestContext) *nianzsKiroEventDiagnosticState {
-	if requestCtx.EventDiagnosticSink == nil {
-		return nil
+	state := &nianzsKiroEventDiagnosticState{
+		sink:        requestCtx.EventDiagnosticSink,
+		bodyAttempt: requestCtx.BodyAttempt,
 	}
-	return &nianzsKiroEventDiagnosticState{
-		sink:               requestCtx.EventDiagnosticSink,
-		bodyAttempt:        requestCtx.BodyAttempt,
-		observedEventTypes: make(map[string]struct{}),
+	if state.sink != nil {
+		state.observedEventTypes = make(map[string]struct{})
 	}
+	return state
 }
 
-func (s *nianzsKiroEventDiagnosticState) observe(msg *eventStreamMessage, event map[string]any, decodeStatus string, completionEvidence bool) {
-	if s == nil || s.sink == nil {
+func (s *nianzsKiroEventDiagnosticState) observe(msg *eventStreamMessage, event map[string]any, decodeStatus string, completionEvidence, semanticCandidate bool) {
+	if s == nil {
 		return
 	}
 	s.frameCount++
@@ -373,21 +415,63 @@ func (s *nianzsKiroEventDiagnosticState) observe(msg *eventStreamMessage, event 
 	if msg != nil && strings.TrimSpace(msg.EventType) != "" {
 		eventType = strings.TrimSpace(msg.EventType)
 	}
-	s.observedEventTypes[eventType] = struct{}{}
+	s.lastEventType = eventType
+	if s.observedEventTypes != nil {
+		s.observedEventTypes[eventType] = struct{}{}
+	}
 	if decodeStatus == "decoded" || decodeStatus == "context_limit" || decodeStatus == "exception" {
 		s.decodedFrameCount++
 	}
-	if nianzsKiroDiagnosticHasSemanticCandidate(msg, event) {
+	if semanticCandidate {
 		s.semanticCandidateFrames++
 	}
 	if completionEvidence {
 		s.hasCompletionEvidence = true
+	}
+	if s.sink == nil {
+		return
 	}
 	if !shouldEmitNianzsKiroFrameDiagnostic(msg, decodeStatus) {
 		return
 	}
 	diagnostic := buildNianzsKiroEventDiagnostic(s.bodyAttempt, msg, event, decodeStatus)
 	s.sink(diagnostic)
+}
+
+func (s *nianzsKiroEventDiagnosticState) parseError(class string, cause error) error {
+	if s == nil {
+		return &EventStreamParseError{Class: class, Cause: cause}
+	}
+	observedEventTypes := sortedNianzsKiroStringSet(s.observedEventTypes)
+	if len(observedEventTypes) == 0 && s.lastEventType != "" {
+		observedEventTypes = []string{s.lastEventType}
+	}
+	return &EventStreamParseError{
+		Class:                   class,
+		Cause:                   cause,
+		FrameCount:              s.frameCount,
+		DecodedFrameCount:       s.decodedFrameCount,
+		SemanticCandidateFrames: s.semanticCandidateFrames,
+		HasCompletionEvidence:   s.hasCompletionEvidence,
+		ObservedEventTypes:      observedEventTypes,
+	}
+}
+
+func nianzsKiroEventStreamErrorClass(err error) string {
+	switch {
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		return "unexpected_eof"
+	case errors.Is(err, context.Canceled):
+		return "context_canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	case strings.Contains(err.Error(), "frame length"):
+		return "invalid_frame_length"
+	case strings.Contains(err.Error(), "headers length"):
+		return "invalid_headers_length"
+	default:
+		return "frame_read"
+	}
 }
 
 func (s *nianzsKiroEventDiagnosticState) finish(status string) {

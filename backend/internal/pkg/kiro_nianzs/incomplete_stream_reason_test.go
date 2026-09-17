@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestMetadataOnlyEOFClassificationStreamingAndNonStreaming(t *testing.T) {
@@ -57,4 +59,53 @@ func TestIncompleteStreamReasonsDoNotConflateTransportAndToolTruncation(t *testi
 		require.Equal(t, IncompleteStreamReasonMissingTerminal, incomplete.Reason)
 		require.False(t, IsMetadataOnlyIncompleteStream(err))
 	})
+}
+
+func TestNonStreamingFrameErrorsRetainStructuralCause(t *testing.T) {
+	_, err := ParseNonStreamingEventStreamWithContext(bytes.NewReader([]byte{0, 0, 0}), "claude-opus-5", KiroRequestContext{RequireTerminalEvent: true})
+	require.Error(t, err)
+	var parseErr *EventStreamParseError
+	require.ErrorAs(t, err, &parseErr)
+	require.Equal(t, "unexpected_eof", parseErr.Class)
+	require.Zero(t, parseErr.FrameCount)
+	require.Zero(t, parseErr.DecodedFrameCount)
+	require.False(t, parseErr.HasCompletionEvidence)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+}
+
+func TestNonStreamingIgnoresPartialFrameAfterCompletion(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "complete answer"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+	_, _ = stream.Write([]byte{0, 0, 0})
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-5", KiroRequestContext{RequireTerminalEvent: true})
+	require.NoError(t, err)
+	require.Equal(t, "end_turn", result.StopReason)
+	require.Equal(t, "complete answer", gjson.GetBytes(result.ResponseBody, "content.0.text").String())
+}
+
+func TestNonStreamingDoesNotTreatUsageAsDefinitiveBeforePartialFrame(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "not yet terminal"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "usageEvent", map[string]any{
+		"usageEvent": map[string]any{"inputTokens": 10, "outputTokens": 4},
+	}))
+	_, _ = stream.Write([]byte{0, 0, 0})
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-5", KiroRequestContext{RequireTerminalEvent: true})
+	require.Nil(t, result)
+	var parseErr *EventStreamParseError
+	require.ErrorAs(t, err, &parseErr)
+	require.Equal(t, "unexpected_eof", parseErr.Class)
+	require.Equal(t, 2, parseErr.FrameCount)
+	require.Equal(t, 2, parseErr.DecodedFrameCount)
+	require.Equal(t, 1, parseErr.SemanticCandidateFrames)
+	require.True(t, parseErr.HasCompletionEvidence)
 }

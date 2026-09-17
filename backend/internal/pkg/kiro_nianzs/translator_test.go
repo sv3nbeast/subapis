@@ -3253,8 +3253,8 @@ func TestStreamEventStreamAsAnthropicRejectsUnauthenticatedThinkingBeforeClientO
 		wantError string
 	}{
 		{name: "missing", wantError: "missing provider-native Kiro thinking signature"},
-		{name: "malformed", signature: "not-a-provider-signature", wantError: "invalid provider-native Kiro thinking signature"},
-		{name: "former local fallback", signature: providerThinkingSignatureFixture(t, false), wantError: "invalid provider-native Kiro thinking signature"},
+		{name: "malformed", signature: "not-a-provider-signature", wantError: "invalid provider thinking signature"},
+		{name: "former local fallback", signature: providerThinkingSignatureFixture(t, false), wantError: "invalid provider thinking signature"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -3340,28 +3340,34 @@ func TestParseNonStreamingEventStreamRejectsUnauthenticatedThinking(t *testing.T
 }
 
 func TestParseNonStreamingEventStreamSuppressesMissingThinkingSignature(t *testing.T) {
-	stream := bytes.NewBuffer(nil)
-	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
-		"reasoningContentEvent": map[string]any{"text": "provider-only reasoning"},
-	}))
-	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
-		"assistantResponseEvent": map[string]any{"content": "visible answer"},
-	}))
-	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
-		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
-	}))
+	for _, signature := range []string{"", "not-a-provider-signature"} {
+		stream := bytes.NewBuffer(nil)
+		reasoning := map[string]any{"text": "provider-only reasoning"}
+		if signature != "" {
+			reasoning["signature"] = signature
+		}
+		_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+			"reasoningContentEvent": reasoning,
+		}))
+		_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{"content": "visible answer"},
+		}))
+		_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+			"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+		}))
 
-	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-5", KiroRequestContext{
-		ThinkingEnabled:                  true,
-		RequireProviderThinkingSignature: true,
-		SuppressUnauthenticatedThinking:  true,
-		RequireTerminalEvent:             true,
-	})
-	require.NoError(t, err)
-	response := gjson.ParseBytes(result.ResponseBody)
-	require.Equal(t, "text", response.Get("content.0.type").String())
-	require.Equal(t, "visible answer", response.Get("content.0.text").String())
-	require.NotContains(t, string(result.ResponseBody), "provider-only reasoning")
+		result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-5", KiroRequestContext{
+			ThinkingEnabled:                  true,
+			RequireProviderThinkingSignature: true,
+			SuppressUnauthenticatedThinking:  true,
+			RequireTerminalEvent:             true,
+		})
+		require.NoError(t, err)
+		response := gjson.ParseBytes(result.ResponseBody)
+		require.Equal(t, "text", response.Get("content.0.type").String())
+		require.Equal(t, "visible answer", response.Get("content.0.text").String())
+		require.NotContains(t, string(result.ResponseBody), "provider-only reasoning")
+	}
 }
 
 func TestParseNonStreamingEventStreamSuppressesAdaptiveThinkingText(t *testing.T) {

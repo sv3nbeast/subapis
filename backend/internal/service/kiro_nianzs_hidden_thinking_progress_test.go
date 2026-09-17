@@ -448,7 +448,7 @@ func TestNianzsMessagesHiddenGenerationStallReturnsInBandErrorWithoutReplay(t *t
 	}
 }
 
-func TestNianzsMessagesInvalidThinkingSignatureFailsInBandWithoutReplay(t *testing.T) {
+func TestNianzsMessagesInvalidThinkingSignatureDropsThinkingWithoutReplay(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body, parsed, _ := nianzsHiddenThinkingMessagesRequest(t)
 	stream := bytes.NewBuffer(nil)
@@ -459,7 +459,10 @@ func TestNianzsMessagesInvalidThinkingSignatureFailsInBandWithoutReplay(t *testi
 		"reasoningContentEvent": map[string]any{"signature": "invalid-provider-signature"},
 	}))
 	_, _ = stream.Write(kiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
-		"assistantResponseEvent": map[string]any{"content": "must not be accepted"},
+		"assistantResponseEvent": map[string]any{"content": "visible answer"},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
 	}))
 	svc, upstream, account := newNianzsKiroRouteTestRuntime(t, &http.Response{
 		StatusCode: http.StatusOK,
@@ -473,19 +476,24 @@ func TestNianzsMessagesInvalidThinkingSignatureFailsInBandWithoutReplay(t *testi
 	c.Request.Header.Set("Anthropic-Beta", "claude-code-20250219")
 
 	result, forwardErr := svc.Forward(nianzsHiddenThinkingTestContext(500*time.Millisecond, 10*time.Millisecond), c, account, parsed)
-	require.Nil(t, result)
-	var failoverErr *UpstreamFailoverError
-	require.False(t, errors.As(forwardErr, &failoverErr), "an authenticated-thinking failure after generation begins must not enter account failover")
-	require.ErrorContains(t, forwardErr, "invalid provider-native Kiro thinking signature")
+	require.NoError(t, forwardErr)
+	require.NotNil(t, result)
 	require.Len(t, upstream.requests, 1)
-	require.True(t, HasGatewaySSEErrorWritten(c))
+	require.False(t, HasGatewaySSEErrorWritten(c))
 
 	wire := recorder.Body.String()
 	require.Contains(t, wire, "event: message_start")
-	require.Contains(t, wire, "event: error")
+	require.Contains(t, wire, "event: message_stop")
+	require.NotContains(t, wire, "event: error")
 	require.NotContains(t, wire, "sub2api_internal_kiro_hidden_thinking_progress")
 	require.NotContains(t, wire, "provider-only hidden reasoning")
-	require.NotContains(t, wire, "must not be accepted")
+	var visible strings.Builder
+	for _, delta := range nianzsSSEPayloadsByType(wire, "content_block_delta") {
+		if delta.Get("delta.type").String() == "text_delta" {
+			visible.WriteString(delta.Get("delta.text").String())
+		}
+	}
+	require.Equal(t, "visible answer", visible.String())
 }
 
 func TestNianzsMessagesOpus46AdaptiveControlStillCompletesNormally(t *testing.T) {

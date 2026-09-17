@@ -966,6 +966,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		return nil
 	}
 	sawCompletionEvidence := false
+	sawDefinitiveCompletion := false
 	eventDiagnostics := newNianzsKiroEventDiagnosticState(requestCtx)
 	semanticTailState := newNianzsKiroSemanticTailState(requestCtx)
 	incompleteStreamState := &nianzsKiroIncompleteStreamState{}
@@ -1121,14 +1122,22 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			}
 			if sig != "" {
 				if _, err := validateProviderThinkingSignature(sig); err != nil {
-					return fmt.Errorf("invalid provider-native Kiro thinking signature: %w", err)
+					if !requestCtx.SuppressUnauthenticatedThinking {
+						return eventDiagnostics.parseError("thinking_signature", fmt.Errorf("invalid provider thinking signature: %w", err))
+					}
+					sig = ""
 				}
+			}
+			if sig == "" && requestCtx.RequireProviderThinkingSignature {
+				currentThinking.Reset()
+				pendingAuthenticatedThinkingDeltas = nil
+				upstreamThinkingSignature = ""
+				thinkingBlockOpen = false
+				return nil
 			}
 			// When provider authentication is required, no part of the thinking
 			// block is client-visible until its opaque signature has arrived and
-			// passed envelope validation. This preserves the gateway's failover
-			// boundary: an unsigned or malformed upstream response fails before
-			// message_start instead of leaving a truncated SSE lifecycle.
+			// passed envelope validation.
 			if !thinkingBlockOpen {
 				if err := startThinkingBlock(); err != nil {
 					return err
@@ -1978,39 +1987,48 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			break
 		}
 		if err != nil {
+			if sawDefinitiveCompletion {
+				eventDiagnostics.finish("trailing_frame_error_after_completion")
+				break
+			}
 			eventDiagnostics.finish("frame_error")
-			return nil, err
+			return nil, eventDiagnostics.parseError(nianzsKiroEventStreamErrorClass(err), err)
 		}
 		if exceptionErr := msg.ExceptionError(); exceptionErr != nil {
 			event, _ := decodeNianzsKiroEventPayload(msg.Payload)
-			eventDiagnostics.observe(msg, event, "exception", false)
+			eventDiagnostics.observe(msg, event, "exception", false, false)
 			eventDiagnostics.finish("exception")
 			return nil, markNianzsKiroContextResponseStarted(exceptionErr, streamOutputReleased && messageStartSent)
 		}
 		if msg == nil || len(msg.Payload) == 0 {
 			semanticTailState.observe(msg, nil, "empty_payload")
-			eventDiagnostics.observe(msg, nil, "empty_payload", false)
+			eventDiagnostics.observe(msg, nil, "empty_payload", false, false)
 			continue
 		}
 
 		event, decodeStatus := decodeNianzsKiroEventPayload(msg.Payload)
 		if decodeStatus != "decoded" {
 			semanticTailState.observe(msg, nil, decodeStatus)
-			incompleteStreamState.observe(msg, nil, decodeStatus)
-			eventDiagnostics.observe(msg, nil, decodeStatus, false)
+			incompleteStreamState.observe(msg, decodeStatus, false)
+			eventDiagnostics.observe(msg, nil, decodeStatus, false, false)
 			continue
 		}
 		if contextErr := contextLimitErrorFromNianzsEvent(msg.EventType, event); contextErr != nil {
-			eventDiagnostics.observe(msg, event, "context_limit", false)
+			eventDiagnostics.observe(msg, event, "context_limit", false, false)
 			eventDiagnostics.finish("context_limit")
 			return nil, markNianzsKiroContextResponseStarted(contextErr, streamOutputReleased && messageStartSent)
 		}
 		completionEvidence := kiroEventProvidesCompletionEvidence(msg.EventType, event)
+		definitiveCompletion := kiroEventProvidesDefinitiveCompletion(msg.EventType, event)
+		semanticCandidate := nianzsKiroDiagnosticHasSemanticCandidate(msg, event)
 		semanticTailState.observe(msg, event, "decoded")
-		incompleteStreamState.observe(msg, event, "decoded")
-		eventDiagnostics.observe(msg, event, "decoded", completionEvidence)
+		incompleteStreamState.observe(msg, "decoded", semanticCandidate)
+		eventDiagnostics.observe(msg, event, "decoded", completionEvidence, semanticCandidate)
 		if completionEvidence {
 			sawCompletionEvidence = true
+		}
+		if definitiveCompletion {
+			sawDefinitiveCompletion = true
 		}
 		// Keep the first Claude-compatible text suffix paced to Claude's native
 		// token-generation window instead of bursting both synthetic deltas when
@@ -5118,6 +5136,7 @@ func parseEventStream(body io.Reader, model string, requestCtx KiroRequestContex
 	var reasoningArtifacts kiroReasoningArtifacts
 	stopReason := ""
 	sawCompletionEvidence := false
+	sawDefinitiveCompletion := false
 	eventDiagnostics := newNianzsKiroEventDiagnosticState(requestCtx)
 	semanticTailState := newNianzsKiroSemanticTailState(requestCtx)
 	incompleteStreamState := &nianzsKiroIncompleteStreamState{}
@@ -5145,30 +5164,34 @@ func parseEventStream(body io.Reader, model string, requestCtx KiroRequestContex
 			break
 		}
 		if err != nil {
+			if sawDefinitiveCompletion {
+				eventDiagnostics.finish("trailing_frame_error_after_completion")
+				break
+			}
 			eventDiagnostics.finish("frame_error")
-			return "", nil, usage, stopReason, reasoningArtifacts, err
+			return "", nil, usage, stopReason, reasoningArtifacts, eventDiagnostics.parseError(nianzsKiroEventStreamErrorClass(err), err)
 		}
 		if exceptionErr := msg.ExceptionError(); exceptionErr != nil {
 			event, _ := decodeNianzsKiroEventPayload(msg.Payload)
-			eventDiagnostics.observe(msg, event, "exception", false)
+			eventDiagnostics.observe(msg, event, "exception", false, false)
 			eventDiagnostics.finish("exception")
 			return "", nil, usage, stopReason, reasoningArtifacts, exceptionErr
 		}
 		if msg == nil || len(msg.Payload) == 0 {
 			semanticTailState.observe(msg, nil, "empty_payload")
-			eventDiagnostics.observe(msg, nil, "empty_payload", false)
+			eventDiagnostics.observe(msg, nil, "empty_payload", false, false)
 			continue
 		}
 
 		event, decodeStatus := decodeNianzsKiroEventPayload(msg.Payload)
 		if decodeStatus != "decoded" {
 			semanticTailState.observe(msg, nil, decodeStatus)
-			incompleteStreamState.observe(msg, nil, decodeStatus)
-			eventDiagnostics.observe(msg, nil, decodeStatus, false)
+			incompleteStreamState.observe(msg, decodeStatus, false)
+			eventDiagnostics.observe(msg, nil, decodeStatus, false, false)
 			continue
 		}
 		if contextErr := contextLimitErrorFromNianzsEvent(msg.EventType, event); contextErr != nil {
-			eventDiagnostics.observe(msg, event, "context_limit", false)
+			eventDiagnostics.observe(msg, event, "context_limit", false, false)
 			eventDiagnostics.finish("context_limit")
 			return "", nil, usage, stopReason, reasoningArtifacts, contextErr
 		}
@@ -5176,11 +5199,16 @@ func parseEventStream(body io.Reader, model string, requestCtx KiroRequestContex
 			stopReason = preferAnthropicStopReason(stopReason, sr)
 		}
 		completionEvidence := kiroEventProvidesCompletionEvidence(msg.EventType, event)
+		definitiveCompletion := kiroEventProvidesDefinitiveCompletion(msg.EventType, event)
+		semanticCandidate := nianzsKiroDiagnosticHasSemanticCandidate(msg, event)
 		semanticTailState.observe(msg, event, "decoded")
-		incompleteStreamState.observe(msg, event, "decoded")
-		eventDiagnostics.observe(msg, event, "decoded", completionEvidence)
+		incompleteStreamState.observe(msg, "decoded", semanticCandidate)
+		eventDiagnostics.observe(msg, event, "decoded", completionEvidence, semanticCandidate)
 		if completionEvidence {
 			sawCompletionEvidence = true
+		}
+		if definitiveCompletion {
+			sawDefinitiveCompletion = true
 		}
 		switch msg.EventType {
 		case "assistantResponseEvent":
@@ -5210,9 +5238,15 @@ func parseEventStream(body io.Reader, model string, requestCtx KiroRequestContex
 			reasoning := nestedEvent(event, "reasoningContentEvent")
 			if signature := firstNonEmptyString(getString(reasoning, "signature"), getString(event, "signature")); signature != "" {
 				if _, signatureErr := validateProviderThinkingSignature(signature); signatureErr != nil && requestCtx.RequireProviderThinkingSignature {
-					return "", nil, usage, stopReason, reasoningArtifacts, fmt.Errorf("invalid provider-native Kiro thinking signature: %w", signatureErr)
+					if !requestCtx.SuppressUnauthenticatedThinking {
+						eventDiagnostics.finish("thinking_signature_error")
+						return "", nil, usage, stopReason, reasoningArtifacts, eventDiagnostics.parseError("thinking_signature", fmt.Errorf("invalid provider thinking signature: %w", signatureErr))
+					}
+					signature = ""
 				}
-				reasoningArtifacts.Signature = signature
+				if signature != "" {
+					reasoningArtifacts.Signature = signature
+				}
 			}
 			if redacted := firstNonEmptyString(getString(reasoning, "redactedContent"), getString(event, "redactedContent")); redacted != "" {
 				reasoningArtifacts.RedactedContents = append(reasoningArtifacts.RedactedContents, redacted)
@@ -5257,7 +5291,8 @@ func parseEventStream(body io.Reader, model string, requestCtx KiroRequestContex
 	cleanText += preserveUnparsedToolTail(pending, requestCtx)
 	if requestCtx.RequireProviderThinkingSignature && findRealThinkingStartTag(cleanText, 0) >= 0 && strings.TrimSpace(reasoningArtifacts.Signature) == "" {
 		if !requestCtx.SuppressUnauthenticatedThinking {
-			return "", nil, usage, stopReason, reasoningArtifacts, errors.New("missing provider-native Kiro thinking signature")
+			eventDiagnostics.finish("thinking_signature_missing")
+			return "", nil, usage, stopReason, reasoningArtifacts, eventDiagnostics.parseError("thinking_signature", errors.New("missing provider thinking signature"))
 		}
 		// The provider-only reasoning is not authenticated. Strip it before
 		// constructing the Claude response rather than fabricating a signature.
@@ -5321,6 +5356,21 @@ func kiroEventProvidesCompletionEvidence(eventType string, event map[string]any)
 		if value, ok := toPositiveFiniteFloat(meta["usage"]); ok && value > 0 {
 			return true
 		}
+	}
+	return false
+}
+
+func kiroEventProvidesDefinitiveCompletion(eventType string, event map[string]any) bool {
+	if isKiroTerminalEventType(eventType) {
+		return true
+	}
+	meta := nestedEvent(event, eventType)
+	if isKiroCompletionStopReason(readStopReason(event)) || isKiroCompletionStopReason(readStopReason(meta)) {
+		return true
+	}
+	if strings.TrimSpace(eventType) == "toolUseEvent" {
+		stopped, _ := meta["stop"].(bool)
+		return stopped
 	}
 	return false
 }

@@ -750,11 +750,19 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 			})
 			return nil, failoverErr
 		}
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			AccountName:        account.Name,
+			UpstreamStatusCode: http.StatusOK,
+			Kind:               "parse_error",
+			Message:            sanitizeUpstreamErrorMessage(err.Error()),
+		})
 		c.JSON(http.StatusBadGateway, gin.H{
 			"type": "error",
 			"error": gin.H{
 				"type":    "upstream_error",
-				"message": "Failed to parse Kiro upstream response",
+				"message": "Upstream response could not be completed",
 			},
 		})
 		return nil, err

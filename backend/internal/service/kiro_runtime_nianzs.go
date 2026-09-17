@@ -231,6 +231,24 @@ func configureNianzsKiroEventDiagnostics(requestCtx *nianzskiro.KiroRequestConte
 	}
 }
 
+func writeNianzsKiroParseError(c *gin.Context, account *Account, err error) {
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		Platform:           account.Platform,
+		AccountID:          account.ID,
+		AccountName:        account.Name,
+		UpstreamStatusCode: http.StatusOK,
+		Kind:               "parse_error",
+		Message:            sanitizeUpstreamErrorMessage(err.Error()),
+	})
+	c.JSON(http.StatusBadGateway, gin.H{
+		"type": "error",
+		"error": gin.H{
+			"type":    "api_error",
+			"message": "Upstream response could not be completed",
+		},
+	})
+}
+
 func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest, startTime time.Time) (*ForwardResult, error) {
 	if account == nil || parsed == nil {
 		return nil, fmt.Errorf("kiro forward: missing account or request")
@@ -578,13 +596,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 				})
 				return nil, failoverErr
 			}
-			c.JSON(http.StatusBadGateway, gin.H{
-				"type": "error",
-				"error": gin.H{
-					"type":    "api_error",
-					"message": "Failed to parse Kiro upstream response",
-				},
-			})
+			writeNianzsKiroParseError(c, account, err)
 			return nil, err
 		}
 		priorKiroCredits = nativeToolProgressCredits(err)
