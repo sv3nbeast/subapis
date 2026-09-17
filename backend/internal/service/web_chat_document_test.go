@@ -35,6 +35,40 @@ func TestValidateWebChatDocumentRejectsSpoofedTypes(t *testing.T) {
 	require.True(t, ok)
 }
 
+// An image is uploaded through the same path so an image task can edit it, but
+// its bytes must match its name: a mislabelled file would only be rejected by
+// the provider, after the task had already reserved storage.
+func TestValidateWebChatDocumentAcceptsImagesByTheirBytes(t *testing.T) {
+	png := append([]byte("\x89PNG\r\n\x1a\n"), []byte("body")...)
+	jpeg := append([]byte{0xFF, 0xD8, 0xFF}, []byte("body")...)
+	webp := append(append([]byte("RIFF"), 0, 0, 0, 0), []byte("WEBPbody")...)
+
+	ext, typ, ok := validateWebChatDocument("shot.png", "image/png", png)
+	require.True(t, ok)
+	require.Equal(t, ".png", ext)
+	require.Equal(t, "image/png", typ)
+	require.True(t, IsWebChatImageDocument(ext))
+
+	_, typ, ok = validateWebChatDocument("photo.jpeg", "image/jpeg", jpeg)
+	require.True(t, ok)
+	require.Equal(t, "image/jpeg", typ)
+	// Browsers still send the non-standard image/jpg for .jpg files.
+	_, _, ok = validateWebChatDocument("photo.jpg", "image/jpg", jpeg)
+	require.True(t, ok)
+	_, _, ok = validateWebChatDocument("art.webp", "image/webp", webp)
+	require.True(t, ok)
+
+	_, _, ok = validateWebChatDocument("fake.png", "image/png", jpeg)
+	require.False(t, ok, "a JPEG named .png must be refused rather than sent as PNG")
+	_, _, ok = validateWebChatDocument("empty.png", "image/png", nil)
+	require.False(t, ok)
+	_, _, ok = validateWebChatDocument("animation.gif", "image/gif", []byte("GIF89a"))
+	require.False(t, ok, "no provider accepts GIF as an edit input")
+
+	require.False(t, IsWebChatImageDocument(".pdf"))
+	require.False(t, IsWebChatImageDocument(""))
+}
+
 func TestUploadReusesExistingDocumentBeforeQuotaAndStorage(t *testing.T) {
 	settings := newWebChatDocumentSettingsTestDouble()
 	settings.values[SettingKeyWebChatFilesEnabled] = "true"

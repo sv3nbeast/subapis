@@ -707,6 +707,15 @@ func (s *WebChatDocumentService) runOne(ctx context.Context) error {
 		}
 		return err
 	}
+	// An image has no text to extract. Marking it ready without downloading it
+	// keeps it out of knowledge retrieval while an image task can still read it.
+	if IsWebChatImageDocument(doc.Extension) {
+		if err = s.repo.CompleteDocument(ctx, doc.ID, doc.LeaseOwner, nil, 0); err != nil {
+			return s.failJob(ctx, doc, err)
+		}
+		slog.Info("web_chat_document_ready", "document_id", doc.ID, "extension", doc.Extension, "chunks", 0, "chars", 0, "duration_ms", time.Since(started).Milliseconds())
+		return nil
+	}
 	r, err := store.Download(ctx, doc.ObjectKey)
 	if err != nil {
 		return s.failJob(ctx, doc, err)
@@ -739,16 +748,31 @@ func (s *WebChatDocumentService) failJob(ctx context.Context, doc *WebChatDocume
 
 var webChatAllowedTypes = map[string]string{".pdf": "application/pdf", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".txt": "text/plain", ".md": "text/markdown", ".csv": "text/csv"}
 
+// An image reaches an image model as pixels, not as extracted text, so it takes
+// the same upload path (quota, ownership, deletion) while skipping parsing.
+// Only formats every image provider accepts as an edit input are allowed.
+var webChatImageTypes = map[string]string{".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+
+// IsWebChatImageDocument reports whether a stored document is an image, which
+// an image task may use as an edit input and a chat task must not retrieve.
+func IsWebChatImageDocument(extension string) bool {
+	_, ok := webChatImageTypes[strings.ToLower(strings.TrimSpace(extension))]
+	return ok
+}
+
 func validateWebChatDocument(name, declared string, data []byte) (string, string, bool) {
 	ext := strings.ToLower(filepath.Ext(name))
 	typ, ok := webChatAllowedTypes[ext]
 	if !ok {
-		return "", "", false
+		if typ, ok = webChatImageTypes[ext]; !ok {
+			return "", "", false
+		}
 	}
 	d := strings.ToLower(strings.TrimSpace(strings.Split(declared, ";")[0]))
 	aliasOK := (ext == ".md" && d == "text/plain") ||
 		(ext == ".csv" && d == "application/vnd.ms-excel") ||
-		(ext == ".xlsx" && (d == "application/vnd.ms-excel" || d == "application/zip"))
+		(ext == ".xlsx" && (d == "application/vnd.ms-excel" || d == "application/zip")) ||
+		(ext == ".jpg" || ext == ".jpeg") && d == "image/jpg"
 	if d != "" && d != "application/octet-stream" && d != typ && !aliasOK {
 		return "", "", false
 	}
@@ -767,6 +791,13 @@ func validateWebChatDocument(name, declared string, data []byte) (string, string
 		}
 	case ".txt", ".md", ".csv":
 		if !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {
+			return "", "", false
+		}
+	case ".png", ".jpg", ".jpeg", ".webp":
+		// Trust the bytes, not the name: a mislabelled file would be rejected by
+		// the provider after the task had already reserved storage.
+		sniffed, _, ok := sniffWebAgentImageFormat(data)
+		if !ok || sniffed != typ {
 			return "", "", false
 		}
 	}

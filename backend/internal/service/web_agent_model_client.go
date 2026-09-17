@@ -286,6 +286,11 @@ func parseWebAgentModelResponse(data []byte, anthropic bool, out *WebAgentModelO
 // its own budget instead of borrowing the plan response limit.
 const webAgentImageMaxResponseBytes = 24 << 20
 
+// An edit request carries its source images inline as base64, which inflates
+// them by about a third. Two artifact-sized inputs still fit well inside the
+// gateway's own body limit.
+const webAgentImageMaxRequestBytes = 48 << 20
+
 type WebAgentImageOutput struct {
 	Data       []byte
 	MIME       string
@@ -293,34 +298,80 @@ type WebAgentImageOutput struct {
 	Generation *WebAgentGeneration
 }
 
+// WebAgentImageInput is one source image for an edit, already resolved to bytes
+// by the executor. No URL reaches the gateway: an expiring link would turn a
+// billed edit into a broken one, and a caller-supplied URL would be a fetch
+// target chosen by request data.
+type WebAgentImageInput struct {
+	Data []byte
+	MIME string
+}
+
 type WebAgentImageCaller interface {
-	GenerateImage(context.Context, *WebChatSession, *APIKey, string) (*WebAgentImageOutput, error)
+	GenerateImage(context.Context, *WebChatSession, *APIKey, string, []WebAgentImageInput) (*WebAgentImageOutput, error)
 }
 
 // GenerateImage routes through the local authenticated gateway's images
 // endpoint. Chat Completions rejects image models before account selection, so
 // a workbench image task cannot reuse the conversation path. Billing, content
 // moderation, concurrency limits and failover all come from that gateway route.
-func (c *WebAgentModelClient) GenerateImage(ctx context.Context, session *WebChatSession, key *APIKey, prompt string) (*WebAgentImageOutput, error) {
+//
+// With input images it posts to /v1/images/edits instead. Both upstreams accept
+// data URLs there, so no multipart body is built: the JSON edits shape reaches
+// the OpenAI Responses wrapper and the Grok media forwarder alike.
+func (c *WebAgentModelClient) GenerateImage(ctx context.Context, session *WebChatSession, key *APIKey, prompt string, inputs []WebAgentImageInput) (*WebAgentImageOutput, error) {
 	if c == nil || session == nil || key == nil || key.Key == "" {
 		return nil, ErrWebAgentUnavailable
 	}
 	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
+	if prompt == "" || len(inputs) > WebAgentImageMaxInputImages {
 		return nil, ErrWebAgentInvalid
 	}
 	// b64_json keeps the bytes in the response: a provider URL would expire long
 	// before the artifact it backs, leaving stored history with broken images.
-	payload, err := json.Marshal(map[string]any{
+	body := map[string]any{
 		"model":           session.Model,
 		"prompt":          prompt,
 		"n":               1,
 		"response_format": "b64_json",
-	})
+	}
+	path := "/v1/images/generations"
+	if len(inputs) > 0 {
+		path = "/v1/images/edits"
+		images := make([]map[string]any, 0, len(inputs))
+		for _, input := range inputs {
+			if len(input.Data) == 0 {
+				return nil, ErrWebAgentInvalid
+			}
+			mime := strings.TrimSpace(input.MIME)
+			if _, ok := webAgentImageFormats[mime]; !ok {
+				return nil, ErrWebAgentInvalid
+			}
+			images = append(images, map[string]any{"image_url": "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(input.Data)})
+		}
+		// The upstreams name the same thing differently. OpenAI edits read images[];
+		// the Grok forwarder reads image plus images and sums both, so it is given
+		// exactly the shape its own multipart converter produces.
+		if session.Platform == PlatformGrok {
+			body["image"] = images[0]
+			if len(images) > 1 {
+				body["images"] = images
+			}
+		} else {
+			body["images"] = images
+		}
+	}
+	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.origin+"/v1/images/generations", bytes.NewReader(payload))
+	// Source images dominate this body, so it gets the image budget rather than
+	// the plan text budget. Failing here costs nothing; failing at the gateway
+	// wastes a scheduling round.
+	if len(payload) > webAgentImageMaxRequestBytes {
+		return nil, webAgentFailure("input_budget_exceeded", errors.New("task image input exceeds budget"))
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.origin+path, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}

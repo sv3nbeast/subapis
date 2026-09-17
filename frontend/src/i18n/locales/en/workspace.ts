@@ -20,7 +20,7 @@ export default { workspace: {
   unavailable: 'File tasks are unavailable. Ordinary chat is still available.', refresh: 'Refresh status',
   budget: 'At most one model generation per task, up to {minutes} minutes. Selected model pricing applies.',
   budgetDetails: 'Input up to {input} KiB, output up to {output} tokens, file and preview up to {file} MiB combined.',
-  imageHint: 'Image mode generates a picture you can preview, download, or find under Files.', noImageModel: 'No image model has been configured yet.', chatHint: 'Chat produces text. Choose Slides, Spreadsheet or Document for a downloadable file.',
+  imageHint: 'Image mode generates a picture you can preview, download, or find under Files. To edit one, attach an image or choose Revise on a generated image, up to 2 inputs.', noImageModel: 'No image model has been configured yet.', chatHint: 'Chat produces text. Choose Slides, Spreadsheet or Document for a downloadable file.',
   empty: 'Describe the file you need', emptyHint: 'Preview and download the result, or continue editing a version.',
   tasks: 'File tasks', files: 'Artifacts', preview: 'Preview', versions: 'Versions', details: 'Execution details', technicalDetails: 'Technical details', 
   queued: 'Queued', running: 'Running', cancel_requested: 'Cancelling', succeeded: 'Completed', failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted',

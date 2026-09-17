@@ -62,7 +62,7 @@
           <p v-else-if="taskMode==='image'">{{ t('webAgent.imageHint') }}</p>
           <p v-else>{{ t('webAgent.budget',{minutes:(options.task_limits?.deadline_seconds||600)/60}) }}</p>
           <details v-if="options.task_limits&&taskMode!=='image'"><summary>{{ t('workspace.usageDetails') }}</summary>{{ t('webAgent.budgetDetails',{input:options.task_limits.max_input_bytes/1024,output:activeSession?.max_output_tokens||8192,file:options.task_limits.max_artifact_bytes/1024/1024}) }}</details>
-          <p v-if="sourceArtifact&&taskMode!=='image'">{{ t('webAgent.source',{version:sourceArtifact.version}) }} · {{ sourceArtifact.title }} <button @click="sourceArtifact=null">{{ t('webAgent.clearSource') }}</button></p>
+          <p v-if="sourceArtifact">{{ t('webAgent.source',{version:sourceArtifact.version}) }} · {{ sourceArtifact.title }} <button @click="sourceArtifact=null">{{ t('webAgent.clearSource') }}</button></p>
           <p v-if="agent.error.value" role="alert">{{ agent.error.value }}</p>
           <p v-if="agent.pending.value">{{ t('webAgent.pending') }} <button :disabled="agent.creating.value" @click="retryTaskSubmission">{{ t('webAgent.retrySubmission') }}</button></p>
         </div>
@@ -433,8 +433,13 @@ async function send(){
  }catch(e){operationError.value=extractApiErrorMessage(e)}
 }
 function setTaskMode(mode:TaskMode){
+ const previous=taskMode.value
  taskMode.value=mode
  if(sourceArtifact.value?.kind!==mode)sourceArtifact.value=null
+ // Image mode reads pictures and the other modes read text, so attachments
+ // staged for one are unusable in the other. Drop them instead of sending a
+ // file the task will refuse after it has already been queued.
+ if((previous==='image')!==(mode==='image'))void discardPendingDocuments()
  // Chat and image models are mutually exclusive targets, so a mode switch must
  // land on a model the new mode can reach instead of keeping an unusable one.
  if(!eligibleModels.value.some(model=>model.id===selectedChatModelId.value))
@@ -475,7 +480,11 @@ async function createFileTask(content:string){
   if(!session)return
   // Images take the prompt alone: reference documents and revisions are the
   // Office pipeline's inputs, and sending them here would be silently dropped.
-  const extras=kind==='image'?{}:{document_ids:documents,...(template?{template_id:template}:{}),...(source?{source_artifact_id:source.id}:{})}
+  // An image edit takes its inputs from a generated image and/or uploaded ones.
+  // Templates shape an Office plan only, so image mode never sends one.
+  const extras=kind==='image'
+   ?{document_ids:documents,...(source?{source_artifact_id:source.id}:{})}
+   :{document_ids:documents,...(template?{template_id:template}:{}),...(source?{source_artifact_id:source.id}:{})}
   acceptFileTask(await agent.create({kind,prompt:content,chat_model_id:selection.id,...extras}))
  }catch(e){operationError.value=extractApiErrorMessage(e)}
 }

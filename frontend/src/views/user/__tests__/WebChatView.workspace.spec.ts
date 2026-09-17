@@ -15,10 +15,11 @@ vi.mock('@/api/webAgent',()=>({...mocks.agent,isTaskTerminal:(status:string)=>['
 vi.mock('@/stores/auth',()=>({useAuthStore:()=>({user:{id:3,username:'Local test'}})}))
 vi.mock('vue-router',()=>({useRoute:()=>({query:mocks.query}),useRouter:()=>({replace:mocks.replace})}))
 vi.mock('vue-i18n',()=>({useI18n:()=>({t:(key:string)=>key,te:()=>false,locale:ref('zh')})}))
+const docMocks=vi.hoisted(()=>({pending:[] as Record<string,unknown>[],discard:vi.fn()}))
 vi.mock('@/composables/useWebChatDocuments',()=>({useWebChatDocuments:()=>({
- pendingDocuments:ref([]),failedAttachments:ref([]),attachmentState:ref(''),
+ pendingDocuments:ref(docMocks.pending),failedAttachments:ref([]),attachmentState:ref(''),
  uploadTemporaryDocuments:vi.fn(),retryFailedAttachment:vi.fn(),removePendingDocument:vi.fn(),
- removeFailedAttachment:vi.fn(),clearPendingDocuments:vi.fn(),discardPendingDocuments:vi.fn().mockResolvedValue(undefined),
+ removeFailedAttachment:vi.fn(),clearPendingDocuments:vi.fn(),discardPendingDocuments:docMocks.discard,
 })}))
 const session=(id:number)=>({id,user_id:3,group_id:1,model:'test-model',title:'Session '+id,system_prompt:'',max_output_tokens:8192,knowledge_enabled:false,created_at:'2026-09-09T00:00:00Z',updated_at:'2026-09-09T00:00:00Z'})
 const message=(id:number,sessionID:number,content:string)=>({id,session_id:sessionID,role:'assistant',content,status:'completed',sources:[]})
@@ -30,6 +31,8 @@ function render(){return mount(WebChatView,{global:{stubs:{
 }}})}
 beforeEach(()=>{
  vi.clearAllMocks()
+ docMocks.pending.length=0
+ docMocks.discard.mockResolvedValue(undefined)
  localStorage.clear()
  sessionStorage.clear()
  mocks.agent.listTasks.mockResolvedValue({items:[],next_before:0})
@@ -132,7 +135,47 @@ describe('MONO workspace real entry',()=>{
   // Switching to image mode must swap the target: the chat model is refused by
   // the images endpoint, so sending it would fail upstream.
   expect(mocks.agent.createTask).toHaveBeenCalledWith(3,expect.objectContaining({kind:'image',prompt:'a cat in a hat',chat_model_id:'image-1'}))
-  expect(mocks.agent.createTask.mock.calls[0][1]).not.toHaveProperty('document_ids')
+  // Uploaded images are an image edit's inputs, so the list is sent (empty here).
+  expect(mocks.agent.createTask.mock.calls[0][1]).toMatchObject({document_ids:[]})
+  // A template shapes an Office plan only; an image model cannot consume one.
+  expect(mocks.agent.createTask.mock.calls[0][1]).not.toHaveProperty('template_id')
+  wrapper.unmount()
+ })
+ // An image edit's inputs are uploaded images. Dropping them here would send a
+ // prompt-only request that answers an unrelated image and still bills for it.
+ it('sends uploaded images as the inputs of an image edit',async()=>{
+  const options=await mocks.api.getOptions()
+  mocks.api.getOptions.mockResolvedValue({...options,models:[
+   {id:'chat-1',name:'Chat',brand:'OpenAI',description:'',model:'test-model',billing_type:'standard',recommended:true,capabilities:['chat']},
+   {id:'image-1',name:'GPT Image',brand:'OpenAI',description:'',model:'gpt-image-1.5',billing_type:'standard',recommended:false,capabilities:['image']},
+  ]})
+  mocks.agent.createTask.mockResolvedValue({id:31,session_id:3,kind:'image',prompt:'add a hat',model:'gpt-image-1.5',status:'queued'})
+  docMocks.pending.push({id:44,status:'ready',extension:'.png',original_name:'shot.png',size_bytes:2048})
+  const wrapper=render();await flushPromises()
+  const imageMode=wrapper.findAll('.task-modebar button').find(b=>b.text()==='webAgent.image')
+  await imageMode!.trigger('click');await flushPromises()
+  await wrapper.find('.composer-input').setValue('add a hat')
+  await wrapper.find('.composer').trigger('submit');await flushPromises()
+  expect(mocks.agent.createTask).toHaveBeenCalledWith(3,expect.objectContaining({kind:'image',document_ids:[44]}))
+  wrapper.unmount()
+ })
+ // An image cannot supply text and a text file cannot be edited, so attachments
+ // staged for one mode must not survive a switch to the other.
+ it('drops staged attachments when switching into or out of image mode',async()=>{
+  const options=await mocks.api.getOptions()
+  mocks.api.getOptions.mockResolvedValue({...options,models:[
+   {id:'chat-1',name:'Chat',brand:'OpenAI',description:'',model:'test-model',billing_type:'standard',recommended:true,capabilities:['chat']},
+   {id:'image-1',name:'GPT Image',brand:'OpenAI',description:'',model:'gpt-image-1.5',billing_type:'standard',recommended:false,capabilities:['image']},
+  ]})
+  const wrapper=render();await flushPromises()
+  const mode=(label:string)=>wrapper.findAll('.task-modebar button').find(b=>b.text()===label)
+  await mode('webAgent.image')!.trigger('click');await flushPromises()
+  expect(docMocks.discard).toHaveBeenCalledTimes(1)
+  await mode('webAgent.slides')!.trigger('click');await flushPromises()
+  expect(docMocks.discard).toHaveBeenCalledTimes(2)
+  // A switch between two text modes keeps the attachments both can read.
+  await mode('webAgent.document')!.trigger('click');await flushPromises()
+  expect(docMocks.discard).toHaveBeenCalledTimes(2)
   wrapper.unmount()
  })
  it('hides image mode when no catalog entry can generate images',async()=>{

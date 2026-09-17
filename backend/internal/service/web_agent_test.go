@@ -143,6 +143,36 @@ func TestWebAgentRequestValidationAndStableIdentity(t *testing.T) {
 		require.ErrorIs(t, err, ErrWebAgentInvalid)
 	}
 }
+
+// An image task edits either a generated artifact, uploaded images, or both.
+func TestWebAgentImageRequestAcceptsEditInputsWithinTheProviderCeiling(t *testing.T) {
+	source := int64(9)
+	for name, req := range map[string]WebAgentCreateRequest{
+		"prompt only":        {Kind: "image", Prompt: "a cat", IdempotencyKey: "request-123"},
+		"generated source":   {Kind: "image", Prompt: "add a hat", IdempotencyKey: "request-123", SourceArtifactID: &source},
+		"uploaded image":     {Kind: "image", Prompt: "add a hat", IdempotencyKey: "request-123", DocumentIDs: []int64{4}},
+		"source plus upload": {Kind: "image", Prompt: "combine", IdempotencyKey: "request-123", SourceArtifactID: &source, DocumentIDs: []int64{4}},
+		"two uploads":        {Kind: "image", Prompt: "combine", IdempotencyKey: "request-123", DocumentIDs: []int64{4, 5}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := normalizeWebAgentRequest(req)
+			require.NoError(t, err)
+		})
+	}
+
+	// Beyond the ceiling the upstream would reject the whole edit, so refuse here
+	// instead of queueing a task that cannot succeed.
+	for name, req := range map[string]WebAgentCreateRequest{
+		"three uploads":   {Kind: "image", Prompt: "combine", IdempotencyKey: "request-123", DocumentIDs: []int64{4, 5, 6}},
+		"office template": {Kind: "image", Prompt: "a cat", IdempotencyKey: "request-123", TemplateID: &source},
+		"source plus two": {Kind: "image", Prompt: "combine", IdempotencyKey: "request-123", SourceArtifactID: &source, DocumentIDs: []int64{4, 5}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := normalizeWebAgentRequest(req)
+			require.ErrorIs(t, err, ErrWebAgentInvalid)
+		})
+	}
+}
 func TestWebAgentCreateFailsClosedAndFreezesContext(t *testing.T) {
 	repo := &agentTaskStub{}
 	chat := agentTestChat()

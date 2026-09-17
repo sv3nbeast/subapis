@@ -23,7 +23,20 @@ const (
 	WebAgentMaxSteps        = 16
 	WebAgentMaxActiveTasks  = 3
 	WebAgentTaskTimeout     = 10 * time.Minute
+	// xAI Imagine allows three source images per edit, but the Grok forwarder
+	// counts the canonical `image` field and the `images` array together, so a
+	// body carrying N images reads as N+1 there. Two keeps every request inside
+	// that ceiling while covering the real flows: edit one image, or combine a
+	// generated image with an uploaded one.
+	WebAgentImageMaxInputImages = 2
 )
+
+func webAgentSourceImageCount(sourceArtifactID *int64) int {
+	if sourceArtifactID == nil {
+		return 0
+	}
+	return 1
+}
 
 var (
 	ErrWebAgentUnavailable = infraerrors.ServiceUnavailable("WEB_AGENT_UNAVAILABLE", "task execution is not configured")
@@ -121,9 +134,14 @@ func normalizeWebAgentRequest(req WebAgentCreateRequest) (WebAgentCreateRequest,
 	switch req.Kind {
 	case "slides", "spreadsheet", "document":
 	case "image":
-		// Reference documents shape an Office plan; an image request is the prompt
-		// alone, and editing an existing image is a separate capability.
-		if len(req.DocumentIDs) > 0 || req.SourceArtifactID != nil {
+		// An image edit takes its input images from an already generated artifact,
+		// from uploaded images, or from both.
+		if len(req.DocumentIDs)+webAgentSourceImageCount(req.SourceArtifactID) > WebAgentImageMaxInputImages {
+			return req, ErrWebAgentInvalid
+		}
+		// A template is an Office plan instruction an image model cannot consume.
+		// Accepting one here would silently ignore what the user selected.
+		if req.TemplateID != nil {
 			return req, ErrWebAgentInvalid
 		}
 	default:

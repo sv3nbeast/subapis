@@ -20,7 +20,7 @@ export default { workspace: {
   unavailable: '文件任务暂不可用，普通聊天不受影响。', refresh: '刷新状态',
   budget: '每个任务最多 1 次模型生成，最长 {minutes} 分钟；按所选模型正常计费。',
   budgetDetails: '输入上限 {input} KiB，输出上限 {output} Token；文件与预览合计最多 {file} MiB。',
-  imageHint: '图片模式直接生成图片，可在右侧预览、下载，或在「文件」中找到。', noImageModel: '管理员尚未配置图片模型。', chatHint: '聊天生成文本。需要可下载文件，请选择 PPT、表格或文档。',
+  imageHint: '图片模式直接生成图片，可在右侧预览、下载，或在「文件」中找到。想改图就上传图片，或在已生成的图片上点「继续修改」，最多 2 张。', noImageModel: '管理员尚未配置图片模型。', chatHint: '聊天生成文本。需要可下载文件，请选择 PPT、表格或文档。',
   empty: '描述要生成的文件', emptyHint: '文件生成后可在右侧预览、下载，或继续修改。',
   tasks: '文件任务', files: '成果文件', preview: '预览', versions: '版本', details: '执行记录', technicalDetails: '技术细节', 
   queued: '排队中', running: '进行中', cancel_requested: '正在取消', succeeded: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断',

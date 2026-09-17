@@ -25,4 +25,15 @@ describe('MONO composer',()=>{
   expect(wrapper.emitted('stop')).toHaveLength(1)
   expect(wrapper.find('textarea').attributes('aria-label')).toBe('workspace.inputLabel')
  })
+ // An image task edits pictures; the other modes read text. Offering the wrong
+ // formats would let a user stage a file the task refuses after queueing it.
+ it('offers image formats in image mode and documents elsewhere',()=>{
+  const image=mount(WebChatComposer,{props:{...props,mode:'image'}})
+  expect(image.find('input[type="file"]').attributes('accept')).toBe('.png,.jpg,.jpeg,.webp')
+  expect(image.find('label.template-trigger').attributes('aria-label')).toBe('webChat.attachImage')
+  for(const mode of ['chat','slides','spreadsheet','document'] as const){
+   const wrapper=mount(WebChatComposer,{props:{...props,mode}})
+   expect(wrapper.find('input[type="file"]').attributes('accept')).toBe('.pdf,.docx,.xlsx,.txt,.md,.csv')
+  }
+ })
 })

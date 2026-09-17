@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -21,8 +22,11 @@ const (
 )
 
 var (
-	errWebAgentImageTooLarge = errors.New("generated image exceeds the artifact size budget")
-	errWebAgentImageFormat   = errors.New("generated image is not a supported format")
+	errWebAgentImageTooLarge     = errors.New("generated image exceeds the artifact size budget")
+	errWebAgentImageFormat       = errors.New("generated image is not a supported format")
+	errWebAgentImageInputType    = errors.New("only an image can be used as an image edit input")
+	errWebAgentImageInputSize    = errors.New("input image exceeds the artifact size budget")
+	errWebAgentImageInputGarbled = errors.New("input image is not a supported image format")
 )
 
 // Artifact digests are hex-encoded SHA-256 over the stored bytes.
@@ -46,6 +50,104 @@ func NewWebAgentImageExecutor(chat *WebChatService, caller WebAgentImageCaller, 
 	return &WebAgentImageExecutor{chat: chat, caller: caller, store: store, repo: repo, storage: storage, staged: staged}
 }
 
+// inputImages resolves an edit's source images to bytes: a previously generated
+// artifact and/or uploaded images. Both are already owner-scoped by the task
+// row, and both are re-checked here against this task's user and session.
+//
+// Every failure is explicit. Dropping an unreadable input and generating from
+// the prompt alone would return an unrelated image and still bill for it.
+func (e *WebAgentImageExecutor) inputImages(ctx context.Context, task *WebAgentTask, session *WebChatSession) ([]WebAgentImageInput, error) {
+	if task.SourceArtifactID == nil && len(task.DocumentIDs) == 0 {
+		return nil, nil
+	}
+	inputs := make([]WebAgentImageInput, 0, webAgentSourceImageCount(task.SourceArtifactID)+len(task.DocumentIDs))
+	if task.SourceArtifactID != nil {
+		source, err := e.repo.GetArtifact(ctx, task.UserID, *task.SourceArtifactID)
+		if err != nil {
+			return nil, err
+		}
+		if source.UserID != task.UserID || source.SessionID != task.SessionID || source.Kind != task.Kind {
+			return nil, ErrWebAgentArtifactNotFound
+		}
+		if _, ok := webAgentImageFormats[source.MIME]; !ok {
+			return nil, webAgentFailure("source_unavailable", errWebAgentImageInputType)
+		}
+		data, err := webAgentReadBlob(ctx, e.store, source.BlobKey, source.SizeBytes)
+		if err != nil {
+			return nil, err
+		}
+		inputs = append(inputs, WebAgentImageInput{Data: data, MIME: source.MIME})
+	}
+	documents := e.chat.documents
+	if len(task.DocumentIDs) > 0 && (documents == nil || !documents.FeatureEnabled(ctx)) {
+		return nil, ErrWebChatFilesDisabled
+	}
+	for _, id := range task.DocumentIDs {
+		doc, err := documents.Get(ctx, task.UserID, id)
+		if err != nil {
+			return nil, err
+		}
+		if doc.UserID != task.UserID || !doc.Enabled || doc.Status != WebChatDocumentStatusReady || doc.DeletedAt != nil {
+			return nil, ErrWebChatDocumentNotReady
+		}
+		inSession := doc.SessionID != nil && *doc.SessionID == task.SessionID
+		inProject := doc.ProjectID != nil && session.ProjectID != nil && *doc.ProjectID == *session.ProjectID
+		if !inSession && !inProject {
+			return nil, ErrWebChatDocumentNotFound
+		}
+		// A text document carries nothing an image model can edit. Refuse instead
+		// of sending a prompt-only request that answers an unrelated image.
+		if !IsWebChatImageDocument(doc.Extension) {
+			return nil, webAgentFailure("document_unavailable", errWebAgentImageInputType)
+		}
+		if doc.SizeBytes <= 0 || doc.SizeBytes > webAgentArtifactMaxBytes {
+			return nil, webAgentFailure("document_unavailable", errWebAgentImageInputSize)
+		}
+		_, reader, err := documents.OpenDownload(ctx, task.UserID, id)
+		if err != nil {
+			return nil, err
+		}
+		data, err := io.ReadAll(io.LimitReader(reader, doc.SizeBytes+1))
+		_ = reader.Close()
+		if err != nil {
+			return nil, err
+		}
+		mime, _, ok := sniffWebAgentImageFormat(data)
+		if int64(len(data)) != doc.SizeBytes || !ok {
+			return nil, webAgentFailure("document_unavailable", errWebAgentImageInputGarbled)
+		}
+		inputs = append(inputs, WebAgentImageInput{Data: data, MIME: mime})
+	}
+	if len(inputs) > WebAgentImageMaxInputImages {
+		return nil, ErrWebAgentInvalid
+	}
+	return inputs, nil
+}
+
+// webAgentReadBlob reads a stored blob whose length must match the recorded one:
+// a short read would send a truncated image the provider silently reinterprets.
+func webAgentReadBlob(ctx context.Context, store WebAgentBlobStore, key string, expected int64) ([]byte, error) {
+	if expected <= 0 || expected > webAgentArtifactMaxBytes {
+		return nil, webAgentFailure("source_unavailable", errWebAgentImageInputSize)
+	}
+	reader, size, err := store.Open(ctx, key)
+	if err != nil {
+		return nil, ErrWebAgentArtifactNotFound
+	}
+	defer reader.Close()
+	if size != expected {
+		return nil, webAgentFailure("source_unavailable", errors.New("input image integrity mismatch"))
+	}
+	data, err := io.ReadAll(io.LimitReader(reader, expected+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) != expected {
+		return nil, webAgentFailure("source_unavailable", errors.New("input image integrity mismatch"))
+	}
+	return data, nil
+}
+
 func (e *WebAgentImageExecutor) Execute(ctx context.Context, task *WebAgentTask, progress func(string, string) error) (artifact *WebAgentArtifact, err error) {
 	if e == nil || e.chat == nil || e.caller == nil || e.store == nil || e.repo == nil || e.storage == nil || e.staged == nil {
 		return nil, ErrWebAgentUnavailable
@@ -59,9 +161,7 @@ func (e *WebAgentImageExecutor) Execute(ctx context.Context, task *WebAgentTask,
 	if task.UserID <= 0 || task.GroupID == nil || len(task.SessionSnapshot) > 1<<20 {
 		return nil, ErrWebAgentInvalid
 	}
-	// Editing an existing image is a separate capability; accepting a source here
-	// would silently ignore it and return an unrelated image.
-	if task.SourceArtifactID != nil {
+	if webAgentSourceImageCount(task.SourceArtifactID)+len(task.DocumentIDs) > WebAgentImageMaxInputImages {
 		return nil, ErrWebAgentInvalid
 	}
 
@@ -94,6 +194,13 @@ func (e *WebAgentImageExecutor) Execute(ctx context.Context, task *WebAgentTask,
 	}
 	session.Platform = group.Platform
 
+	// Resolve the edit inputs before reserving storage or minting a key: an
+	// unreadable input must fail before anything is spent.
+	inputs, err := e.inputImages(ctx, task, session)
+	if err != nil {
+		return artifact, err
+	}
+
 	// Reserve storage before spending money, so a full quota fails cheaply.
 	if err = e.storage.RegisterArtifactStore(ctx, e.staged.StorageID()); err != nil {
 		return artifact, err
@@ -115,7 +222,7 @@ func (e *WebAgentImageExecutor) Execute(ctx context.Context, task *WebAgentTask,
 	if key == nil || key.UserID != task.UserID || key.GroupID == nil || *key.GroupID != *task.GroupID {
 		return artifact, ErrWebAgentUnavailable
 	}
-	output, err := e.caller.GenerateImage(ctx, session, key, task.Prompt)
+	output, err := e.caller.GenerateImage(ctx, session, key, task.Prompt, inputs)
 	if output != nil {
 		artifact.Generation = output.Generation
 	}

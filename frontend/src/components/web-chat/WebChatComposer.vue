@@ -35,8 +35,8 @@
           <Icon :name="modeIcon[item]" size="xs" /><span class="label">{{ t(`webAgent.${item}`) }}</span>
         </button>
       </div>
-      <label v-if="filesEnabled" class="template-trigger wc-ib" :title="t('webChat.attach')" :aria-label="t('webChat.attach')">
-        <input class="wc-sr-only" type="file" :disabled="disabled || sending" multiple accept=".pdf,.docx,.xlsx,.txt,.md,.csv" @change="pick" />
+      <label v-if="filesEnabled" class="template-trigger wc-ib" :title="attachTitle" :aria-label="attachTitle">
+        <input class="wc-sr-only" type="file" :disabled="disabled || sending" multiple :accept="acceptedTypes" @change="pick" />
         <Icon name="paperClip" size="sm" />
       </label>
       <button v-if="templatesEnabled" type="button" :disabled="disabled || sending" class="template-trigger wc-ib" :title="t('webChat.templates')" :aria-label="t('webChat.templates')" @click="emit('open-template')"><Icon name="sparkles" size="sm" /></button>
@@ -49,6 +49,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import type { WebChatDocument } from '@/api/webChat'
@@ -92,6 +93,12 @@ const modeIcon: Record<TaskMode, 'chat' | 'image' | 'presentation' | 'chartBar' 
   spreadsheet: 'chartBar',
   document: 'document',
 }
+// Image mode edits pictures, so it offers only formats every image provider
+// accepts. Other modes read text, which an image cannot supply.
+const DOCUMENT_TYPES = '.pdf,.docx,.xlsx,.txt,.md,.csv'
+const IMAGE_TYPES = '.png,.jpg,.jpeg,.webp'
+const acceptedTypes = computed(() => props.mode === 'image' ? IMAGE_TYPES : DOCUMENT_TYPES)
+const attachTitle = computed(() => props.mode === 'image' ? t('webChat.attachImage') : t('webChat.attach'))
 
 function extension(nameOrExt: string): string {
   const raw = nameOrExt.includes('.') ? nameOrExt.slice(nameOrExt.lastIndexOf('.') + 1) : nameOrExt
