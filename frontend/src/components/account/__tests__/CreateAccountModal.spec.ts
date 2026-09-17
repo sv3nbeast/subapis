@@ -575,6 +575,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
         kiro_cache_emulation_ratio: 0.8
       }
     })
+    expect(createAccountMock.mock.calls[0]?.[0]).not.toHaveProperty('upstream_billing_probe_enabled')
   })
 
   it('does not expose native Kiro settings for API Key relay accounts', async () => {
