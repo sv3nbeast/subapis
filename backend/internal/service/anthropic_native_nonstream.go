@@ -1,6 +1,7 @@
 package service
 
 import (
+	"net/http"
 	"strings"
 	"unicode"
 
@@ -10,6 +11,14 @@ import (
 const (
 	anthropicNativeNonStreamCompaction      = "compaction"
 	anthropicNativeNonStreamAgentClassifier = "agent_classifier"
+
+	claudeCodeCompactionRequestHeader = "x-cc-compaction-request"
+	claudeCodeContextCompactedHeader  = "x-cc-context-compacted"
+	claudeCodeCompactionLegacy        = "legacy"
+	claudeCodeCompactionManual        = "manual"
+	claudeCodeCompactionAuto          = "auto"
+	claudeCodeCompactionReactive      = "reactive"
+	claudeCodeCompactionOther         = "other"
 
 	claudeCodeAgentClassifierSystemPrefix = "A user kicked off a Claude Code agent to do a coding task and walked away."
 
@@ -58,10 +67,56 @@ func IsClaudeCodeAgentClassifierRequest(body []byte) bool {
 	return false
 }
 
-// IsClaudeCodeCompactionRequest reports whether the official Stainless helper
-// header identifies Claude Code's native non-streaming compaction request.
+// IsClaudeCodeCompactionRequest preserves the legacy helper-only API.
 func IsClaudeCodeCompactionRequest(helperHeader string) bool {
 	return classifyAnthropicStainlessHelper(helperHeader) == anthropicStainlessHelperCompaction
+}
+
+// ClaudeCodeCompactionRequestKind returns a bounded classification for the
+// official Claude Code compaction headers. Claude Code 2.1.260+ sends
+// x-cc-compaction-request on both streaming and non-streaming summary calls;
+// older releases used x-stainless-helper: compaction.
+func ClaudeCodeCompactionRequestKind(headers http.Header) string {
+	if headers == nil {
+		return ""
+	}
+	newKind := classifyClaudeCodeCompactionRequest(headers.Get(claudeCodeCompactionRequestHeader))
+	if isRecognizedClaudeCodeCompactionKind(newKind) {
+		return newKind
+	}
+	if IsClaudeCodeCompactionRequest(headers.Get(anthropicStainlessHelperHeader)) {
+		return claudeCodeCompactionLegacy
+	}
+	return newKind
+}
+
+// IsClaudeCodeCompactionHeaders accepts only known official wire values.
+// Arbitrary non-empty values remain observable as "other" but cannot bypass
+// the native non-stream guard.
+func IsClaudeCodeCompactionHeaders(headers http.Header) bool {
+	kind := ClaudeCodeCompactionRequestKind(headers)
+	return kind == claudeCodeCompactionLegacy || isRecognizedClaudeCodeCompactionKind(kind)
+}
+
+func classifyClaudeCodeCompactionRequest(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return ""
+	case claudeCodeCompactionManual:
+		return claudeCodeCompactionManual
+	case claudeCodeCompactionAuto:
+		return claudeCodeCompactionAuto
+	case claudeCodeCompactionReactive:
+		return claudeCodeCompactionReactive
+	default:
+		return claudeCodeCompactionOther
+	}
+}
+
+func isRecognizedClaudeCodeCompactionKind(kind string) bool {
+	return kind == claudeCodeCompactionManual ||
+		kind == claudeCodeCompactionAuto ||
+		kind == claudeCodeCompactionReactive
 }
 
 func isClaudeCodeAgentClassifierSystemText(text string) bool {

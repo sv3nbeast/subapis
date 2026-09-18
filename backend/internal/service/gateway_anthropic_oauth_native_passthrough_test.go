@@ -147,6 +147,8 @@ func (r *closeBlockingReadCloser) Close() error {
 
 func TestAnthropicOAuthNativePassthrough_RequestPreservesBodyHeadersAndAuthReplacement(t *testing.T) {
 	c, _ := newNativePassthroughTestContext(t, "/v1/messages")
+	c.Request.Header.Set(claudeCodeCompactionRequestHeader, claudeCodeCompactionReactive)
+	c.Request.Header.Set(claudeCodeContextCompactedHeader, "true")
 	account := newAnthropicOAuthNativeAccountForTest()
 	account.Extra["custom_base_url_enabled"] = true
 	account.Extra["custom_base_url"] = "https://relay.example.com/"
@@ -167,6 +169,8 @@ func TestAnthropicOAuthNativePassthrough_RequestPreservesBodyHeadersAndAuthRepla
 	require.Equal(t, "client-rid", getHeaderRaw(req.Header, "x-client-request-id"))
 	require.Equal(t, "request-rid", getHeaderRaw(req.Header, "x-request-id"))
 	require.Equal(t, "session-rid", getHeaderRaw(req.Header, "x-session-id"))
+	require.Equal(t, claudeCodeCompactionReactive, getHeaderRaw(req.Header, claudeCodeCompactionRequestHeader))
+	require.Equal(t, "true", getHeaderRaw(req.Header, claudeCodeContextCompactedHeader))
 }
 
 func TestAnthropicOAuthNativePassthrough_UsesIngressHeaderSnapshotAfterPriorAttemptMutation(t *testing.T) {

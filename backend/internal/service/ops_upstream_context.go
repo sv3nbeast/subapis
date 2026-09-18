@@ -81,6 +81,7 @@ type opsAnthropicRequestShape struct {
 	ClientStream          bool
 	UpstreamStream        bool
 	HelperKind            string
+	CompactionKind        string
 	NativeHelperNonStream bool
 	NativeNonStream       bool
 	NativeNonStreamKind   string
@@ -89,6 +90,10 @@ type opsAnthropicRequestShape struct {
 // setOpsAnthropicRequestShape records only bounded protocol-shape metadata.
 // It deliberately excludes prompts and raw helper header values.
 func setOpsAnthropicRequestShape(c *gin.Context, clientStream, upstreamStream bool, helperKind, nativeNonStreamKind string) {
+	setOpsAnthropicRequestShapeWithCompaction(c, clientStream, upstreamStream, helperKind, nativeNonStreamKind, "")
+}
+
+func setOpsAnthropicRequestShapeWithCompaction(c *gin.Context, clientStream, upstreamStream bool, helperKind, nativeNonStreamKind, compactionKind string) {
 	if c == nil {
 		return
 	}
@@ -97,6 +102,7 @@ func setOpsAnthropicRequestShape(c *gin.Context, clientStream, upstreamStream bo
 		ClientStream:          clientStream,
 		UpstreamStream:        upstreamStream,
 		HelperKind:            strings.TrimSpace(helperKind),
+		CompactionKind:        strings.TrimSpace(compactionKind),
 		NativeHelperNonStream: nativeNonStreamKind == anthropicNativeNonStreamCompaction,
 		NativeNonStream:       nativeNonStreamKind != "",
 		NativeNonStreamKind:   nativeNonStreamKind,
@@ -481,19 +487,20 @@ type OpsUpstreamErrorEvent struct {
 	Scope  string `json:"scope,omitempty"`
 	Reason string `json:"reason,omitempty"`
 
-	RequestedModel        string `json:"requested_model,omitempty"`
-	MappedModel           string `json:"mapped_model,omitempty"`
-	KiroModelID           string `json:"kiro_model_id,omitempty"`
-	KiroEngine            string `json:"kiro_engine,omitempty"`
-	HasTools              bool   `json:"has_tools,omitempty"`
-	HasAdaptiveThinking   bool   `json:"has_adaptive_thinking,omitempty"`
-	HasContext1MBeta      bool   `json:"has_context_1m_beta,omitempty"`
-	ClientStream          *bool  `json:"client_stream,omitempty"`
-	UpstreamStream        *bool  `json:"upstream_stream,omitempty"`
-	AnthropicHelperKind   string `json:"anthropic_helper_kind,omitempty"`
-	NativeHelperNonStream bool   `json:"native_helper_nonstream,omitempty"`
-	NativeNonStream       bool   `json:"native_nonstream,omitempty"`
-	NativeNonStreamKind   string `json:"native_nonstream_kind,omitempty"`
+	RequestedModel          string `json:"requested_model,omitempty"`
+	MappedModel             string `json:"mapped_model,omitempty"`
+	KiroModelID             string `json:"kiro_model_id,omitempty"`
+	KiroEngine              string `json:"kiro_engine,omitempty"`
+	HasTools                bool   `json:"has_tools,omitempty"`
+	HasAdaptiveThinking     bool   `json:"has_adaptive_thinking,omitempty"`
+	HasContext1MBeta        bool   `json:"has_context_1m_beta,omitempty"`
+	ClientStream            *bool  `json:"client_stream,omitempty"`
+	UpstreamStream          *bool  `json:"upstream_stream,omitempty"`
+	AnthropicHelperKind     string `json:"anthropic_helper_kind,omitempty"`
+	AnthropicCompactionKind string `json:"anthropic_compaction_kind,omitempty"`
+	NativeHelperNonStream   bool   `json:"native_helper_nonstream,omitempty"`
+	NativeNonStream         bool   `json:"native_nonstream,omitempty"`
+	NativeNonStreamKind     string `json:"native_nonstream_kind,omitempty"`
 
 	Message string `json:"message,omitempty"`
 	Detail  string `json:"detail,omitempty"`
@@ -534,6 +541,7 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 	ev.KiroModelID = strings.TrimSpace(ev.KiroModelID)
 	ev.KiroEngine = strings.TrimSpace(ev.KiroEngine)
 	ev.AnthropicHelperKind = strings.TrimSpace(ev.AnthropicHelperKind)
+	ev.AnthropicCompactionKind = strings.TrimSpace(ev.AnthropicCompactionKind)
 	ev.NativeNonStreamKind = strings.TrimSpace(ev.NativeNonStreamKind)
 	ev.UpstreamURL = strings.TrimSpace(ev.UpstreamURL)
 	ev.Message = strings.TrimSpace(ev.Message)
@@ -566,6 +574,9 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 			}
 			if ev.AnthropicHelperKind == "" {
 				ev.AnthropicHelperKind = shape.HelperKind
+			}
+			if ev.AnthropicCompactionKind == "" {
+				ev.AnthropicCompactionKind = shape.CompactionKind
 			}
 			if !ev.NativeHelperNonStream {
 				ev.NativeHelperNonStream = shape.NativeHelperNonStream

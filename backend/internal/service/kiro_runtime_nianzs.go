@@ -151,7 +151,9 @@ func (b nianzsKiroAnthropicContextBudget) contextLimitError() error {
 		return nil
 	}
 	return &nianzskiro.ContextLimitError{
-		Reason: nianzsKiroAnthropicContextLimitReason,
+		Reason:       nianzsKiroAnthropicContextLimitReason,
+		ActualTokens: b.InputTokens + b.MaxOutputTokens,
+		LimitTokens:  b.WindowTokens,
 		Message: fmt.Sprintf(
 			"estimated input tokens (%d) plus max_tokens (%d) exceed context window (%d)",
 			b.InputTokens,
@@ -161,7 +163,7 @@ func (b nianzsKiroAnthropicContextBudget) contextLimitError() error {
 	}
 }
 
-func nianzsKiroAnthropicContextLimitForRequest(account *Account, body []byte, model string, inputTokens int) error {
+func nianzsKiroAnthropicContextLimitForRequest(ctx context.Context, account *Account, body []byte, model string, inputTokens int, clientStream bool, helperKind, compactionKind string) error {
 	budget := nianzsKiroAnthropicContextBudgetForRequest(body, model, inputTokens)
 	contextErr := budget.contextLimitError()
 	if contextErr == nil {
@@ -171,9 +173,12 @@ func nianzsKiroAnthropicContextLimitForRequest(account *Account, body []byte, mo
 	if account != nil {
 		accountID = account.ID
 	}
-	logger.L().Info("kiro.anthropic_context_preflight_rejected",
+	logger.FromContext(ctx).Info("kiro.anthropic_context_preflight_rejected",
 		zap.Int64("selected_account_id", accountID),
 		zap.String("model", strings.TrimSpace(model)),
+		zap.Bool("client_stream", clientStream),
+		zap.String("helper_kind", strings.TrimSpace(helperKind)),
+		zap.String("compaction_kind", strings.TrimSpace(compactionKind)),
 		zap.Int("estimated_input_tokens", budget.InputTokens),
 		zap.Int("max_output_tokens", budget.MaxOutputTokens),
 		zap.Int("context_window_tokens", budget.WindowTokens),
@@ -285,7 +290,18 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 		zap.Bool("has_profile_arn", strings.TrimSpace(account.GetCredential("profile_arn")) != ""),
 	)
 	inputTokens := nianzsEstimateKiroInputTokens(ctx, body)
-	if contextErr := nianzsKiroAnthropicContextLimitForRequest(account, body, mappedModel, inputTokens); contextErr != nil {
+	helperKind := ""
+	compactionKind := ""
+	nativeNonStreamKind := ""
+	if c != nil && c.Request != nil {
+		helperKind = classifyAnthropicStainlessHelper(c.GetHeader(anthropicStainlessHelperHeader))
+		compactionKind = ClaudeCodeCompactionRequestKind(c.Request.Header)
+		if !parsed.Stream && IsClaudeCodeClient(ctx) && IsClaudeCodeCompactionHeaders(c.Request.Header) {
+			nativeNonStreamKind = anthropicNativeNonStreamCompaction
+		}
+		setOpsAnthropicRequestShapeWithCompaction(c, parsed.Stream, parsed.Stream, helperKind, nativeNonStreamKind, compactionKind)
+	}
+	if contextErr := nianzsKiroAnthropicContextLimitForRequest(ctx, account, body, mappedModel, inputTokens, parsed.Stream, helperKind, compactionKind); contextErr != nil {
 		s.handleKiroContextLimitError(c, account, contextErr)
 		return nil, contextErr
 	}

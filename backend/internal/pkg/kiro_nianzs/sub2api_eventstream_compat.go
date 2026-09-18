@@ -105,6 +105,8 @@ func (e *UpstreamExceptionError) Error() string {
 type ContextLimitError struct {
 	Reason          string
 	Message         string
+	ActualTokens    int
+	LimitTokens     int
 	ResponseStarted bool
 }
 

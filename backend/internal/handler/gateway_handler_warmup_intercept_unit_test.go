@@ -347,6 +347,23 @@ func TestGatewayHandlerMessages_AnthropicOAuthNativeErrorEventIsNotDuplicated(t 
 }
 
 func TestGatewayHandlerMessages_AnthropicOAuthNativeCompactionBypassesSyncGuard(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		headerName  string
+		headerValue string
+		wantBypass  bool
+	}{
+		{name: "legacy stainless helper", headerName: "X-Stainless-Helper", headerValue: "compaction", wantBypass: true},
+		{name: "claude 2.1.260 reactive", headerName: "x-cc-compaction-request", headerValue: "reactive", wantBypass: true},
+		{name: "unknown new header is rejected", headerName: "x-cc-compaction-request", headerValue: "private-future-value", wantBypass: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertGatewayHandlerMessagesAnthropicOAuthNativeCompactionBypassesSyncGuard(t, test.headerName, test.headerValue, test.wantBypass)
+		})
+	}
+}
+
+func assertGatewayHandlerMessagesAnthropicOAuthNativeCompactionBypassesSyncGuard(t *testing.T, headerName, headerValue string, wantBypass bool) {
 	gin.SetMode(gin.TestMode)
 
 	groupID := int64(2011)
@@ -386,7 +403,7 @@ func TestGatewayHandlerMessages_AnthropicOAuthNativeCompactionBypassesSyncGuard(
 	req.Header.Set("User-Agent", "claude-cli/2.1.220 (external, cli)")
 	req.Header.Set("Anthropic-Version", "2023-06-01")
 	req.Header.Set("Anthropic-Beta", "interleaved-thinking-2025-05-14")
-	req.Header.Set("X-Stainless-Helper", "compaction")
+	req.Header.Set(headerName, headerValue)
 	req = req.WithContext(context.WithValue(req.Context(), ctxkey.Group, group))
 	c.Request = req
 
@@ -399,8 +416,15 @@ func TestGatewayHandlerMessages_AnthropicOAuthNativeCompactionBypassesSyncGuard(
 
 	h.Messages(c)
 
+	if !wantBypass {
+		require.Equal(t, 0, upstream.calls)
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+		require.Contains(t, rec.Body.String(), "Synchronous /v1/messages requests are not supported")
+		return
+	}
 	require.Equal(t, 1, upstream.calls)
 	require.Equal(t, body, upstream.body)
+	require.Equal(t, headerValue, nativeOAuthHandlerHeaderValue(upstream.request.Header, headerName))
 	require.Equal(t, http.StatusTeapot, rec.Code)
 	require.Equal(t, upstreamBody, rec.Body.String())
 	require.NotContains(t, rec.Body.String(), "Synchronous /v1/messages requests are not supported")

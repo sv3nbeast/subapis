@@ -333,7 +333,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	// stream=true 聚合),以抓取上游真实请求+响应定位 429 根因;抓包一关守卫即全量恢复。
 	isConnectionProbe, _ := service.IsClaudeCodeConnectionProbeRequestFromContext(c.Request.Context())
 	isClaudeCodeAgentClassifier := isClaudeCodeClient && service.IsClaudeCodeAgentClassifierRequest(body)
-	isClaudeCodeCompaction := isClaudeCodeClient && service.IsClaudeCodeCompactionRequest(c.GetHeader("X-Stainless-Helper"))
+	isClaudeCodeCompaction := isClaudeCodeClient && service.IsClaudeCodeCompactionHeaders(c.Request.Header)
 	isInterceptableSync := isConnectionProbe ||
 		detectInterceptType(body, reqModel, parsedReq.MaxTokens, reqStream, isClaudeCodeClient) != InterceptTypeNone ||
 		isClaudeCodeAgentClassifier ||

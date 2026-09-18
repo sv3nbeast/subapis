@@ -89,3 +89,28 @@ func TestAnthropicStainlessHelperDiagnosticsAreBounded(t *testing.T) {
 	require.Equal(t, anthropicStainlessHelperOther, safeHeaderValueForLog("x-stainless-helper", "private-helper-name"))
 	require.NotContains(t, safeHeaderValueForLog("x-stainless-helper", "private-helper-name"), "private-helper-name")
 }
+
+func TestClaudeCodeCompactionHeadersRecognizeNewAndLegacyProtocols(t *testing.T) {
+	for _, kind := range []string{claudeCodeCompactionManual, claudeCodeCompactionAuto, claudeCodeCompactionReactive} {
+		headers := http.Header{}
+		headers.Set(claudeCodeCompactionRequestHeader, kind)
+		require.Equal(t, kind, ClaudeCodeCompactionRequestKind(headers))
+		require.True(t, IsClaudeCodeCompactionHeaders(headers))
+	}
+
+	legacy := http.Header{}
+	legacy.Set(anthropicStainlessHelperHeader, "compaction")
+	require.Equal(t, claudeCodeCompactionLegacy, ClaudeCodeCompactionRequestKind(legacy))
+	require.True(t, IsClaudeCodeCompactionHeaders(legacy))
+
+	unknown := http.Header{}
+	unknown.Set(claudeCodeCompactionRequestHeader, "private-future-value")
+	require.Equal(t, claudeCodeCompactionOther, ClaudeCodeCompactionRequestKind(unknown))
+	require.False(t, IsClaudeCodeCompactionHeaders(unknown))
+	require.Equal(t, claudeCodeCompactionOther, safeHeaderValueForLog(claudeCodeCompactionRequestHeader, "private-future-value"))
+	require.NotContains(t, safeHeaderValueForLog(claudeCodeCompactionRequestHeader, "private-future-value"), "private-future-value")
+
+	unknown.Set(anthropicStainlessHelperHeader, "compaction")
+	require.Equal(t, claudeCodeCompactionLegacy, ClaudeCodeCompactionRequestKind(unknown))
+	require.True(t, IsClaudeCodeCompactionHeaders(unknown))
+}

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -1254,12 +1255,23 @@ func TestNianzsMessagesPreflightContextLimitSignalsCompactionBeforeUpstream(t *t
 	gin.SetMode(gin.TestMode)
 	historicalSignature := strings.Repeat("N43QRR", 270_000)
 
-	for _, stream := range []bool{false, true} {
-		t.Run(fmt.Sprintf("stream_%t", stream), func(t *testing.T) {
+	for _, test := range []struct {
+		name                string
+		stream              bool
+		headerName          string
+		headerValue         string
+		wantCompactionKind  string
+		wantNativeNonStream bool
+	}{
+		{name: "ordinary_stream", stream: true},
+		{name: "new_reactive_stream", stream: true, headerName: claudeCodeCompactionRequestHeader, headerValue: claudeCodeCompactionReactive, wantCompactionKind: claudeCodeCompactionReactive},
+		{name: "new_auto_nonstream", stream: false, headerName: claudeCodeCompactionRequestHeader, headerValue: claudeCodeCompactionAuto, wantCompactionKind: claudeCodeCompactionAuto, wantNativeNonStream: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			body, err := json.Marshal(map[string]any{
 				"model":      "claude-opus-5",
 				"max_tokens": 32_000,
-				"stream":     stream,
+				"stream":     test.stream,
 				"messages": []any{
 					map[string]any{"role": "user", "content": "start"},
 					map[string]any{"role": "assistant", "content": []any{
@@ -1278,18 +1290,38 @@ func TestNianzsMessagesPreflightContextLimitSignalsCompactionBeforeUpstream(t *t
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+			if test.headerName != "" {
+				c.Request.Header.Set(test.headerName, test.headerValue)
+			}
+			requestCtx := SetClaudeCodeClient(context.Background(), test.wantCompactionKind != "")
 
-			result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+			result, forwardErr := svc.Forward(requestCtx, c, account, parsed)
 
 			require.Nil(t, result)
 			var contextErr *nianzskiro.ContextLimitError
 			require.ErrorAs(t, forwardErr, &contextErr)
 			require.Equal(t, nianzsKiroAnthropicContextLimitReason, contextErr.Reason)
+			require.Equal(t, estimatedInput+32_000, contextErr.ActualTokens)
+			require.Equal(t, 1_000_000, contextErr.LimitTokens)
 			require.Equal(t, http.StatusBadRequest, recorder.Code)
 			require.Equal(t, "invalid_request_error", gjson.Get(recorder.Body.String(), "error.type").String())
-			require.Equal(t, "prompt is too long", gjson.Get(recorder.Body.String(), "error.message").String())
+			clientMessage := gjson.Get(recorder.Body.String(), "error.message").String()
+			require.Equal(t, fmt.Sprintf("prompt is too long: %d tokens > 1000000 maximum", estimatedInput+32_000), clientMessage)
+			require.True(t, regexp.MustCompile(`(?i)prompt is too long[^0-9]*(\d+)\s*tokens?\s*>\s*(\d+)`).MatchString(clientMessage), "Claude must be able to parse the exact token gap")
 			require.Empty(t, upstream.requests, "Anthropic-side context overflow must fail before the Kiro payload is built or sent")
 			require.True(t, HasOpsClientBusinessLimitedReason(c, OpsClientBusinessLimitedReasonContextLimit))
+
+			rawEvents, ok := c.Get(OpsUpstreamErrorsKey)
+			require.True(t, ok)
+			events := rawEvents.([]*OpsUpstreamErrorEvent)
+			require.Len(t, events, 1)
+			require.NotNil(t, events[0].ClientStream)
+			require.NotNil(t, events[0].UpstreamStream)
+			require.Equal(t, test.stream, *events[0].ClientStream)
+			require.Equal(t, test.stream, *events[0].UpstreamStream)
+			require.Equal(t, test.wantCompactionKind, events[0].AnthropicCompactionKind)
+			require.Equal(t, test.wantNativeNonStream, events[0].NativeHelperNonStream)
+			require.Equal(t, test.wantNativeNonStream, events[0].NativeNonStream)
 		})
 	}
 }

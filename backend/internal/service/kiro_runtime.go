@@ -1071,6 +1071,8 @@ func kiroContextLimitResponseStarted(err error) bool {
 func (s *GatewayService) handleKiroContextLimitError(c *gin.Context, account *Account, err error) bool {
 	var contextErr *kiropkg.ContextLimitError
 	reason := ""
+	actualTokens := 0
+	limitTokens := 0
 	if errors.As(err, &contextErr) {
 		reason = contextErr.Reason
 	} else {
@@ -1079,12 +1081,17 @@ func (s *GatewayService) handleKiroContextLimitError(c *gin.Context, account *Ac
 			return false
 		}
 		reason = nianzsContextErr.Reason
+		actualTokens = nianzsContextErr.ActualTokens
+		limitTokens = nianzsContextErr.LimitTokens
 	}
 	if c == nil {
 		return false
 	}
 
-	const clientMessage = "prompt is too long"
+	clientMessage := "prompt is too long"
+	if actualTokens > limitTokens && limitTokens > 0 {
+		clientMessage = fmt.Sprintf("prompt is too long: %d tokens > %d maximum", actualTokens, limitTokens)
+	}
 	MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonContextLimit)
 	setOpsUpstreamError(c, http.StatusBadRequest, clientMessage, "")
 	accountID := int64(0)
@@ -1098,6 +1105,9 @@ func (s *GatewayService) handleKiroContextLimitError(c *gin.Context, account *Ac
 	detail := ""
 	if reason = strings.TrimSpace(reason); reason != "" {
 		detail = "reason=" + reason
+	}
+	if actualTokens > limitTokens && limitTokens > 0 {
+		detail = strings.TrimSpace(fmt.Sprintf("%s actual_tokens=%d limit_tokens=%d", detail, actualTokens, limitTokens))
 	}
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 		Platform:           platform,

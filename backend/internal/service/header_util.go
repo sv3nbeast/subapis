@@ -16,16 +16,18 @@ var headerWireCasing = map[string]string{
 	"user-agent": "User-Agent",
 
 	// X-Stainless-* 保持 SDK 原始大小写
-	"x-stainless-retry-count":     "X-Stainless-Retry-Count",
-	"x-stainless-timeout":         "X-Stainless-Timeout",
-	"x-stainless-lang":            "X-Stainless-Lang",
-	"x-stainless-package-version": "X-Stainless-Package-Version",
-	"x-stainless-os":              "X-Stainless-OS",
-	"x-stainless-arch":            "X-Stainless-Arch",
-	"x-stainless-runtime":         "X-Stainless-Runtime",
-	"x-stainless-runtime-version": "X-Stainless-Runtime-Version",
-	"x-stainless-helper-method":   "x-stainless-helper-method",
-	"x-stainless-helper":          "x-stainless-helper",
+	"x-stainless-retry-count":         "X-Stainless-Retry-Count",
+	"x-stainless-timeout":             "X-Stainless-Timeout",
+	"x-stainless-lang":                "X-Stainless-Lang",
+	"x-stainless-package-version":     "X-Stainless-Package-Version",
+	"x-stainless-os":                  "X-Stainless-OS",
+	"x-stainless-arch":                "X-Stainless-Arch",
+	"x-stainless-runtime":             "X-Stainless-Runtime",
+	"x-stainless-runtime-version":     "X-Stainless-Runtime-Version",
+	"x-stainless-helper-method":       "x-stainless-helper-method",
+	"x-stainless-helper":              "x-stainless-helper",
+	claudeCodeCompactionRequestHeader: "x-cc-compaction-request",
+	claudeCodeContextCompactedHeader:  "x-cc-context-compacted",
 
 	// Anthropic SDK 自身设置的 header，全小写
 	"anthropic-dangerous-direct-browser-access": "anthropic-dangerous-direct-browser-access",
@@ -71,6 +73,8 @@ var headerWireOrder = []string{
 	"content-length",
 	"x-stainless-helper-method",
 	"x-stainless-helper",
+	"x-cc-compaction-request",
+	"x-cc-context-compacted",
 }
 
 // headerWireOrderSet 用于快速判断某个 key 是否在 headerWireOrder 中（按 lowercase 匹配）。

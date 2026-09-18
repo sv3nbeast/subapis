@@ -361,6 +361,8 @@ func safeHeaderValueForLog(key string, v string) string {
 		// Persist only the request class needed for diagnostics, never arbitrary
 		// client-provided helper values.
 		return classifyAnthropicStainlessHelper(v)
+	case claudeCodeCompactionRequestHeader, claudeCodeContextCompactedHeader:
+		return classifyClaudeCodeCompactionRequest(v)
 	default:
 		return strings.TrimSpace(v)
 	}
@@ -394,7 +396,7 @@ func anthropicNativeNonStreamKind(ctx context.Context, c *gin.Context, account *
 	if clientStream || c == nil || account == nil || !account.IsAnthropicOAuthOrSetupToken() || !IsClaudeCodeClient(ctx) {
 		return ""
 	}
-	if classifyAnthropicStainlessHelper(c.GetHeader(anthropicStainlessHelperHeader)) == anthropicStainlessHelperCompaction {
+	if IsClaudeCodeCompactionHeaders(c.Request.Header) {
 		return anthropicNativeNonStreamCompaction
 	}
 	if IsClaudeCodeAgentClassifierRequest(body) {
@@ -458,6 +460,8 @@ func buildClaudeMimicDebugLine(req *http.Request, body []byte, account *Account,
 		"accept",
 		"x-stainless-helper-method",
 		"x-stainless-helper",
+		claudeCodeCompactionRequestHeader,
+		claudeCodeContextCompactedHeader,
 	}
 
 	h := make([]string, 0, len(interesting))
@@ -561,6 +565,8 @@ var allowedHeaders = map[string]bool{
 	"x-stainless-runtime-version":               true,
 	"x-stainless-helper-method":                 true,
 	"x-stainless-helper":                        true,
+	claudeCodeCompactionRequestHeader:           true,
+	claudeCodeContextCompactedHeader:            true,
 	"anthropic-dangerous-direct-browser-access": true,
 	"anthropic-version":                         true,
 	"x-app":                                     true,
@@ -7342,15 +7348,18 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 	}
 	helperKind := ""
+	compactionKind := ""
 	if c != nil {
 		helperKind = classifyAnthropicStainlessHelper(c.GetHeader(anthropicStainlessHelperHeader))
-		setOpsAnthropicRequestShape(c, clientStream, reqStream, helperKind, nativeNonStreamKind)
+		compactionKind = ClaudeCodeCompactionRequestKind(c.Request.Header)
+		setOpsAnthropicRequestShapeWithCompaction(c, clientStream, reqStream, helperKind, nativeNonStreamKind, compactionKind)
 	}
 	if !clientStream {
 		slog.InfoContext(ctx, "gateway.anthropic_nonstream_shape",
 			"client_stream", clientStream,
 			"upstream_stream", reqStream,
 			"helper_kind", helperKind,
+			"compaction_kind", compactionKind,
 			"native_nonstream_kind", nativeNonStreamKind,
 		)
 	}
@@ -7364,6 +7373,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			"client_stream":         strconv.FormatBool(clientStream),
 			"upstream_stream":       strconv.FormatBool(reqStream),
 			"helper_kind":           helperKind,
+			"compaction_kind":       compactionKind,
 			"native_nonstream_kind": nativeNonStreamKind,
 			"user_id":               strconv.FormatInt(s.ginUserIDForDebug(c), 10),
 		})
