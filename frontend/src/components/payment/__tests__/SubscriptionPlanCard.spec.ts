@@ -78,6 +78,22 @@ describe("SubscriptionPlanCard", () => {
     expect(text).toContain("50%");
   });
 
+  it("shows shared model quota shares", () => {
+    const text = mountPlanCard("anthropic", {
+      model_quota_ratios: {},
+      model_quota_groups: [{
+        id: "fable-shared",
+        name: "Fable shared",
+        models: ["claude-fable-5", "claude-fable-5-1"],
+        ratio: 0.5,
+      }],
+    }).text();
+
+    expect(text).toContain("Fable shared");
+    expect(text).toContain("claude-fable-5 + claude-fable-5-1");
+    expect(text).toContain("50%");
+  });
+
   it("shows every included bonus subscription and its quota", () => {
     const text = mountPlanCard("composite", {
       bonus_group_ids: [36],

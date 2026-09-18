@@ -44,7 +44,7 @@ func TestBillingCacheUpdateSubscriptionUsageForModelConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- cache.UpdateSubscriptionUsageForModel(ctx, 1, 2, 0.1, "claude-fable-5")
+			errs <- cache.UpdateSubscriptionUsageForModel(ctx, 1, 2, 0.1, "group:fable-5-shared")
 		}()
 	}
 	wg.Wait()
@@ -58,9 +58,9 @@ func TestBillingCacheUpdateSubscriptionUsageForModelConcurrent(t *testing.T) {
 	require.InDelta(t, 2, got.DailyUsage, 1e-9)
 	require.InDelta(t, 2, got.WeeklyUsage, 1e-9)
 	require.InDelta(t, 2, got.MonthlyUsage, 1e-9)
-	require.InDelta(t, 2, got.ModelUsage["claude-fable-5"].DailyUsageUSD, 1e-9)
-	require.InDelta(t, 2, got.ModelUsage["claude-fable-5"].WeeklyUsageUSD, 1e-9)
-	require.InDelta(t, 2, got.ModelUsage["claude-fable-5"].MonthlyUsageUSD, 1e-9)
+	require.InDelta(t, 2, got.ModelUsage["group:fable-5-shared"].DailyUsageUSD, 1e-9)
+	require.InDelta(t, 2, got.ModelUsage["group:fable-5-shared"].WeeklyUsageUSD, 1e-9)
+	require.InDelta(t, 2, got.ModelUsage["group:fable-5-shared"].MonthlyUsageUSD, 1e-9)
 }
 
 func TestBillingCacheRejectsLegacySubscriptionSchema(t *testing.T) {

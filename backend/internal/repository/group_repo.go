@@ -77,6 +77,7 @@ func createGroupRecord(ctx context.Context, client *dbent.Client, groupIn *servi
 		SetNillableWeeklyLimitUsd(groupIn.WeeklyLimitUSD).
 		SetNillableMonthlyLimitUsd(groupIn.MonthlyLimitUSD).
 		SetModelQuotaRatios(nonNilModelQuotaRatios(groupIn.ModelQuotaRatios)).
+		SetModelQuotaGroups(nonNilModelQuotaGroups(groupIn.ModelQuotaGroups)).
 		SetAllowImageGeneration(groupIn.AllowImageGeneration).
 		SetAllowBatchImageGeneration(groupIn.AllowBatchImageGeneration).
 		SetImageRateIndependent(groupIn.ImageRateIndependent).
@@ -264,6 +265,7 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetNillableWeeklyLimitUsd(groupIn.WeeklyLimitUSD).
 		SetNillableMonthlyLimitUsd(groupIn.MonthlyLimitUSD).
 		SetModelQuotaRatios(nonNilModelQuotaRatios(groupIn.ModelQuotaRatios)).
+		SetModelQuotaGroups(nonNilModelQuotaGroups(groupIn.ModelQuotaGroups)).
 		SetAllowImageGeneration(groupIn.AllowImageGeneration).
 		SetAllowBatchImageGeneration(groupIn.AllowBatchImageGeneration).
 		SetImageRateIndependent(groupIn.ImageRateIndependent).
@@ -921,6 +923,13 @@ func nonNilModelQuotaRatios(ratios map[string]float64) map[string]float64 {
 		return map[string]float64{}
 	}
 	return ratios
+}
+
+func nonNilModelQuotaGroups(groups []service.SubscriptionModelQuotaGroup) []service.SubscriptionModelQuotaGroup {
+	if groups == nil {
+		return []service.SubscriptionModelQuotaGroup{}
+	}
+	return groups
 }
 
 type groupAccountCounts struct {

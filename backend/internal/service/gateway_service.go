@@ -12138,11 +12138,11 @@ func (p *postUsageBillingParams) subscriptionQuotaModel() string {
 	if p == nil || p.APIKey == nil || p.APIKey.Group == nil {
 		return ""
 	}
-	model, _, ok := MatchSubscriptionModelQuota(p.APIKey.Group.ModelQuotaRatios, p.RequestedModel)
+	match, ok := MatchSubscriptionQuotaRule(p.APIKey.Group.ModelQuotaGroups, p.APIKey.Group.ModelQuotaRatios, p.RequestedModel)
 	if !ok {
 		return ""
 	}
-	return model
+	return match.UsageKey
 }
 
 // PlatformFromAPIKey derives the quota platform from the API key's group.

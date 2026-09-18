@@ -98,6 +98,10 @@ func (Group) Fields() []ent.Field {
 			Default(map[string]float64{}).
 			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
 			Comment("订阅模型额度占比：规范模型ID -> 0到1之间的额度比例"),
+		field.JSON("model_quota_groups", []domain.SubscriptionModelQuotaGroup{}).
+			Default([]domain.SubscriptionModelQuotaGroup{}).
+			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
+			Comment("订阅共享模型额度组：多个明确模型ID共用一个额度比例"),
 		field.Int("default_validity_days").
 			Default(30),
 

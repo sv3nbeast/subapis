@@ -54,6 +54,8 @@ const (
 	FieldMonthlyLimitUsd = "monthly_limit_usd"
 	// FieldModelQuotaRatios holds the string denoting the model_quota_ratios field in the database.
 	FieldModelQuotaRatios = "model_quota_ratios"
+	// FieldModelQuotaGroups holds the string denoting the model_quota_groups field in the database.
+	FieldModelQuotaGroups = "model_quota_groups"
 	// FieldDefaultValidityDays holds the string denoting the default_validity_days field in the database.
 	FieldDefaultValidityDays = "default_validity_days"
 	// FieldAllowImageGeneration holds the string denoting the allow_image_generation field in the database.
@@ -270,6 +272,7 @@ var Columns = []string{
 	FieldWeeklyLimitUsd,
 	FieldMonthlyLimitUsd,
 	FieldModelQuotaRatios,
+	FieldModelQuotaGroups,
 	FieldDefaultValidityDays,
 	FieldAllowImageGeneration,
 	FieldAllowBatchImageGeneration,
@@ -400,6 +403,8 @@ var (
 	SubscriptionTypeValidator func(string) error
 	// DefaultModelQuotaRatios holds the default value on creation for the "model_quota_ratios" field.
 	DefaultModelQuotaRatios map[string]float64
+	// DefaultModelQuotaGroups holds the default value on creation for the "model_quota_groups" field.
+	DefaultModelQuotaGroups []domain.SubscriptionModelQuotaGroup
 	// DefaultDefaultValidityDays holds the default value on creation for the "default_validity_days" field.
 	DefaultDefaultValidityDays int
 	// DefaultAllowImageGeneration holds the default value on creation for the "allow_image_generation" field.

@@ -32,6 +32,34 @@ func TestNormalizeSubscriptionModelQuotaRatiosRejectsInvalidValues(t *testing.T)
 	require.Error(t, err)
 }
 
+func TestNormalizeSubscriptionModelQuotaGroups(t *testing.T) {
+	groups, err := NormalizeSubscriptionModelQuotaGroups(SubscriptionTypeSubscription, []SubscriptionModelQuotaGroup{{
+		ID:     " Fable-Shared ",
+		Name:   "Claude Fable shared",
+		Models: []string{"Claude_Fable-5-1", " claude-fable-5 "},
+		Ratio:  0.5,
+	}}, nil)
+	require.NoError(t, err)
+	require.Equal(t, []SubscriptionModelQuotaGroup{{
+		ID:     "fable-shared",
+		Name:   "Claude Fable shared",
+		Models: []string{"claude-fable-5", "claude-fable-5-1"},
+		Ratio:  0.5,
+	}}, groups)
+}
+
+func TestNormalizeSubscriptionModelQuotaGroupsRejectsOverlaps(t *testing.T) {
+	groups := []SubscriptionModelQuotaGroup{
+		{ID: "one", Name: "One", Models: []string{"claude-fable-5", "claude-fable-5-1"}, Ratio: 0.5},
+		{ID: "two", Name: "Two", Models: []string{"claude-fable-5-1", "claude-sonnet-5"}, Ratio: 0.5},
+	}
+	_, err := NormalizeSubscriptionModelQuotaGroups(SubscriptionTypeSubscription, groups, nil)
+	require.Error(t, err)
+
+	_, err = NormalizeSubscriptionModelQuotaGroups(SubscriptionTypeSubscription, groups[:1], map[string]float64{"claude-fable": 0.5})
+	require.Error(t, err)
+}
+
 func TestValidateSubscriptionModelQuotaBase(t *testing.T) {
 	rules := map[string]float64{"claude-fable-5": 0.5}
 	require.Error(t, ValidateSubscriptionModelQuotaBase(rules, nil, nil, nil))
@@ -85,6 +113,50 @@ func TestCheckSubscriptionModelQuotaRejectsOnlyConfiguredModelAtLimit(t *testing
 
 	ctx = context.WithValue(context.Background(), ctxkey.Model, "claude-sonnet-5")
 	require.NoError(t, checkSubscriptionModelQuota(ctx, group, sub, usage))
+}
+
+func TestSharedSubscriptionModelQuotaRejectsBothModelsAtCombinedLimit(t *testing.T) {
+	now := time.Now()
+	dailyStart := now.Add(-time.Hour)
+	dailyLimit := 10.0
+	quotaGroup := SubscriptionModelQuotaGroup{
+		ID: "fable-5-shared", Name: "Claude Fable 5 + 5.1",
+		Models: []string{"claude-fable-5", "claude-fable-5-1"}, Ratio: 0.5,
+	}
+	group := &Group{
+		SubscriptionType: SubscriptionTypeSubscription,
+		DailyLimitUSD:    &dailyLimit, ModelQuotaGroups: []SubscriptionModelQuotaGroup{quotaGroup},
+	}
+	subscription := &UserSubscription{
+		StartsAt: now.Add(-24 * time.Hour), ExpiresAt: now.Add(30 * 24 * time.Hour), DailyWindowStart: &dailyStart,
+	}
+	usage := map[string]SubscriptionModelUsage{"group:fable-5-shared": {DailyUsageUSD: 5}}
+
+	for _, requestedModel := range append(quotaGroup.Models, "claude-fable-5-thinking", "claude-fable-5-1-thinking") {
+		ctx := context.WithValue(context.Background(), ctxkey.Model, requestedModel)
+		require.ErrorIs(t, checkSubscriptionModelQuota(ctx, group, subscription, usage), ErrSubscriptionModelQuotaExhausted)
+	}
+	ctx := context.WithValue(context.Background(), ctxkey.Model, "claude-fable-5-2")
+	require.NoError(t, checkSubscriptionModelQuota(ctx, group, subscription, usage))
+}
+
+func TestSharedSubscriptionModelQuotaBillsBothModelsToOneBucket(t *testing.T) {
+	groupID := int64(9)
+	subscriptionID := int64(11)
+	group := &Group{ModelQuotaGroups: []SubscriptionModelQuotaGroup{{
+		ID: "fable-5-shared", Name: "Claude Fable 5 + 5.1",
+		Models: []string{"claude-fable-5", "claude-fable-5-1"}, Ratio: 0.5,
+	}}}
+	for _, requestedModel := range []string{"claude-fable-5", "claude-fable-5-1", "claude-fable-5-thinking", "claude-fable-5-1-thinking"} {
+		params := &postUsageBillingParams{
+			Cost: &CostBreakdown{ActualCost: 1}, User: &User{ID: 1},
+			APIKey: &APIKey{ID: 2, GroupID: &groupID, Group: group}, Account: &Account{ID: 3},
+			Subscription: &UserSubscription{ID: subscriptionID}, IsSubscriptionBill: true, RequestedModel: requestedModel,
+		}
+		cmd := buildUsageBillingCommand("req-"+requestedModel, &UsageLog{Model: requestedModel}, params)
+		require.NotNil(t, cmd)
+		require.Equal(t, "group:fable-5-shared", cmd.SubscriptionModel)
+	}
 }
 
 func TestCheckSubscriptionModelQuotaIgnoresExpiredWindowUsage(t *testing.T) {
@@ -173,6 +245,25 @@ func TestSubscriptionModelQuotaSurvivesAuthSnapshotForPreflightAndBilling(t *tes
 	})
 	require.NotNil(t, cmd)
 	require.Equal(t, "claude-fable-5", cmd.SubscriptionModel)
+}
+
+func TestSharedSubscriptionModelQuotaSurvivesAuthSnapshot(t *testing.T) {
+	svc := &APIKeyService{}
+	groupID := int64(10)
+	apiKey := &APIKey{
+		ID: 2, UserID: 1, GroupID: &groupID, Key: "k-shared-model-quota", Status: StatusActive,
+		User: &User{ID: 1, Status: StatusActive, Role: RoleUser},
+		Group: &Group{
+			ID: groupID, Status: StatusActive,
+			ModelQuotaGroups: []SubscriptionModelQuotaGroup{{
+				ID: "fable-5-shared", Name: "Claude Fable 5 + 5.1",
+				Models: []string{"claude-fable-5", "claude-fable-5-1"}, Ratio: 0.5,
+			}},
+		},
+	}
+
+	restored := svc.snapshotToAPIKey(apiKey.Key, svc.snapshotFromAPIKey(context.Background(), apiKey))
+	require.Equal(t, apiKey.Group.ModelQuotaGroups, restored.Group.ModelQuotaGroups)
 }
 
 func TestUsageBillingFingerprintRemainsCompatibleWithExistingDedupRows(t *testing.T) {

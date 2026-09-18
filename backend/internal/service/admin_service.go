@@ -237,6 +237,7 @@ type CreateGroupInput struct {
 	WeeklyLimitUSD            *float64 // 周限额 (USD)
 	MonthlyLimitUSD           *float64 // 月限额 (USD)
 	ModelQuotaRatios          map[string]float64
+	ModelQuotaGroups          []SubscriptionModelQuotaGroup
 	LongContextPricingEnabled bool
 	ModelPricing              []ChannelModelPricing
 	// 图片生成计费配置（antigravity/gemini 平台使用）
@@ -324,6 +325,7 @@ type UpdateGroupInput struct {
 	WeeklyLimitUSD            *float64 // 周限额 (USD)
 	MonthlyLimitUSD           *float64 // 月限额 (USD)
 	ModelQuotaRatios          map[string]float64
+	ModelQuotaGroups          []SubscriptionModelQuotaGroup
 	LongContextPricingEnabled *bool
 	ModelPricing              *[]ChannelModelPricing
 	// 图片生成计费配置（antigravity/gemini 平台使用）
@@ -2363,7 +2365,11 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	if err != nil {
 		return nil, err
 	}
-	if err := ValidateSubscriptionModelQuotaBase(modelQuotaRatios, dailyLimit, weeklyLimit, monthlyLimit); err != nil {
+	modelQuotaGroups, err := NormalizeSubscriptionModelQuotaGroups(subscriptionType, input.ModelQuotaGroups, modelQuotaRatios)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateSubscriptionQuotaRuleBase(len(modelQuotaRatios) > 0 || len(modelQuotaGroups) > 0, dailyLimit, weeklyLimit, monthlyLimit); err != nil {
 		return nil, err
 	}
 
@@ -2513,6 +2519,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		WeeklyLimitUSD:                  weeklyLimit,
 		MonthlyLimitUSD:                 monthlyLimit,
 		ModelQuotaRatios:                modelQuotaRatios,
+		ModelQuotaGroups:                modelQuotaGroups,
 		AllowImageGeneration:            allowImageGeneration,
 		AllowBatchImageGeneration:       allowBatchImageGeneration,
 		ImageRateIndependent:            input.ImageRateIndependent,
@@ -2746,11 +2753,18 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.ModelQuotaRatios != nil {
 		group.ModelQuotaRatios = input.ModelQuotaRatios
 	}
+	if input.ModelQuotaGroups != nil {
+		group.ModelQuotaGroups = input.ModelQuotaGroups
+	}
 	group.ModelQuotaRatios, err = NormalizeSubscriptionModelQuotaRatios(group.SubscriptionType, group.ModelQuotaRatios)
 	if err != nil {
 		return nil, err
 	}
-	if err := ValidateSubscriptionModelQuotaBase(group.ModelQuotaRatios, group.DailyLimitUSD, group.WeeklyLimitUSD, group.MonthlyLimitUSD); err != nil {
+	group.ModelQuotaGroups, err = NormalizeSubscriptionModelQuotaGroups(group.SubscriptionType, group.ModelQuotaGroups, group.ModelQuotaRatios)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateSubscriptionQuotaRuleBase(len(group.ModelQuotaRatios) > 0 || len(group.ModelQuotaGroups) > 0, group.DailyLimitUSD, group.WeeklyLimitUSD, group.MonthlyLimitUSD); err != nil {
 		return nil, err
 	}
 	// 图片生成计费配置：负数表示清除（使用默认价格）

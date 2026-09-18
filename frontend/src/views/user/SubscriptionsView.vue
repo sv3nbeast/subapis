@@ -341,7 +341,7 @@ function getProgressBarClass(used: number | undefined, limit: number | null | un
 function getModelQuotaEntries(subscription: UserSubscription) {
   const group = subscription.group
   if (!group) return []
-  return Object.entries(group.model_quota_ratios || {})
+  const individualEntries = Object.entries(group.model_quota_ratios || {})
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([model, ratio]) => {
       const usage = subscription.model_usage?.[model]
@@ -353,7 +353,21 @@ function getModelQuotaEntries(subscription: UserSubscription) {
         .map(window => ({ ...window, limit: window.limit * ratio }))
       return { model, percent: Number((ratio * 100).toFixed(2)), windows }
     })
-    .filter(entry => entry.windows.length > 0)
+  const sharedEntries = (group.model_quota_groups || []).map(quotaGroup => {
+    const usage = subscription.model_usage?.[`group:${quotaGroup.id}`]
+    const windows = [
+      { label: t('userSubscriptions.daily'), limit: group.daily_limit_usd, used: usage?.daily_usage_usd || 0 },
+      { label: t('userSubscriptions.weekly'), limit: group.weekly_limit_usd, used: usage?.weekly_usage_usd || 0 },
+      { label: t('userSubscriptions.monthly'), limit: group.monthly_limit_usd, used: usage?.monthly_usage_usd || 0 },
+    ].filter((window): window is { label: string; limit: number; used: number } => window.limit != null && window.limit > 0)
+      .map(window => ({ ...window, limit: window.limit * quotaGroup.ratio }))
+    return {
+      model: `${quotaGroup.name} (${quotaGroup.models.join(' + ')})`,
+      percent: Number((quotaGroup.ratio * 100).toFixed(2)),
+      windows,
+    }
+  })
+  return [...individualEntries, ...sharedEntries].filter(entry => entry.windows.length > 0)
 }
 
 function formatExpirationDate(expiresAt: string): string {

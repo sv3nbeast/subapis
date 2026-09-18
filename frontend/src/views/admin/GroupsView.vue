@@ -750,7 +750,7 @@
                 :placeholder="t('admin.groups.subscription.noLimit')"
               />
             </div>
-            <SubscriptionModelQuotaEditor v-model="createForm.model_quota_ratios" />
+            <SubscriptionModelQuotaEditor v-model="createForm.model_quota_ratios" v-model:groups="createForm.model_quota_groups" />
           </div>
         </div>
 
@@ -2618,7 +2618,7 @@
                 :placeholder="t('admin.groups.subscription.noLimit')"
               />
             </div>
-            <SubscriptionModelQuotaEditor v-model="editForm.model_quota_ratios" />
+            <SubscriptionModelQuotaEditor v-model="editForm.model_quota_ratios" v-model:groups="editForm.model_quota_groups" />
           </div>
         </div>
 
@@ -4339,7 +4339,7 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "@/stores/app";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { adminAPI } from "@/api/admin";
-import type { AdminGroup, GroupPlatform, SubscriptionType } from "@/types";
+import type { AdminGroup, GroupPlatform, SubscriptionModelQuotaGroup, SubscriptionType } from "@/types";
 import { GROUP_PLATFORM_OPTIONS } from "@/constants/platforms";
 import type { Column } from "@/components/common/types";
 import AppLayout from "@/components/layout/AppLayout.vue";
@@ -4902,6 +4902,7 @@ const createForm = reactive({
   weekly_limit_usd: null as number | null,
   monthly_limit_usd: null as number | null,
   model_quota_ratios: {} as Record<string, number>,
+  model_quota_groups: [] as SubscriptionModelQuotaGroup[],
   // 图片生成计费配置
   allow_image_generation: false,
   allow_batch_image_generation: false,
@@ -5230,6 +5231,7 @@ const editForm = reactive({
   weekly_limit_usd: null as number | null,
   monthly_limit_usd: null as number | null,
   model_quota_ratios: {} as Record<string, number>,
+  model_quota_groups: [] as SubscriptionModelQuotaGroup[],
   // 图片生成计费配置
   allow_image_generation: false,
   allow_batch_image_generation: false,
@@ -5674,6 +5676,7 @@ const closeCreateModal = () => {
   createForm.weekly_limit_usd = null;
   createForm.monthly_limit_usd = null;
   createForm.model_quota_ratios = {};
+  createForm.model_quota_groups = [];
   createForm.allow_image_generation = false;
   createForm.allow_batch_image_generation = false;
   createForm.image_rate_independent = false;
@@ -5930,6 +5933,10 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.weekly_limit_usd = group.weekly_limit_usd;
   editForm.monthly_limit_usd = group.monthly_limit_usd;
   editForm.model_quota_ratios = { ...(group.model_quota_ratios || {}) };
+  editForm.model_quota_groups = (group.model_quota_groups || []).map(quotaGroup => ({
+    ...quotaGroup,
+    models: [...quotaGroup.models],
+  }));
   editForm.allow_image_generation = group.allow_image_generation ?? false;
   editForm.allow_batch_image_generation = group.allow_batch_image_generation ?? false;
   editForm.image_rate_independent = group.image_rate_independent ?? false;

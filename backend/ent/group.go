@@ -58,6 +58,8 @@ type Group struct {
 	MonthlyLimitUsd *float64 `json:"monthly_limit_usd,omitempty"`
 	// 订阅模型额度占比：规范模型ID -> 0到1之间的额度比例
 	ModelQuotaRatios map[string]float64 `json:"model_quota_ratios,omitempty"`
+	// 订阅共享模型额度组：多个明确模型ID共用一个额度比例
+	ModelQuotaGroups []domain.SubscriptionModelQuotaGroup `json:"model_quota_groups,omitempty"`
 	// DefaultValidityDays holds the value of the "default_validity_days" field.
 	DefaultValidityDays int `json:"default_validity_days,omitempty"`
 	// 是否允许该分组使用图片生成能力
@@ -286,7 +288,7 @@ func (*Group) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case group.FieldModelQuotaRatios, group.FieldVideoModelPrices, group.FieldModelPricing, group.FieldModelRouting, group.FieldSupportedModelScopes, group.FieldMessagesDispatchModelConfig, group.FieldModelsListConfig, group.FieldReasoningEffortMappings:
+		case group.FieldModelQuotaRatios, group.FieldModelQuotaGroups, group.FieldVideoModelPrices, group.FieldModelPricing, group.FieldModelRouting, group.FieldSupportedModelScopes, group.FieldMessagesDispatchModelConfig, group.FieldModelsListConfig, group.FieldReasoningEffortMappings:
 			values[i] = new([]byte)
 		case group.FieldPeakRateEnabled, group.FieldIsExclusive, group.FieldAllowImageGeneration, group.FieldAllowBatchImageGeneration, group.FieldImageRateIndependent, group.FieldVideoRateIndependent, group.FieldLongContextPricingEnabled, group.FieldClaudeCodeOnly, group.FieldModelRoutingEnabled, group.FieldMcpXMLInject, group.FieldAllowMessagesDispatch, group.FieldAllowLive, group.FieldForceOpenaiFast, group.FieldFreeOpenaiFast, group.FieldAllowNonStreamMessages, group.FieldRequireOauthOnly, group.FieldRequirePrivacySet, group.FieldKiroCacheEmulationEnabled, group.FieldKiroAutoStickyEnabled, group.FieldKiroAnthropicFallbackEnabled, group.FieldProfitControlEnabled:
 			values[i] = new(sql.NullBool)
@@ -439,6 +441,14 @@ func (_m *Group) assignValues(columns []string, values []any) error {
 			} else if value != nil && len(*value) > 0 {
 				if err := json.Unmarshal(*value, &_m.ModelQuotaRatios); err != nil {
 					return fmt.Errorf("unmarshal field model_quota_ratios: %w", err)
+				}
+			}
+		case group.FieldModelQuotaGroups:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field model_quota_groups", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.ModelQuotaGroups); err != nil {
+					return fmt.Errorf("unmarshal field model_quota_groups: %w", err)
 				}
 			}
 		case group.FieldDefaultValidityDays:
@@ -978,6 +988,9 @@ func (_m *Group) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("model_quota_ratios=")
 	builder.WriteString(fmt.Sprintf("%v", _m.ModelQuotaRatios))
+	builder.WriteString(", ")
+	builder.WriteString("model_quota_groups=")
+	builder.WriteString(fmt.Sprintf("%v", _m.ModelQuotaGroups))
 	builder.WriteString(", ")
 	builder.WriteString("default_validity_days=")
 	builder.WriteString(fmt.Sprintf("%v", _m.DefaultValidityDays))

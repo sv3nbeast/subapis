@@ -34,6 +34,10 @@
             <span class="truncate text-gray-500">{{ entry[0] }}</span>
             <span class="font-medium text-gray-700 dark:text-gray-300">{{ Number((entry[1] * 100).toFixed(2)) }}%</span>
           </div>
+          <div v-for="quotaGroup in selectedGroupInfo.model_quota_groups || []" :key="quotaGroup.id" class="col-span-2 flex items-center justify-between gap-2">
+            <span class="truncate text-gray-500">{{ quotaGroup.name }} ({{ quotaGroup.models.join(' + ') }})</span>
+            <span class="font-medium text-gray-700 dark:text-gray-300">{{ Number((quotaGroup.ratio * 100).toFixed(2)) }}%</span>
+          </div>
         </div>
       </div>
 

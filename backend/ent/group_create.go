@@ -280,6 +280,12 @@ func (_c *GroupCreate) SetModelQuotaRatios(v map[string]float64) *GroupCreate {
 	return _c
 }
 
+// SetModelQuotaGroups sets the "model_quota_groups" field.
+func (_c *GroupCreate) SetModelQuotaGroups(v []domain.SubscriptionModelQuotaGroup) *GroupCreate {
+	_c.mutation.SetModelQuotaGroups(v)
+	return _c
+}
+
 // SetDefaultValidityDays sets the "default_validity_days" field.
 func (_c *GroupCreate) SetDefaultValidityDays(v int) *GroupCreate {
 	_c.mutation.SetDefaultValidityDays(v)
@@ -1275,6 +1281,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultModelQuotaRatios
 		_c.mutation.SetModelQuotaRatios(v)
 	}
+	if _, ok := _c.mutation.ModelQuotaGroups(); !ok {
+		v := group.DefaultModelQuotaGroups
+		_c.mutation.SetModelQuotaGroups(v)
+	}
 	if _, ok := _c.mutation.DefaultValidityDays(); !ok {
 		v := group.DefaultDefaultValidityDays
 		_c.mutation.SetDefaultValidityDays(v)
@@ -1533,6 +1543,9 @@ func (_c *GroupCreate) check() error {
 	}
 	if _, ok := _c.mutation.ModelQuotaRatios(); !ok {
 		return &ValidationError{Name: "model_quota_ratios", err: errors.New(`ent: missing required field "Group.model_quota_ratios"`)}
+	}
+	if _, ok := _c.mutation.ModelQuotaGroups(); !ok {
+		return &ValidationError{Name: "model_quota_groups", err: errors.New(`ent: missing required field "Group.model_quota_groups"`)}
 	}
 	if _, ok := _c.mutation.DefaultValidityDays(); !ok {
 		return &ValidationError{Name: "default_validity_days", err: errors.New(`ent: missing required field "Group.default_validity_days"`)}
@@ -1821,6 +1834,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ModelQuotaRatios(); ok {
 		_spec.SetField(group.FieldModelQuotaRatios, field.TypeJSON, value)
 		_node.ModelQuotaRatios = value
+	}
+	if value, ok := _c.mutation.ModelQuotaGroups(); ok {
+		_spec.SetField(group.FieldModelQuotaGroups, field.TypeJSON, value)
+		_node.ModelQuotaGroups = value
 	}
 	if value, ok := _c.mutation.DefaultValidityDays(); ok {
 		_spec.SetField(group.FieldDefaultValidityDays, field.TypeInt, value)
@@ -2483,6 +2500,18 @@ func (u *GroupUpsert) SetModelQuotaRatios(v map[string]float64) *GroupUpsert {
 // UpdateModelQuotaRatios sets the "model_quota_ratios" field to the value that was provided on create.
 func (u *GroupUpsert) UpdateModelQuotaRatios() *GroupUpsert {
 	u.SetExcluded(group.FieldModelQuotaRatios)
+	return u
+}
+
+// SetModelQuotaGroups sets the "model_quota_groups" field.
+func (u *GroupUpsert) SetModelQuotaGroups(v []domain.SubscriptionModelQuotaGroup) *GroupUpsert {
+	u.Set(group.FieldModelQuotaGroups, v)
+	return u
+}
+
+// UpdateModelQuotaGroups sets the "model_quota_groups" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateModelQuotaGroups() *GroupUpsert {
+	u.SetExcluded(group.FieldModelQuotaGroups)
 	return u
 }
 
@@ -3841,6 +3870,20 @@ func (u *GroupUpsertOne) SetModelQuotaRatios(v map[string]float64) *GroupUpsertO
 func (u *GroupUpsertOne) UpdateModelQuotaRatios() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateModelQuotaRatios()
+	})
+}
+
+// SetModelQuotaGroups sets the "model_quota_groups" field.
+func (u *GroupUpsertOne) SetModelQuotaGroups(v []domain.SubscriptionModelQuotaGroup) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetModelQuotaGroups(v)
+	})
+}
+
+// UpdateModelQuotaGroups sets the "model_quota_groups" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateModelQuotaGroups() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateModelQuotaGroups()
 	})
 }
 
@@ -5532,6 +5575,20 @@ func (u *GroupUpsertBulk) SetModelQuotaRatios(v map[string]float64) *GroupUpsert
 func (u *GroupUpsertBulk) UpdateModelQuotaRatios() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateModelQuotaRatios()
+	})
+}
+
+// SetModelQuotaGroups sets the "model_quota_groups" field.
+func (u *GroupUpsertBulk) SetModelQuotaGroups(v []domain.SubscriptionModelQuotaGroup) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetModelQuotaGroups(v)
+	})
+}
+
+// UpdateModelQuotaGroups sets the "model_quota_groups" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateModelQuotaGroups() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateModelQuotaGroups()
 	})
 }
 

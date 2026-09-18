@@ -233,6 +233,7 @@ export interface SubscriptionPlan {
   weekly_limit_usd?: number | null
   monthly_limit_usd?: number | null
   model_quota_ratios?: Record<string, number>
+  model_quota_groups?: import('./index').SubscriptionModelQuotaGroup[]
   supported_model_scopes?: string[]
   name: string
   description: string

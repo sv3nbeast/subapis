@@ -405,6 +405,7 @@ func TestAPIContracts(t *testing.T) {
 						"max_reasoning_effort": "",
 						"max_reasoning_effort_over_limit": "",
 						"model_quota_ratios": null,
+						"model_quota_groups": null,
 						"reasoning_effort_mappings": null,
 						"fallback_group_id": null,
 						"fallback_group_id_on_invalid_request": null,

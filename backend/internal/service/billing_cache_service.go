@@ -1099,15 +1099,15 @@ func (s *BillingCacheService) checkSubscriptionEligibility(ctx context.Context, 
 }
 
 func checkSubscriptionModelQuota(ctx context.Context, group *Group, subscription *UserSubscription, cachedUsage map[string]SubscriptionModelUsage) error {
-	if group == nil || subscription == nil || len(group.ModelQuotaRatios) == 0 {
+	if group == nil || subscription == nil || (len(group.ModelQuotaRatios) == 0 && len(group.ModelQuotaGroups) == 0) {
 		return nil
 	}
 	requestedModel, _ := ctx.Value(ctxkey.Model).(string)
-	model, ratio, ok := MatchSubscriptionModelQuota(group.ModelQuotaRatios, requestedModel)
+	match, ok := MatchSubscriptionQuotaRule(group.ModelQuotaGroups, group.ModelQuotaRatios, requestedModel)
 	if !ok {
 		return nil
 	}
-	usage := cachedUsage[model]
+	usage := cachedUsage[match.UsageKey]
 	now := time.Now()
 	if subscription.NeedsQuotaCycleResetAt(now) {
 		usage = SubscriptionModelUsage{}
@@ -1123,14 +1123,14 @@ func checkSubscriptionModelQuota(ctx context.Context, group *Group, subscription
 		}
 	}
 
-	if group.HasDailyLimit() && usage.DailyUsageUSD >= *group.DailyLimitUSD*ratio {
-		return subscriptionModelQuotaError(model, "daily", subscription.DailyResetTime(), now.Add(24*time.Hour))
+	if group.HasDailyLimit() && usage.DailyUsageUSD >= *group.DailyLimitUSD*match.Ratio {
+		return subscriptionModelQuotaError(match.Label, "daily", subscription.DailyResetTime(), now.Add(24*time.Hour))
 	}
-	if group.HasWeeklyLimit() && usage.WeeklyUsageUSD >= *group.WeeklyLimitUSD*ratio {
-		return subscriptionModelQuotaError(model, "weekly", subscription.WeeklyResetTime(), now.Add(7*24*time.Hour))
+	if group.HasWeeklyLimit() && usage.WeeklyUsageUSD >= *group.WeeklyLimitUSD*match.Ratio {
+		return subscriptionModelQuotaError(match.Label, "weekly", subscription.WeeklyResetTime(), now.Add(7*24*time.Hour))
 	}
-	if group.HasMonthlyLimit() && usage.MonthlyUsageUSD >= *group.MonthlyLimitUSD*ratio {
-		return subscriptionModelQuotaError(model, "monthly", subscription.MonthlyResetTime(), now.Add(30*24*time.Hour))
+	if group.HasMonthlyLimit() && usage.MonthlyUsageUSD >= *group.MonthlyLimitUSD*match.Ratio {
+		return subscriptionModelQuotaError(match.Label, "monthly", subscription.MonthlyResetTime(), now.Add(30*24*time.Hour))
 	}
 	return nil
 }

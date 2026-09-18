@@ -3065,6 +3065,9 @@ const baseMessages = {
         monthlyLimit: 'Monthly Limit (USD)',
         modelQuota: 'Model quota share',
         addModelQuota: 'Add model',
+        sharedModelQuota: 'Shared model quota',
+        addSharedModelQuota: 'Add shared group',
+        sharedModelQuotaName: 'Shared group name',
         defaultValidityDays: 'Default Validity (Days)',
         validityHint: 'Number of days the subscription is valid when assigned to a user',
         noLimit: 'No limit'

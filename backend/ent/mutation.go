@@ -22217,6 +22217,8 @@ type GroupMutation struct {
 	monthly_limit_usd                                         *float64
 	addmonthly_limit_usd                                      *float64
 	model_quota_ratios                                        *map[string]float64
+	model_quota_groups                                        *[]domain.SubscriptionModelQuotaGroup
+	appendmodel_quota_groups                                  []domain.SubscriptionModelQuotaGroup
 	default_validity_days                                     *int
 	adddefault_validity_days                                  *int
 	allow_image_generation                                    *bool
@@ -23295,6 +23297,57 @@ func (m *GroupMutation) OldModelQuotaRatios(ctx context.Context) (v map[string]f
 // ResetModelQuotaRatios resets all changes to the "model_quota_ratios" field.
 func (m *GroupMutation) ResetModelQuotaRatios() {
 	m.model_quota_ratios = nil
+}
+
+// SetModelQuotaGroups sets the "model_quota_groups" field.
+func (m *GroupMutation) SetModelQuotaGroups(dmqg []domain.SubscriptionModelQuotaGroup) {
+	m.model_quota_groups = &dmqg
+	m.appendmodel_quota_groups = nil
+}
+
+// ModelQuotaGroups returns the value of the "model_quota_groups" field in the mutation.
+func (m *GroupMutation) ModelQuotaGroups() (r []domain.SubscriptionModelQuotaGroup, exists bool) {
+	v := m.model_quota_groups
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldModelQuotaGroups returns the old "model_quota_groups" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldModelQuotaGroups(ctx context.Context) (v []domain.SubscriptionModelQuotaGroup, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldModelQuotaGroups is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldModelQuotaGroups requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldModelQuotaGroups: %w", err)
+	}
+	return oldValue.ModelQuotaGroups, nil
+}
+
+// AppendModelQuotaGroups adds dmqg to the "model_quota_groups" field.
+func (m *GroupMutation) AppendModelQuotaGroups(dmqg []domain.SubscriptionModelQuotaGroup) {
+	m.appendmodel_quota_groups = append(m.appendmodel_quota_groups, dmqg...)
+}
+
+// AppendedModelQuotaGroups returns the list of values that were appended to the "model_quota_groups" field in this mutation.
+func (m *GroupMutation) AppendedModelQuotaGroups() ([]domain.SubscriptionModelQuotaGroup, bool) {
+	if len(m.appendmodel_quota_groups) == 0 {
+		return nil, false
+	}
+	return m.appendmodel_quota_groups, true
+}
+
+// ResetModelQuotaGroups resets all changes to the "model_quota_groups" field.
+func (m *GroupMutation) ResetModelQuotaGroups() {
+	m.model_quota_groups = nil
+	m.appendmodel_quota_groups = nil
 }
 
 // SetDefaultValidityDays sets the "default_validity_days" field.
@@ -26698,7 +26751,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 80)
+	fields := make([]string, 0, 81)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -26755,6 +26808,9 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.model_quota_ratios != nil {
 		fields = append(fields, group.FieldModelQuotaRatios)
+	}
+	if m.model_quota_groups != nil {
+		fields = append(fields, group.FieldModelQuotaGroups)
 	}
 	if m.default_validity_days != nil {
 		fields = append(fields, group.FieldDefaultValidityDays)
@@ -26985,6 +27041,8 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.MonthlyLimitUsd()
 	case group.FieldModelQuotaRatios:
 		return m.ModelQuotaRatios()
+	case group.FieldModelQuotaGroups:
+		return m.ModelQuotaGroups()
 	case group.FieldDefaultValidityDays:
 		return m.DefaultValidityDays()
 	case group.FieldAllowImageGeneration:
@@ -27154,6 +27212,8 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldMonthlyLimitUsd(ctx)
 	case group.FieldModelQuotaRatios:
 		return m.OldModelQuotaRatios(ctx)
+	case group.FieldModelQuotaGroups:
+		return m.OldModelQuotaGroups(ctx)
 	case group.FieldDefaultValidityDays:
 		return m.OldDefaultValidityDays(ctx)
 	case group.FieldAllowImageGeneration:
@@ -27417,6 +27477,13 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetModelQuotaRatios(v)
+		return nil
+	case group.FieldModelQuotaGroups:
+		v, ok := value.([]domain.SubscriptionModelQuotaGroup)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetModelQuotaGroups(v)
 		return nil
 	case group.FieldDefaultValidityDays:
 		v, ok := value.(int)
@@ -28496,6 +28563,9 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldModelQuotaRatios:
 		m.ResetModelQuotaRatios()
+		return nil
+	case group.FieldModelQuotaGroups:
+		m.ResetModelQuotaGroups()
 		return nil
 	case group.FieldDefaultValidityDays:
 		m.ResetDefaultValidityDays()

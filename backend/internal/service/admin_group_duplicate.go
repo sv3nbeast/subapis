@@ -108,12 +108,17 @@ func cloneGroupForDuplicate(source *Group, operationID string) *Group {
 			modelQuotas[key] = value
 		}
 	}
+	modelQuotaGroups := append([]SubscriptionModelQuotaGroup(nil), source.ModelQuotaGroups...)
+	for index := range modelQuotaGroups {
+		modelQuotaGroups[index].Models = append([]string(nil), modelQuotaGroups[index].Models...)
+	}
 	return &Group{
-		ModelPricing:                                     modelPricing,
-		ModelQuotaRatios:                                 modelQuotas,
-		LongContextPricingEnabled:                        source.LongContextPricingEnabled,
-		AllowNonStreamMessages:                           source.AllowNonStreamMessages,
-		KiroAnthropicFallbackEnabled:                     source.KiroAnthropicFallbackEnabled,
+		ModelPricing:                 modelPricing,
+		ModelQuotaRatios:             modelQuotas,
+		ModelQuotaGroups:             modelQuotaGroups,
+		LongContextPricingEnabled:    source.LongContextPricingEnabled,
+		AllowNonStreamMessages:       source.AllowNonStreamMessages,
+		KiroAnthropicFallbackEnabled: source.KiroAnthropicFallbackEnabled,
 		KiroAnthropicFallbackFirstSemanticTimeoutSeconds: source.KiroAnthropicFallbackFirstSemanticTimeoutSeconds,
 		KiroAnthropicFallbackMaxAnthropicAttempts:        source.KiroAnthropicFallbackMaxAnthropicAttempts,
 		Name:                            duplicateGroupName(source.Name, 1),

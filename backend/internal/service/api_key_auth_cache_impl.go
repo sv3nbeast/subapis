@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 22 // v22: hydrate subscription ratios, pricing, and OpenAI fast policy
+const apiKeyAuthSnapshotVersion = 23 // v23: include shared subscription model quota groups
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -389,6 +389,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			WeeklyLimitUSD:                  groupForSnapshot.WeeklyLimitUSD,
 			MonthlyLimitUSD:                 groupForSnapshot.MonthlyLimitUSD,
 			ModelQuotaRatios:                groupForSnapshot.ModelQuotaRatios,
+			ModelQuotaGroups:                groupForSnapshot.ModelQuotaGroups,
 			AllowImageGeneration:            groupForSnapshot.AllowImageGeneration,
 			AllowBatchImageGeneration:       groupForSnapshot.AllowBatchImageGeneration,
 			ImageRateIndependent:            groupForSnapshot.ImageRateIndependent,
@@ -505,6 +506,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			WeeklyLimitUSD:                  snapshot.Group.WeeklyLimitUSD,
 			MonthlyLimitUSD:                 snapshot.Group.MonthlyLimitUSD,
 			ModelQuotaRatios:                snapshot.Group.ModelQuotaRatios,
+			ModelQuotaGroups:                snapshot.Group.ModelQuotaGroups,
 			AllowImageGeneration:            snapshot.Group.AllowImageGeneration,
 			AllowBatchImageGeneration:       snapshot.Group.AllowBatchImageGeneration,
 			ImageRateIndependent:            snapshot.Group.ImageRateIndependent,

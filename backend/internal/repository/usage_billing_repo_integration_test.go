@@ -120,7 +120,7 @@ func TestUsageBillingRepositoryApply_DeduplicatesSubscriptionBilling(t *testing.
 		AccountID:         0,
 		SubscriptionID:    &subscription.ID,
 		SubscriptionCost:  2.5,
-		SubscriptionModel: "claude-fable-5",
+		SubscriptionModel: "group:fable-5-shared",
 	}
 
 	result1, err := repo.Apply(ctx, cmd)
@@ -134,7 +134,7 @@ func TestUsageBillingRepositoryApply_DeduplicatesSubscriptionBilling(t *testing.
 	var dailyUsage, modelDailyUsage float64
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `
 		SELECT daily_usage_usd,
-		       COALESCE((model_usage->'claude-fable-5'->>'daily_usage_usd')::double precision, 0)
+		       COALESCE((model_usage->'group:fable-5-shared'->>'daily_usage_usd')::double precision, 0)
 		FROM user_subscriptions
 		WHERE id = $1
 	`, subscription.ID).Scan(&dailyUsage, &modelDailyUsage))

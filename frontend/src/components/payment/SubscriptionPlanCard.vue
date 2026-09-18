@@ -193,9 +193,15 @@ const modelScopeLabels = computed(() => {
 })
 
 const modelQuotaEntries = computed(() =>
-  Object.entries(props.plan.model_quota_ratios || {})
+  [
+    ...Object.entries(props.plan.model_quota_ratios || {})
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([model, ratio]) => ({ model, percent: Number((ratio * 100).toFixed(2)) })),
+    ...(props.plan.model_quota_groups || []).map(group => ({
+      model: `${group.name} (${group.models.join(' + ')})`,
+      percent: Number((group.ratio * 100).toFixed(2)),
+    })),
+  ],
 )
 
 function bonusGroupQuota(group: SubscriptionPlanBenefitGroup): string {

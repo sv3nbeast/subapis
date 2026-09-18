@@ -14,6 +14,7 @@ import (
 type OpenAIMessagesDispatchModelConfig = domain.OpenAIMessagesDispatchModelConfig
 type GroupModelsListConfig = domain.GroupModelsListConfig
 type ReasoningEffortMapping = domain.ReasoningEffortMapping
+type SubscriptionModelQuotaGroup = domain.SubscriptionModelQuotaGroup
 
 type Group struct {
 	ID             int64
@@ -43,6 +44,7 @@ type Group struct {
 	WeeklyLimitUSD      *float64
 	MonthlyLimitUSD     *float64
 	ModelQuotaRatios    map[string]float64
+	ModelQuotaGroups    []SubscriptionModelQuotaGroup
 	DefaultValidityDays int
 
 	// 图片生成计费配置（antigravity 和 gemini 平台使用）

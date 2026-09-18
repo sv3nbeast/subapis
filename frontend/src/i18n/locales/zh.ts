@@ -3110,6 +3110,9 @@ const baseMessages = {
         monthlyLimit: '每月限额（USD）',
         modelQuota: '模型额度占比',
         addModelQuota: '添加模型',
+        sharedModelQuota: '共享模型额度',
+        addSharedModelQuota: '添加共享组',
+        sharedModelQuotaName: '共享组名称',
         defaultValidityDays: '默认有效期（天）',
         validityHint: '分配给用户时订阅的有效天数',
         noLimit: '无限制'

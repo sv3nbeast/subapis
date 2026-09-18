@@ -324,6 +324,18 @@ func (_u *GroupUpdate) SetModelQuotaRatios(v map[string]float64) *GroupUpdate {
 	return _u
 }
 
+// SetModelQuotaGroups sets the "model_quota_groups" field.
+func (_u *GroupUpdate) SetModelQuotaGroups(v []domain.SubscriptionModelQuotaGroup) *GroupUpdate {
+	_u.mutation.SetModelQuotaGroups(v)
+	return _u
+}
+
+// AppendModelQuotaGroups appends value to the "model_quota_groups" field.
+func (_u *GroupUpdate) AppendModelQuotaGroups(v []domain.SubscriptionModelQuotaGroup) *GroupUpdate {
+	_u.mutation.AppendModelQuotaGroups(v)
+	return _u
+}
+
 // SetDefaultValidityDays sets the "default_validity_days" field.
 func (_u *GroupUpdate) SetDefaultValidityDays(v int) *GroupUpdate {
 	_u.mutation.ResetDefaultValidityDays()
@@ -1899,6 +1911,14 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.ModelQuotaRatios(); ok {
 		_spec.SetField(group.FieldModelQuotaRatios, field.TypeJSON, value)
 	}
+	if value, ok := _u.mutation.ModelQuotaGroups(); ok {
+		_spec.SetField(group.FieldModelQuotaGroups, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedModelQuotaGroups(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, group.FieldModelQuotaGroups, value)
+		})
+	}
 	if value, ok := _u.mutation.DefaultValidityDays(); ok {
 		_spec.SetField(group.FieldDefaultValidityDays, field.TypeInt, value)
 	}
@@ -2830,6 +2850,18 @@ func (_u *GroupUpdateOne) ClearMonthlyLimitUsd() *GroupUpdateOne {
 // SetModelQuotaRatios sets the "model_quota_ratios" field.
 func (_u *GroupUpdateOne) SetModelQuotaRatios(v map[string]float64) *GroupUpdateOne {
 	_u.mutation.SetModelQuotaRatios(v)
+	return _u
+}
+
+// SetModelQuotaGroups sets the "model_quota_groups" field.
+func (_u *GroupUpdateOne) SetModelQuotaGroups(v []domain.SubscriptionModelQuotaGroup) *GroupUpdateOne {
+	_u.mutation.SetModelQuotaGroups(v)
+	return _u
+}
+
+// AppendModelQuotaGroups appends value to the "model_quota_groups" field.
+func (_u *GroupUpdateOne) AppendModelQuotaGroups(v []domain.SubscriptionModelQuotaGroup) *GroupUpdateOne {
+	_u.mutation.AppendModelQuotaGroups(v)
 	return _u
 }
 
@@ -4437,6 +4469,14 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.ModelQuotaRatios(); ok {
 		_spec.SetField(group.FieldModelQuotaRatios, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.ModelQuotaGroups(); ok {
+		_spec.SetField(group.FieldModelQuotaGroups, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedModelQuotaGroups(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, group.FieldModelQuotaGroups, value)
+		})
 	}
 	if value, ok := _u.mutation.DefaultValidityDays(); ok {
 		_spec.SetField(group.FieldDefaultValidityDays, field.TypeInt, value)

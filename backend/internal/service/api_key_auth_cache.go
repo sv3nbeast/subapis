@@ -146,10 +146,11 @@ type APIKeyAuthGroupSnapshot struct {
 	PeakRateMultiplier float64 `json:"peak_rate_multiplier"`
 
 	// ModelQuotaRatios is required by subscription preflight and usage accounting.
-	ModelQuotaRatios     map[string]float64 `json:"model_quota_ratios,omitempty"`
-	ProfitControlEnabled bool               `json:"profit_control_enabled"`
-	ProfitMinMargin      float64            `json:"profit_min_margin"`
-	ProfitSafetyBuffer   float64            `json:"profit_safety_buffer"`
+	ModelQuotaRatios     map[string]float64            `json:"model_quota_ratios,omitempty"`
+	ModelQuotaGroups     []SubscriptionModelQuotaGroup `json:"model_quota_groups,omitempty"`
+	ProfitControlEnabled bool                          `json:"profit_control_enabled"`
+	ProfitMinMargin      float64                       `json:"profit_min_margin"`
+	ProfitSafetyBuffer   float64                       `json:"profit_safety_buffer"`
 }
 
 // APIKeyAuthCacheEntry 缓存条目，支持负缓存
