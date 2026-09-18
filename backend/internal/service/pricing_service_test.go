@@ -938,6 +938,79 @@ func TestListChannelPricingModelNamesByProvider_OpenAIMergesLocalStaticModels(t 
 	require.Equal(t, sorted, got)
 }
 
+// Cursor resells several vendors under one subscription, so a channel priced for
+// Cursor draws from all of their catalogs — restricted to the models Cursor
+// actually serves. A row priced for a model Cursor rejects can never match a
+// request, and a vendor catalog is far wider than a Cursor subscription.
+func TestListChannelPricingModelNamesForPlatform_CursorMergesVendorsAndKeepsServableOnly(t *testing.T) {
+	svc := &PricingService{
+		pricingData: map[string]*LiteLLMModelPricing{
+			// Served by Cursor.
+			"claude-opus-5":   {LiteLLMProvider: "anthropic", InputCostPerToken: 15e-6},
+			"claude-sonnet-5": {LiteLLMProvider: "anthropic", InputCostPerToken: 3e-6},
+			"gemini-3.1-pro":  {LiteLLMProvider: "gemini", InputCostPerToken: 2e-6},
+			"kimi-k3":         {LiteLLMProvider: "moonshot", InputCostPerToken: 1e-6},
+			// Real vendor models that Cursor does not serve.
+			"claude-2.1":       {LiteLLMProvider: "anthropic", InputCostPerToken: 8e-6},
+			"gemini-1.0-ultra": {LiteLLMProvider: "gemini", InputCostPerToken: 7e-6},
+		},
+	}
+
+	models, ok := svc.ListChannelPricingModelNamesForPlatform(PlatformCursor)
+	require.True(t, ok)
+
+	// Drawn from several vendors: a single-provider lookup would miss all but one.
+	require.Contains(t, models, "claude-opus-5")
+	require.Contains(t, models, "claude-sonnet-5")
+	require.Contains(t, models, "gemini-3.1-pro")
+	require.Contains(t, models, "kimi-k3")
+
+	// Vendor models outside Cursor's picker must not be offered.
+	require.NotContains(t, models, "claude-2.1")
+	require.NotContains(t, models, "gemini-1.0-ultra")
+
+	sorted := append([]string(nil), models...)
+	sort.Strings(sorted)
+	require.Equal(t, sorted, models, "models must be sorted")
+
+	seen := make(map[string]struct{}, len(models))
+	for _, model := range models {
+		_, dup := seen[model]
+		require.False(t, dup, "duplicate model %q across merged vendor catalogs", model)
+		seen[model] = struct{}{}
+	}
+}
+
+// A single-vendor platform must keep its own catalog and gain nothing from the
+// Cursor change.
+func TestListChannelPricingModelNamesForPlatform_SingleVendorPlatformUnchanged(t *testing.T) {
+	svc := &PricingService{
+		pricingData: map[string]*LiteLLMModelPricing{
+			"claude-opus-5":  {LiteLLMProvider: "anthropic", InputCostPerToken: 15e-6},
+			"gemini-3.1-pro": {LiteLLMProvider: "gemini", InputCostPerToken: 2e-6},
+		},
+	}
+
+	models, ok := svc.ListChannelPricingModelNamesForPlatform(PlatformAnthropic)
+	require.True(t, ok)
+	require.Contains(t, models, "claude-opus-5")
+	require.NotContains(t, models, "gemini-3.1-pro")
+
+	// Anthropic prices whatever its catalog lists; Cursor's picker is not a gate
+	// here, so a Claude model Cursor dropped must still be priceable.
+	svc.pricingData["claude-2.1"] = &LiteLLMModelPricing{LiteLLMProvider: "anthropic", InputCostPerToken: 8e-6}
+	models, ok = svc.ListChannelPricingModelNamesForPlatform(PlatformAnthropic)
+	require.True(t, ok)
+	require.Contains(t, models, "claude-2.1")
+}
+
+func TestListChannelPricingModelNamesForPlatform_UnknownPlatform(t *testing.T) {
+	svc := &PricingService{pricingData: map[string]*LiteLLMModelPricing{}}
+	models, ok := svc.ListChannelPricingModelNamesForPlatform("nope")
+	require.False(t, ok)
+	require.Nil(t, models)
+}
+
 func TestListChannelPricingModelNamesByProvider_NonOpenAIUnchanged(t *testing.T) {
 	svc := &PricingService{
 		pricingData: map[string]*LiteLLMModelPricing{

@@ -135,6 +135,11 @@ func ConnectErrorJSON(frame *Frame) string {
 type ConnectError struct {
 	Code    string
 	Message string
+	// Reason is Cursor's machine-readable cause from details[].debug.error,
+	// e.g. ERROR_UNSUPPORTED_REGION. Message is often just "Error".
+	Reason string
+	// Detail is the human-readable explanation Cursor sent alongside Reason.
+	Detail string
 }
 
 // ParseConnectError decodes a Connect end-stream JSON object.
@@ -143,18 +148,25 @@ func ParseConnectError(raw string) (ConnectError, bool) {
 	if raw == "" || raw[0] != '{' {
 		return ConnectError{}, false
 	}
+	// Cursor's own reason lives under details[].debug, and message is frequently
+	// the literal string "Error". Reading only code/message turns every such
+	// failure into "cursor anthropic: Error", which tells nobody anything —
+	// operators included.
 	var envelope struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
 		Error   *struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
+			Code    string             `json:"code"`
+			Message string             `json:"message"`
+			Details []connectErrDetail `json:"details"`
 		} `json:"error"`
+		Details []connectErrDetail `json:"details"`
 	}
 	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
 		return ConnectError{Message: raw}, true
 	}
 	out := ConnectError{Code: envelope.Code, Message: envelope.Message}
+	details := envelope.Details
 	if envelope.Error != nil {
 		if envelope.Error.Code != "" {
 			out.Code = envelope.Error.Code
@@ -162,15 +174,81 @@ func ParseConnectError(raw string) (ConnectError, bool) {
 		if envelope.Error.Message != "" {
 			out.Message = envelope.Error.Message
 		}
+		if len(envelope.Error.Details) > 0 {
+			details = envelope.Error.Details
+		}
 	}
-	if out.Code == "" && out.Message == "" {
+	out.Reason, out.Detail = firstConnectErrReason(details)
+	if out.Code == "" && out.Message == "" && out.Reason == "" && out.Detail == "" {
 		return ConnectError{Message: raw}, true
 	}
 	return out, true
 }
 
+type connectErrDetail struct {
+	Debug *struct {
+		Error   string `json:"error"`
+		Details *struct {
+			Title  string `json:"title"`
+			Detail string `json:"detail"`
+		} `json:"details"`
+	} `json:"debug"`
+}
+
+// firstConnectErrReason returns the first machine-readable reason code and its
+// human-readable text from a Connect error's details.
+func firstConnectErrReason(details []connectErrDetail) (reason, detail string) {
+	for _, d := range details {
+		if d.Debug == nil {
+			continue
+		}
+		if reason == "" {
+			reason = strings.TrimSpace(d.Debug.Error)
+		}
+		if detail == "" && d.Debug.Details != nil {
+			detail = strings.TrimSpace(d.Debug.Details.Detail)
+			if detail == "" {
+				detail = strings.TrimSpace(d.Debug.Details.Title)
+			}
+		}
+		if reason != "" && detail != "" {
+			break
+		}
+	}
+	return reason, detail
+}
+
+// ClientMessage is the text to show a caller: Cursor's own explanation when it
+// gave one, otherwise the envelope message. Cursor often sends message="Error"
+// with the real cause in details, so prefer the detail text.
+func (e ConnectError) ClientMessage() string {
+	if detail := strings.TrimSpace(e.Detail); detail != "" {
+		if reason := strings.TrimSpace(e.Reason); reason != "" {
+			return detail + " (" + reason + ")"
+		}
+		return detail
+	}
+	if reason := strings.TrimSpace(e.Reason); reason != "" {
+		return reason
+	}
+	return strings.TrimSpace(e.Message)
+}
+
 // IsBadModelName reports whether a Connect error is Cursor ERROR_BAD_MODEL_NAME.
 func (e ConnectError) IsBadModelName() bool {
-	blob := strings.ToLower(e.Code + " " + e.Message)
+	blob := e.searchBlob()
 	return strings.Contains(blob, "bad_model_name") || strings.Contains(blob, "model name is not valid")
+}
+
+// IsUnsupportedRegion reports whether Cursor refused the model because the
+// account's region cannot reach that provider.
+func (e ConnectError) IsUnsupportedRegion() bool {
+	return strings.Contains(e.searchBlob(), "unsupported_region")
+}
+
+// searchBlob is every field a reason can hide in, lowercased. Cursor puts the
+// machine-readable cause in Reason rather than Code or Message, so a classifier
+// that reads only Code+Message misses it.
+func (e ConnectError) searchBlob() string {
+	return strings.ToLower(strings.Join([]string{e.Code, e.Message, e.Reason, e.Detail}, " "))
 }

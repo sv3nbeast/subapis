@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/cursor"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
@@ -1530,6 +1531,53 @@ func (s *PricingService) ListChannelPricingModelNamesByProvider(provider string)
 	}
 	sort.Strings(merged)
 	return merged
+}
+
+// ListChannelPricingModelNamesForPlatform returns the model names offered when
+// pricing a channel for this platform: the union of the catalogs its upstream
+// vendors publish, restricted to what the platform actually serves.
+//
+// Most platforms serve one vendor and this is just that vendor's catalog. Cursor
+// resells several vendors under one subscription, so its prices live across
+// their catalogs — while the models it serves are a subset of their union, and a
+// priced row for a model Cursor rejects can never match a request.
+func (s *PricingService) ListChannelPricingModelNamesForPlatform(platform string) ([]string, bool) {
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	providers, ok := channelPricingProvidersByPlatform[platform]
+	if !ok {
+		return nil, false
+	}
+
+	seen := make(map[string]struct{})
+	models := make([]string, 0, 64)
+	for _, provider := range providers {
+		for _, model := range s.ListChannelPricingModelNamesByProvider(provider) {
+			if platform == PlatformCursor && !cursor.IsServableModelID(model) {
+				continue
+			}
+			if _, dup := seen[model]; dup {
+				continue
+			}
+			seen[model] = struct{}{}
+			models = append(models, model)
+		}
+	}
+	sort.Strings(models)
+	return models, true
+}
+
+// channelPricingProvidersByPlatform maps a channel platform to the LiteLLM
+// providers whose catalogs hold its prices.
+var channelPricingProvidersByPlatform = map[string][]string{
+	PlatformAnthropic:   {"anthropic"},
+	PlatformOpenAI:      {"openai"},
+	PlatformGemini:      {"gemini"},
+	PlatformAntigravity: {"anthropic"},
+	PlatformGrok:        {"xai"},
+	PlatformKimi:        {"moonshot"},
+	PlatformZhipu:       {"zhipu"},
+	PlatformDeepseek:    {"deepseek"},
+	PlatformCursor:      {"anthropic", "openai", "gemini", "xai", "moonshot", "zhipu"},
 }
 
 func localChannelPricingModelNamesByProvider(provider string) []string {

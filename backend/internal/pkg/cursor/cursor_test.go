@@ -113,6 +113,71 @@ func TestParseConnectError(t *testing.T) {
 	}
 }
 
+// Cursor answers message="Error" and puts the cause in details[].debug. Reading
+// only code/message reported every such failure as "Error", which told the
+// caller nothing and left operators unable to tell a region block from a bad
+// model name.
+func TestParseConnectErrorReadsReasonFromDetails(t *testing.T) {
+	raw := `{"code":"resource_exhausted","message":"Error","details":[{"type":"aiserver.v1.ErrorDetails",` +
+		`"debug":{"error":"ERROR_UNSUPPORTED_REGION","details":{"title":"Model not available",` +
+		`"detail":"This model provider is not supported in your region."}}}]}`
+
+	got, ok := ParseConnectError(raw)
+	if !ok {
+		t.Fatal("ParseConnectError reported no error for a Connect error envelope")
+	}
+	if got.Reason != "ERROR_UNSUPPORTED_REGION" {
+		t.Errorf("reason = %q, want %q", got.Reason, "ERROR_UNSUPPORTED_REGION")
+	}
+	if got.Detail != "This model provider is not supported in your region." {
+		t.Errorf("detail = %q, want Cursor's explanation", got.Detail)
+	}
+	if !got.IsUnsupportedRegion() {
+		t.Error("IsUnsupportedRegion = false; the reason only appears in details, not in code/message")
+	}
+
+	// What the caller sees must name the cause, not the placeholder message.
+	msg := got.ClientMessage()
+	if !strings.Contains(msg, "not supported in your region") {
+		t.Errorf("ClientMessage = %q, want Cursor's explanation", msg)
+	}
+	if msg == "Error" {
+		t.Error("ClientMessage is the placeholder envelope message")
+	}
+}
+
+// A nested error object carries details in the same shape.
+func TestParseConnectErrorReadsReasonFromNestedError(t *testing.T) {
+	raw := `{"error":{"code":"not_found","message":"Error","details":[{"debug":{"error":"ERROR_BAD_MODEL_NAME",` +
+		`"details":{"title":"AI Model Not Found","detail":"Model name is not valid: \"nope\""}}}]}}`
+
+	got, ok := ParseConnectError(raw)
+	if !ok {
+		t.Fatal("ParseConnectError reported no error")
+	}
+	if got.Reason != "ERROR_BAD_MODEL_NAME" {
+		t.Errorf("reason = %q, want %q", got.Reason, "ERROR_BAD_MODEL_NAME")
+	}
+	if !got.IsBadModelName() {
+		t.Error("IsBadModelName = false for ERROR_BAD_MODEL_NAME")
+	}
+	if got.IsUnsupportedRegion() {
+		t.Error("IsUnsupportedRegion = true for a bad model name")
+	}
+}
+
+// Envelopes without details must keep working: ClientMessage falls back to the
+// envelope message.
+func TestClientMessageFallsBackToEnvelopeMessage(t *testing.T) {
+	got, ok := ParseConnectError(`{"code":"unauthenticated","message":"token expired"}`)
+	if !ok {
+		t.Fatal("ParseConnectError reported no error")
+	}
+	if got.ClientMessage() != "token expired" {
+		t.Errorf("ClientMessage = %q, want %q", got.ClientMessage(), "token expired")
+	}
+}
+
 func TestConnectErrorJSONOnlyReadsEndStreamFrames(t *testing.T) {
 	body := `{"code":"internal"}`
 	if got := ConnectErrorJSON(&Frame{Flags: FrameFlagUncompressed, Payload: []byte(body)}); got != "" {

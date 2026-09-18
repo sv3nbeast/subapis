@@ -520,11 +520,20 @@ func classifyCursorConnectError(raw string) (status int, errType, message string
 	if !ok {
 		return http.StatusBadGateway, "upstream_error", "Cursor upstream error"
 	}
-	message = strings.TrimSpace(parsed.Message)
+	// Cursor commonly answers message="Error" and puts the cause in details, so
+	// take its own explanation when there is one. Reporting "Error" leaves the
+	// caller — and whoever reads the log afterwards — with nothing to act on.
+	message = parsed.ClientMessage()
 	if message == "" {
 		message = strings.TrimSpace(raw)
 	}
 	if parsed.IsBadModelName() {
+		return http.StatusBadRequest, "invalid_request_error", message
+	}
+	// A region block is a property of the account, not of the request: retrying
+	// the same model on the same account cannot succeed, and the caller needs to
+	// know to switch models rather than to retry.
+	if parsed.IsUnsupportedRegion() {
 		return http.StatusBadRequest, "invalid_request_error", message
 	}
 	return http.StatusBadGateway, "upstream_error", message

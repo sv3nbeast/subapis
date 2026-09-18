@@ -93,6 +93,15 @@ func ResolveModel(requested string) (canonical string, usedFallback bool) {
 	return requested, false
 }
 
+// IsServableModelID reports whether Cursor's picker recognizes this model name,
+// by id, alias, or display name. Callers use it to keep a vendor catalog down to
+// the subset a Cursor subscription actually serves — pricing a model Cursor
+// rejects creates a row no request can match.
+func IsServableModelID(model string) bool {
+	_, ok := lookupPickerModel(strings.TrimSpace(model))
+	return ok
+}
+
 func lookupPickerModel(requested string) (string, bool) {
 	if id, ok := matchPickerKey(requested); ok {
 		return id, true
