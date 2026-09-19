@@ -62,6 +62,7 @@ function mountView() {
 
 describe('public ModelsView', () => {
   beforeEach(() => {
+    localStorage.clear()
     authStore.isAuthenticated = false
     authStore.isAdmin = false
     authStore.checkAuth.mockReset()
@@ -127,6 +128,111 @@ describe('public ModelsView', () => {
     expect(wrapper.text()).toContain('Claude Subscription')
     expect(wrapper.text()).toContain('UTC+08:00')
     expect(wrapper.text()).toContain('modelMarket.saves:86')
+  })
+
+  it('switches every displayed price from USD to RMB using the configured reference rate', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const currencyControl = wrapper.get('[data-testid="model-market-currency"]')
+    expect(currencyControl.get('[data-currency="USD"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.text()).toContain('$0.33')
+
+    await currencyControl.get('[data-currency="CNY"]').trigger('click')
+
+    expect(currencyControl.get('[data-currency="CNY"]').attributes('aria-pressed')).toBe('true')
+    // Best-price summary: $0.33 equivalent becomes ￥2.4 at 1 USD = ￥7.2.
+    expect(wrapper.text()).toContain('￥2.4')
+    // Official input price: $3 becomes ￥21.6.
+    expect(wrapper.text()).toContain('￥21.6')
+
+    const offerButton = wrapper.findAll('button').find((button) => button.text().includes('modelMarket.viewDetails'))
+    await offerButton!.trigger('click')
+    // Detail token/cache prices use the same currency conversion path.
+    expect(wrapper.text()).toContain('￥3')
+    expect(wrapper.text()).toContain('￥15')
+    expect(wrapper.text()).toContain('￥0.3')
+  })
+
+  it('converts per-request, image, and tiered prices with the same currency rule', async () => {
+    const response = await getPublicModels()
+    const tokenTemplate = response.groups[0].models[0]
+    response.groups = [{
+      ...response.groups[0],
+      rate_multiplier: 0.5,
+      models: [
+        {
+          ...tokenTemplate,
+          name: 'tiered-model',
+          pricing: {
+            ...tokenTemplate.pricing,
+            intervals: [{
+              min_tokens: 0,
+              max_tokens: null,
+              tier_label: 'Long context',
+              input_price: 0.000006,
+              output_price: 0.00003,
+              cache_write_price: null,
+              cache_read_price: null,
+              per_request_price: null,
+            }],
+          },
+        },
+        {
+          ...tokenTemplate,
+          name: 'request-model',
+          pricing: {
+            ...tokenTemplate.pricing,
+            billing_mode: 'per_request',
+            input_price: null,
+            output_price: null,
+            cache_read_price: null,
+            per_request_price: 0.04,
+            intervals: [],
+          },
+        },
+        {
+          ...tokenTemplate,
+          name: 'image-model',
+          pricing: {
+            ...tokenTemplate.pricing,
+            billing_mode: 'image',
+            input_price: null,
+            output_price: null,
+            cache_read_price: null,
+            image_output_price: 0.08,
+            intervals: [],
+          },
+        },
+      ],
+    }]
+    getPublicModels.mockResolvedValueOnce(response)
+
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-currency="CNY"]').trigger('click')
+
+    for (const button of wrapper.findAll('button').filter((item) => item.text().includes('modelMarket.viewDetails'))) {
+      await button.trigger('click')
+    }
+
+    expect(wrapper.text()).toContain('￥0.02')
+    expect(wrapper.text()).toContain('￥0.04')
+    expect(wrapper.text()).toContain('Long context')
+    expect(wrapper.text()).toContain('￥3 / ￥15')
+  })
+
+  it('persists the selected display currency across page mounts', async () => {
+    const first = mountView()
+    await flushPromises()
+    await first.get('[data-currency="CNY"]').trigger('click')
+    first.unmount()
+
+    const second = mountView()
+    await flushPromises()
+
+    expect(second.get('[data-currency="CNY"]').attributes('aria-pressed')).toBe('true')
+    expect(second.text()).toContain('￥2.4')
   })
 
   it('shows the full group name above wrapping metadata badges', async () => {

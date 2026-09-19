@@ -68,7 +68,7 @@
       </section>
 
       <section class="sticky top-[53px] z-30 mt-4 rounded-xl border border-white/70 bg-white/90 p-3 shadow-sm backdrop-blur-xl dark:border-dark-700 dark:bg-dark-800/90">
-        <div class="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-[minmax(16rem,1fr)_10.5rem_10.5rem_10.5rem_auto]">
+        <div class="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-[minmax(14rem,1fr)_9.5rem_9.5rem_9.5rem_10rem_auto] xl:grid-cols-[minmax(16rem,1fr)_10.5rem_10.5rem_10.5rem_10rem_auto]">
           <div class="relative sm:col-span-2 lg:col-span-1">
             <Icon name="search" size="md" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input v-model="searchQuery" class="input h-10 pl-10" :placeholder="t('modelMarket.filters.search')" />
@@ -89,13 +89,35 @@
             <option value="name_asc">{{ t('modelMarket.filters.sortNameAsc') }}</option>
             <option value="name_desc">{{ t('modelMarket.filters.sortNameDesc') }}</option>
           </select>
+          <div
+            class="grid h-10 grid-cols-2 rounded-lg bg-gray-100 p-1 dark:bg-dark-700"
+            role="group"
+            :aria-label="t('modelMarket.currency.label')"
+            data-testid="model-market-currency"
+          >
+            <button
+              v-for="option in currencyOptions"
+              :key="option.value"
+              type="button"
+              class="rounded-md px-2 text-xs font-bold text-gray-500 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-gray-300"
+              :class="displayCurrency === option.value
+                ? 'bg-white text-gray-950 shadow-sm dark:bg-dark-900 dark:text-white'
+                : 'hover:text-gray-900 dark:hover:text-white'"
+              :aria-pressed="displayCurrency === option.value"
+              :data-currency="option.value"
+              @click="selectDisplayCurrency(option.value)"
+            >
+              <span aria-hidden="true">{{ option.symbol }}</span>
+              {{ option.label }}
+            </button>
+          </div>
           <button type="button" class="btn btn-secondary h-10 px-3" :disabled="loading" @click="loadCatalog">
             <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
             <span class="hidden sm:inline">{{ t('common.refresh') }}</span>
           </button>
         </div>
         <p class="mt-2 text-[11px] leading-5 text-gray-500 dark:text-gray-400">
-          {{ t('modelMarket.referencePriceHint', { reference: formatRateNumber(referenceRate), settlement: formatRateNumber(settlementRate) }) }}
+          {{ t('modelMarket.referencePriceHint', { currency: displayCurrencyLabel, reference: formatRateNumber(referenceRate), settlement: formatRateNumber(settlementRate) }) }}
         </p>
       </section>
 
@@ -219,6 +241,22 @@ interface ModelEntry { key: string; name: string; family: PublicModelFamily; bil
 interface PricePair { actual: number | null; official: number | null }
 interface PriceSummaryItem { label: string; value: string; official?: string }
 type ModelSortMode = 'newest' | 'oldest' | 'name_asc' | 'name_desc'
+type DisplayCurrency = 'USD' | 'CNY'
+
+const CURRENCY_STORAGE_KEY = 'sub2api:model-market-currency'
+const currencyOptions: Array<{ value: DisplayCurrency; symbol: string; label: string }> = [
+  { value: 'USD', symbol: '$', label: 'USD' },
+  { value: 'CNY', symbol: '￥', label: 'RMB' },
+]
+
+function storedDisplayCurrency(): DisplayCurrency {
+  if (typeof window === 'undefined') return 'USD'
+  try {
+    return window.localStorage.getItem(CURRENCY_STORAGE_KEY) === 'CNY' ? 'CNY' : 'USD'
+  } catch {
+    return 'USD'
+  }
+}
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -230,6 +268,7 @@ const searchQuery = ref('')
 const familyFilter = ref('')
 const billingFilter = ref('')
 const sortMode = ref<ModelSortMode>('newest')
+const displayCurrency = ref<DisplayCurrency>(storedDisplayCurrency())
 const expandedKeys = ref(new Set<string>())
 const isDark = ref(document.documentElement.classList.contains('dark'))
 
@@ -239,6 +278,7 @@ const isAuthenticated = computed(() => authStore.isAuthenticated)
 const dashboardPath = computed(() => authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
 const referenceRate = computed(() => positiveRate(appStore.cachedPublicSettings?.public_model_market_reference_usd_cny_rate, 7.2))
 const settlementRate = computed(() => positiveRate(appStore.cachedPublicSettings?.public_model_market_settlement_usd_cny_rate, 1))
+const displayCurrencyLabel = computed(() => displayCurrency.value === 'CNY' ? 'RMB' : 'USD')
 
 const modelEntries = computed<ModelEntry[]>(() => {
   const map = new Map<string, ModelEntry>()
@@ -353,7 +393,7 @@ function bestPrice(entry: ModelEntry, selector: (model: PublicModel) => number |
 
 function priceItem(label: string, pair: PricePair): PriceSummaryItem | null {
   if (pair.actual == null) return null
-  return { label, value: formatUSD(pair.actual), official: pair.official == null ? undefined : formatUSD(pair.official) }
+  return { label, value: formatPrice(pair.actual), official: pair.official == null ? undefined : formatPrice(pair.official) }
 }
 
 function priceSummary(entry: ModelEntry): PriceSummaryItem[] {
@@ -374,15 +414,17 @@ function priceSummary(entry: ModelEntry): PriceSummaryItem[] {
   }
   const configured = items.filter((item): item is PriceSummaryItem => item !== null)
   if (configured.length === 0) return [{ label: t('modelMarket.prices.status'), value: t('modelMarket.billing.unconfigured') }]
-  if (configured.length === 1) configured.push({ label: t('modelMarket.prices.status'), value: t('modelMarket.usdEquivalent') })
+  if (configured.length === 1) configured.push({ label: t('modelMarket.prices.status'), value: t('modelMarket.displayCurrency', { currency: displayCurrencyLabel.value }) })
   return configured.slice(0, 2)
 }
 
-function formatUSD(value: number | null): string {
+function formatPrice(value: number | null): string {
   if (value == null || !Number.isFinite(value)) return '-'
-  const abs = Math.abs(value)
+  const converted = displayCurrency.value === 'CNY' ? value * referenceRate.value : value
+  const abs = Math.abs(converted)
   const maximumFractionDigits = abs >= 0.1 ? 2 : abs >= 0.001 ? 4 : 6
-  return `$${value.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits })}`
+  const symbol = displayCurrency.value === 'CNY' ? '￥' : '$'
+  return `${symbol}${converted.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits })}`
 }
 
 function formatRateNumber(value: number): string {
@@ -428,11 +470,11 @@ function subscriptionLabel(type: string): string {
 }
 
 function adjustedPrice(value: number | null, scale: number, group: PublicModelGroup, peak = false): string {
-  return value == null ? '-' : formatUSD(value * scale * displayFactor(group, peak))
+  return value == null ? '-' : formatPrice(value * scale * displayFactor(group, peak))
 }
 
 function officialPrice(value: number | null, scale: number): string {
-  return value == null ? '-' : formatUSD(value * scale)
+  return value == null ? '-' : formatPrice(value * scale)
 }
 
 function offerPriceLine(offer: ModelOffer): string {
@@ -485,6 +527,15 @@ function toggleExpanded(key: string) {
   const next = new Set(expandedKeys.value)
   next.has(key) ? next.delete(key) : next.add(key)
   expandedKeys.value = next
+}
+
+function selectDisplayCurrency(currency: DisplayCurrency) {
+  displayCurrency.value = currency
+  try {
+    window.localStorage.setItem(CURRENCY_STORAGE_KEY, currency)
+  } catch {
+    // Price display remains functional when storage is unavailable.
+  }
 }
 
 function toggleTheme() {
