@@ -235,6 +235,45 @@ describe('public ModelsView', () => {
     expect(second.text()).toContain('￥2.4')
   })
 
+  it('keeps native CNY official prices for Chinese provider models', async () => {
+    const response = await getPublicModels()
+    const template = response.groups[0].models[0]
+    response.groups = [{
+      ...response.groups[0],
+      name: 'Kimi latest',
+      rate_multiplier: 0.5,
+      models: [{
+        ...template,
+        name: 'kimi-k3',
+        family: 'other',
+        official_price_currency: 'CNY',
+        pricing: {
+          ...template.pricing,
+          input_price: 0.000003,
+          output_price: 0.000015,
+          cache_read_price: 0.0000003,
+        },
+      }],
+    }]
+    getPublicModels.mockResolvedValueOnce(response)
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('$0.21')
+    expect(wrapper.text()).toContain('$0.42')
+    expect(wrapper.text()).toContain('modelMarket.maxSavings:50')
+
+    await wrapper.get('[data-currency="CNY"]').trigger('click')
+    expect(wrapper.text()).toContain('￥1.5')
+    expect(wrapper.text()).toContain('￥3')
+    expect(wrapper.text()).not.toContain('￥21.6')
+
+    const offerButton = wrapper.findAll('button').find((button) => button.text().includes('modelMarket.viewDetails'))
+    await offerButton!.trigger('click')
+    expect(wrapper.text()).toContain('modelMarket.officialPrice.token:￥3,￥15')
+  })
+
   it('shows the full group name above wrapping metadata badges', async () => {
     const longGroupName = 'Claude最新模型-AWS企业专属高可用渠道'
     const response = await getPublicModels()

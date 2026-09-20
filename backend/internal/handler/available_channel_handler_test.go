@@ -86,6 +86,7 @@ func TestBuildPublicModelMarketGroups_FiltersAndAggregates(t *testing.T) {
 	require.Len(t, groups[0].Models, 1)
 	require.Equal(t, "claude-sonnet-4-6", groups[0].Models[0].Name)
 	require.Equal(t, "claude", groups[0].Models[0].Family)
+	require.Equal(t, "USD", groups[0].Models[0].OfficialPriceCurrency)
 	require.NotNil(t, groups[0].Models[0].Pricing)
 	require.Equal(t, &inputPrice, groups[0].Models[0].Pricing.InputPrice)
 	require.Equal(t, "OpenAI Plan", groups[1].Name)
@@ -96,9 +97,29 @@ func TestBuildPublicModelMarketGroups_FiltersAndAggregates(t *testing.T) {
 	require.Equal(t, "openai", groups[1].Models[0].Family)
 }
 
+func TestBuildPublicModelMarketGroups_UsesNativeCurrencyForChineseProviders(t *testing.T) {
+	inputPrice := 3e-6
+	for _, platform := range []string{service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek} {
+		t.Run(platform, func(t *testing.T) {
+			groups := buildPublicModelMarketGroups([]service.AvailableChannel{{
+				Name: "cn-provider", Status: service.StatusActive,
+				Groups: []service.AvailableGroupRef{{ID: 1, Name: "CN", Platform: platform}},
+				SupportedModels: []service.SupportedModel{{
+					Name: platform + "-model", Platform: platform,
+					Pricing: &service.ChannelModelPricing{InputPrice: &inputPrice},
+				}},
+			}})
+
+			require.Len(t, groups, 1)
+			require.Len(t, groups[0].Models, 1)
+			require.Equal(t, "CNY", groups[0].Models[0].OfficialPriceCurrency)
+		})
+	}
+}
+
 func TestPublicModelMarket_FieldWhitelist(t *testing.T) {
 	row := publicModelMarketResponse{Groups: []publicModelMarketGroup{{
-		Name: "Public", Models: []publicModelMarketModel{{Name: "claude-sonnet-4-6", Family: "claude"}},
+		Name: "Public", Models: []publicModelMarketModel{{Name: "claude-sonnet-4-6", Family: "claude", OfficialPriceCurrency: "USD"}},
 	}}}
 	raw, err := json.Marshal(row)
 	require.NoError(t, err)
@@ -109,6 +130,7 @@ func TestPublicModelMarket_FieldWhitelist(t *testing.T) {
 	require.Contains(t, string(raw), `"groups"`)
 	require.Contains(t, string(raw), `"models"`)
 	require.Contains(t, string(raw), `"family":"claude"`)
+	require.Contains(t, string(raw), `"official_price_currency":"USD"`)
 }
 
 func TestBuildPublicModelMarketGroups_HidesKiroAsClaudeFamily(t *testing.T) {

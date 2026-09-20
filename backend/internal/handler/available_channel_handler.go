@@ -152,9 +152,10 @@ type publicModelMarketGroup struct {
 // the internal scheduling platform. In particular, Kiro/Droid/Antigravity are
 // implementation details and must never become anonymous catalog filters.
 type publicModelMarketModel struct {
-	Name    string                     `json:"name"`
-	Family  string                     `json:"family"`
-	Pricing *userSupportedModelPricing `json:"pricing"`
+	Name                  string                     `json:"name"`
+	Family                string                     `json:"family"`
+	OfficialPriceCurrency string                     `json:"official_price_currency"`
+	Pricing               *userSupportedModelPricing `json:"pricing"`
 }
 
 // ListPublicModels returns the anonymous model and pricing catalog.
@@ -214,9 +215,10 @@ func buildPublicModelMarketGroups(channels []service.AvailableChannel) []publicM
 				family := publicModelFamily(name, model.Platform)
 				key := family + "\x00" + strings.ToLower(name)
 				candidate := publicModelMarketModel{
-					Name:    name,
-					Family:  family,
-					Pricing: toUserPricing(model.Pricing),
+					Name:                  name,
+					Family:                family,
+					OfficialPriceCurrency: publicModelOfficialPriceCurrency(model.Platform),
+					Pricing:               toUserPricing(model.Pricing),
 				}
 				// ListAvailable is stably sorted by channel name. Keep the first
 				// configured price, but prefer a priced entry over an empty one.
@@ -261,6 +263,18 @@ func buildPublicModelMarketGroups(channels []service.AvailableChannel) []publicM
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
 	return out
+}
+
+// publicModelOfficialPriceCurrency describes the provider's native catalog
+// currency for display only. Billing continues to use the existing numeric
+// pricing fields and settlement rules.
+func publicModelOfficialPriceCurrency(internalPlatform string) string {
+	switch internalPlatform {
+	case service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek:
+		return "CNY"
+	default:
+		return "USD"
+	}
 }
 
 func publicModelFamily(modelName, internalPlatform string) string {

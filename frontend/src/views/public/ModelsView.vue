@@ -238,7 +238,7 @@ import { platformAccentBarClass, platformBadgeClass } from '@/utils/platformColo
 
 interface ModelOffer { group: PublicModelGroup; model: PublicModel }
 interface ModelEntry { key: string; name: string; family: PublicModelFamily; billingMode: string; offers: ModelOffer[] }
-interface PricePair { actual: number | null; official: number | null }
+interface PricePair { actual: number | null; official: number | null; officialCurrency: DisplayCurrency }
 interface PriceSummaryItem { label: string; value: string; official?: string }
 type ModelSortMode = 'newest' | 'oldest' | 'name_asc' | 'name_desc'
 type DisplayCurrency = 'USD' | 'CNY'
@@ -379,21 +379,35 @@ function displayFactor(group: PublicModelGroup, peak = false): number {
   return normalizedGroupRate(group.rate_multiplier) * peakFactor * settlementRate.value / referenceRate.value
 }
 
+function officialPriceCurrency(model: PublicModel): DisplayCurrency {
+  return model.official_price_currency === 'CNY' ? 'CNY' : 'USD'
+}
+
+function officialCNYFactor(currency: DisplayCurrency): number {
+  return currency === 'CNY' ? 1 : referenceRate.value
+}
+
 function bestPrice(entry: ModelEntry, selector: (model: PublicModel) => number | null, scale: number): PricePair {
-  let best: PricePair = { actual: null, official: null }
+  let best: PricePair = { actual: null, official: null, officialCurrency: 'USD' }
   for (const offer of entry.offers) {
     const raw = selector(offer.model)
     if (raw == null || !Number.isFinite(raw)) continue
     const official = raw * scale
     const actual = official * displayFactor(offer.group)
-    if (best.actual == null || actual < best.actual) best = { actual, official }
+    if (best.actual == null || actual < best.actual) {
+      best = { actual, official, officialCurrency: officialPriceCurrency(offer.model) }
+    }
   }
   return best
 }
 
 function priceItem(label: string, pair: PricePair): PriceSummaryItem | null {
   if (pair.actual == null) return null
-  return { label, value: formatPrice(pair.actual), official: pair.official == null ? undefined : formatPrice(pair.official) }
+  return {
+    label,
+    value: formatPrice(pair.actual),
+    official: pair.official == null ? undefined : formatOfficialPrice(pair.official, pair.officialCurrency),
+  }
 }
 
 function priceSummary(entry: ModelEntry): PriceSummaryItem[] {
@@ -427,6 +441,16 @@ function formatPrice(value: number | null): string {
   return `${symbol}${converted.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits })}`
 }
 
+function formatOfficialPrice(value: number | null, currency: DisplayCurrency): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  const cnyValue = value * officialCNYFactor(currency)
+  const converted = displayCurrency.value === 'CNY' ? cnyValue : cnyValue / referenceRate.value
+  const abs = Math.abs(converted)
+  const maximumFractionDigits = abs >= 0.1 ? 2 : abs >= 0.001 ? 4 : 6
+  const symbol = displayCurrency.value === 'CNY' ? '￥' : '$'
+  return `${symbol}${converted.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits })}`
+}
+
 function formatRateNumber(value: number): string {
   return value.toLocaleString(undefined, { minimumFractionDigits: value % 1 === 0 ? 1 : 0, maximumFractionDigits: 2 })
 }
@@ -445,8 +469,8 @@ function rateRangeLabel(entry: ModelEntry): string {
     : t('modelMarket.billingRateRange', { min: formatRate(min), max: formatRate(max) })
 }
 
-function savingsForRate(rate: number): number | null {
-  const saving = (1 - normalizedGroupRate(rate) * settlementRate.value / referenceRate.value) * 100
+function savingsForRate(rate: number, currency: DisplayCurrency): number | null {
+  const saving = (1 - normalizedGroupRate(rate) * settlementRate.value / officialCNYFactor(currency)) * 100
   if (!Number.isFinite(saving) || saving <= 0) return null
   return Math.min(100, Math.round(saving))
 }
@@ -457,7 +481,9 @@ function modelHasComparablePrice(model: PublicModel): boolean {
 }
 
 function offerSavings(offer: ModelOffer): number | null {
-  return modelHasComparablePrice(offer.model) ? savingsForRate(offer.group.rate_multiplier) : null
+  return modelHasComparablePrice(offer.model)
+    ? savingsForRate(offer.group.rate_multiplier, officialPriceCurrency(offer.model))
+    : null
 }
 
 function entrySavings(entry: ModelEntry): number | null {
@@ -473,8 +499,8 @@ function adjustedPrice(value: number | null, scale: number, group: PublicModelGr
   return value == null ? '-' : formatPrice(value * scale * displayFactor(group, peak))
 }
 
-function officialPrice(value: number | null, scale: number): string {
-  return value == null ? '-' : formatPrice(value * scale)
+function officialPrice(value: number | null, scale: number, currency: DisplayCurrency): string {
+  return value == null ? '-' : formatOfficialPrice(value * scale, currency)
 }
 
 function offerPriceLine(offer: ModelOffer): string {
@@ -491,11 +517,12 @@ function offerPriceLine(offer: ModelOffer): string {
 function offerOfficialLine(offer: ModelOffer): string {
   const pricing = offer.model.pricing
   if (!pricing) return ''
-  if (pricing.billing_mode === 'per_request') return t('modelMarket.officialPrice.perRequest', { price: officialPrice(pricing.per_request_price, 1) })
-  if (pricing.billing_mode === 'image') return t('modelMarket.officialPrice.perImage', { price: officialPrice(pricing.image_output_price, 1) })
+  const currency = officialPriceCurrency(offer.model)
+  if (pricing.billing_mode === 'per_request') return t('modelMarket.officialPrice.perRequest', { price: officialPrice(pricing.per_request_price, 1, currency) })
+  if (pricing.billing_mode === 'image') return t('modelMarket.officialPrice.perImage', { price: officialPrice(pricing.image_output_price, 1, currency) })
   return t('modelMarket.officialPrice.token', {
-    input: officialPrice(pricing.input_price, 1_000_000),
-    output: officialPrice(pricing.output_price, 1_000_000),
+    input: officialPrice(pricing.input_price, 1_000_000, currency),
+    output: officialPrice(pricing.output_price, 1_000_000, currency),
   })
 }
 

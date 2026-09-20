@@ -6,6 +6,8 @@ export type PublicModelFamily = 'claude' | 'openai' | 'gemini' | 'grok' | 'other
 export interface PublicModel {
   name: string
   family: PublicModelFamily
+  /** Provider-native currency used only for official reference price display. */
+  official_price_currency?: 'USD' | 'CNY'
   pricing: UserSupportedModelPricing | null
 }
 

@@ -1598,7 +1598,7 @@ const baseMessages = {
     eyebrow: '公开模型与透明价格',
     title: '模型广场',
     description: '按模型系列浏览公开模型、价格、计费倍率与可选分组；内部上游线路不会公开。',
-    referencePriceHint: '当前以 {currency} 展示；参考汇率 1 USD = ￥{reference}，站内结算比例为 {settlement}。展示币种不影响实际计费，最终费用以账单为准。',
+    referencePriceHint: '当前以 {currency} 展示；官方参考价按供应商原始币种折算，参考汇率 1 USD = ￥{reference}，站内结算比例为 {settlement}。展示币种不影响实际计费，最终费用以账单为准。',
     retry: '重试',
     loadError: '加载模型广场失败',
     displayCurrency: '{currency} 价格',

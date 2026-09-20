@@ -1623,7 +1623,7 @@ const baseMessages = {
     eyebrow: 'Public models and transparent pricing',
     title: 'Model Market',
     description: 'Browse public models by model family with prices, billing multipliers, and available groups. Internal upstream routes stay private.',
-    referencePriceHint: 'Prices are shown in {currency}; reference rate: 1 USD = ￥{reference}, settlement ratio: {settlement}. Display currency does not affect billing; the final bill prevails.',
+    referencePriceHint: 'Prices are shown in {currency}; official references are converted from each provider\'s native currency. Reference rate: 1 USD = ￥{reference}, settlement ratio: {settlement}. Display currency does not affect billing; the final bill prevails.',
     retry: 'Retry',
     loadError: 'Failed to load the model market',
     displayCurrency: '{currency} price',
