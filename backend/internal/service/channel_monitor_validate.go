@@ -24,20 +24,6 @@ var monitorProviders = map[string]struct{}{
 	MonitorProviderDeepseek:    {},
 }
 
-// probeCapableProviders 支持探活（probe / quota_probe）的 provider。
-// antigravity 上游无 Chat/Responses 可打（仅 IDE 代理形态），只允许配额模式。
-//
-//nolint:gochecknoglobals // 静态查表，初始化后不变。
-var probeCapableProviders = map[string]struct{}{
-	MonitorProviderOpenAI:    {},
-	MonitorProviderAnthropic: {},
-	MonitorProviderGemini:    {},
-	MonitorProviderGrok:      {},
-	MonitorProviderKimi:      {},
-	MonitorProviderZhipu:     {},
-	MonitorProviderDeepseek:  {},
-}
-
 // validateProvider 校验 provider 字符串。
 func validateProvider(p string) error {
 	if _, ok := monitorProviders[p]; !ok {
@@ -48,7 +34,7 @@ func validateProvider(p string) error {
 
 // providerSupportsProbe 该 provider 是否注册了探活 adapter（antigravity 为 false）。
 func providerSupportsProbe(p string) bool {
-	_, ok := probeCapableProviders[p]
+	_, ok := providerAdapters[p]
 	return ok
 }
 

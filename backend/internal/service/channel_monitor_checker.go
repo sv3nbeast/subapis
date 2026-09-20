@@ -170,7 +170,10 @@ type providerAdapter struct {
 //
 //nolint:gochecknoglobals // 适配器表是只读静态数据，初始化后不变更。
 var providerAdapters = map[string]providerAdapter{
-	MonitorProviderOpenAI: providerOpenAIChatAdapter,
+	MonitorProviderOpenAI:   providerOpenAIChatAdapter,
+	MonitorProviderKimi:     providerOpenAIChatAdapter,
+	MonitorProviderDeepseek: providerOpenAIChatAdapter,
+	MonitorProviderZhipu:    providerZhipuChatAdapter,
 	// xAI exposes an OpenAI-compatible Chat Completions API. Keep Grok as a
 	// distinct monitor provider for filtering and presentation while reusing
 	// the proven wire protocol adapter.
@@ -246,6 +249,14 @@ var providerOpenAIChatAdapter = providerAdapter{
 		return map[string]string{"Authorization": "Bearer " + apiKey}
 	},
 	textPath: "choices.0.message.content",
+}
+
+//nolint:gochecknoglobals // 适配器表是只读静态数据，初始化后不变更。
+var providerZhipuChatAdapter = providerAdapter{
+	buildPath:    func(string) string { return providerZhipuPath },
+	buildBody:    providerOpenAIChatAdapter.buildBody,
+	buildHeaders: providerOpenAIChatAdapter.buildHeaders,
+	textPath:     providerOpenAIChatAdapter.textPath,
 }
 
 func newClaudeCodeMonitorMetadataUserID() string {
