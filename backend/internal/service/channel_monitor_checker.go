@@ -159,7 +159,11 @@ func pingEndpointOrigin(ctx context.Context, endpoint string) *int {
 //
 // 加新 provider 只需要在 providerAdapters 里增加一个条目，无需触碰 callProvider / validateProvider。
 type providerAdapter struct {
-	buildPath    func(model string) string
+	buildPath func(model string) string
+	// fallbackPath is tried only after the primary request returns HTTP 404.
+	// This keeps native provider paths intact while allowing OpenAI-compatible
+	// gateways (such as Sub2API) to expose the same provider behind /v1.
+	fallbackPath func(model string) string
 	buildBody    func(model, prompt string) ([]byte, error)
 	buildHeaders func(apiKey string) map[string]string
 	textPath     string // gjson 提取响应文本的 path
@@ -254,6 +258,7 @@ var providerOpenAIChatAdapter = providerAdapter{
 //nolint:gochecknoglobals // 适配器表是只读静态数据，初始化后不变更。
 var providerZhipuChatAdapter = providerAdapter{
 	buildPath:    func(string) string { return providerZhipuPath },
+	fallbackPath: func(string) string { return providerOpenAIPath },
 	buildBody:    providerOpenAIChatAdapter.buildBody,
 	buildHeaders: providerOpenAIChatAdapter.buildHeaders,
 	textPath:     providerOpenAIChatAdapter.textPath,
@@ -325,6 +330,15 @@ func callProvider(ctx context.Context, provider, endpoint, apiKey, model, prompt
 	respBytes, status, err := postRawJSON(ctx, full, body, headers)
 	if err != nil {
 		return "", "", status, err
+	}
+	if status == http.StatusNotFound && adapter.fallbackPath != nil {
+		fallbackURL := joinURL(endpoint, adapter.fallbackPath(model))
+		if fallbackURL != full {
+			respBytes, status, err = postRawJSON(ctx, fallbackURL, body, headers)
+			if err != nil {
+				return "", "", status, err
+			}
+		}
 	}
 	return extractMonitorResponseText(adapter, respBytes), string(respBytes), status, nil
 }

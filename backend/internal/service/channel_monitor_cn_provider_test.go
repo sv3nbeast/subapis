@@ -58,6 +58,36 @@ func TestRunCheckForModel_CNProvidersUseRegisteredOpenAICompatibleAdapters(t *te
 	}
 }
 
+func TestRunCheckForModel_ZhipuFallsBackToSub2APIChatPathAfterNotFound(t *testing.T) {
+	originalClient := monitorHTTPClient
+	monitorHTTPClient = &http.Client{Timeout: 5 * time.Second}
+	t.Cleanup(func() { monitorHTTPClient = originalClient })
+
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == providerZhipuPath {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte("404 page not found"))
+			return
+		}
+		require.Equal(t, providerOpenAIPath, r.URL.Path)
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{"content": allPossibleMonitorChallengeAnswers()},
+			}},
+		}))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runCheckForModel(context.Background(), MonitorProviderZhipu, srv.URL, "sk-test", "glm-5.3-flash", nil)
+
+	require.Equal(t, MonitorStatusOperational, res.Status, res.Message)
+	require.Equal(t, []string{providerZhipuPath, providerOpenAIPath}, paths)
+}
+
 func allPossibleMonitorChallengeAnswers() string {
 	var out strings.Builder
 	for i := 0; i <= monitorChallengeMax*2; i++ {
