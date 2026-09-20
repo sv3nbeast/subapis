@@ -19,7 +19,7 @@ func TestRunCheckForModel_CNProvidersUseRegisteredOpenAICompatibleAdapters(t *te
 		path     string
 	}{
 		{provider: MonitorProviderKimi, path: providerOpenAIPath},
-		{provider: MonitorProviderZhipu, path: providerZhipuPath},
+		{provider: MonitorProviderZhipu, path: providerOpenAIPath},
 		{provider: MonitorProviderDeepseek, path: providerOpenAIPath},
 	}
 
@@ -58,7 +58,7 @@ func TestRunCheckForModel_CNProvidersUseRegisteredOpenAICompatibleAdapters(t *te
 	}
 }
 
-func TestRunCheckForModel_ZhipuFallsBackToSub2APIChatPathAfterNotFound(t *testing.T) {
+func TestRunCheckForModel_ZhipuFallsBackToNativePathAfterNotFound(t *testing.T) {
 	originalClient := monitorHTTPClient
 	monitorHTTPClient = &http.Client{Timeout: 5 * time.Second}
 	t.Cleanup(func() { monitorHTTPClient = originalClient })
@@ -68,12 +68,12 @@ func TestRunCheckForModel_ZhipuFallsBackToSub2APIChatPathAfterNotFound(t *testin
 		defer func() { _ = r.Body.Close() }()
 		paths = append(paths, r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == providerZhipuPath {
+		if r.URL.Path == providerOpenAIPath {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte("404 page not found"))
 			return
 		}
-		require.Equal(t, providerOpenAIPath, r.URL.Path)
+		require.Equal(t, providerZhipuPath, r.URL.Path)
 		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{{
 				"message": map[string]any{"content": allPossibleMonitorChallengeAnswers()},
@@ -85,7 +85,7 @@ func TestRunCheckForModel_ZhipuFallsBackToSub2APIChatPathAfterNotFound(t *testin
 	res := runCheckForModel(context.Background(), MonitorProviderZhipu, srv.URL, "sk-test", "glm-5.3-flash", nil)
 
 	require.Equal(t, MonitorStatusOperational, res.Status, res.Message)
-	require.Equal(t, []string{providerZhipuPath, providerOpenAIPath}, paths)
+	require.Equal(t, []string{providerOpenAIPath, providerZhipuPath}, paths)
 }
 
 func allPossibleMonitorChallengeAnswers() string {

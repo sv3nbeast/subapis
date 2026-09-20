@@ -257,8 +257,11 @@ var providerOpenAIChatAdapter = providerAdapter{
 
 //nolint:gochecknoglobals // 适配器表是只读静态数据，初始化后不变更。
 var providerZhipuChatAdapter = providerAdapter{
-	buildPath:    func(string) string { return providerZhipuPath },
-	fallbackPath: func(string) string { return providerOpenAIPath },
+	// GLM keys configured against an OpenAI-compatible gateway (including
+	// Sub2API itself) must be probed through the same /v1 entrypoint used by
+	// real API requests.  Direct Zhipu endpoints are retained as a fallback.
+	buildPath:    func(string) string { return providerOpenAIPath },
+	fallbackPath: func(string) string { return providerZhipuPath },
 	buildBody:    providerOpenAIChatAdapter.buildBody,
 	buildHeaders: providerOpenAIChatAdapter.buildHeaders,
 	textPath:     providerOpenAIChatAdapter.textPath,
