@@ -99,7 +99,11 @@ func TestBuildPublicModelMarketGroups_FiltersAndAggregates(t *testing.T) {
 
 func TestBuildPublicModelMarketGroups_UsesNativeCurrencyForChineseProviders(t *testing.T) {
 	inputPrice := 3e-6
-	for _, platform := range []string{service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek} {
+	for platform, expectedFamily := range map[string]string{
+		service.PlatformKimi:     "kimi",
+		service.PlatformZhipu:    "zhipu",
+		service.PlatformDeepseek: "deepseek",
+	} {
 		t.Run(platform, func(t *testing.T) {
 			groups := buildPublicModelMarketGroups([]service.AvailableChannel{{
 				Name: "cn-provider", Status: service.StatusActive,
@@ -112,9 +116,26 @@ func TestBuildPublicModelMarketGroups_UsesNativeCurrencyForChineseProviders(t *t
 
 			require.Len(t, groups, 1)
 			require.Len(t, groups[0].Models, 1)
+			require.Equal(t, expectedFamily, groups[0].Models[0].Family)
 			require.Equal(t, "CNY", groups[0].Models[0].OfficialPriceCurrency)
 		})
 	}
+}
+
+func TestPublicModelFamily_UsesPublicChineseModelBrands(t *testing.T) {
+	tests := map[string]string{
+		"kimi-k3":             "kimi",
+		"moonshot-v1-32k":     "kimi",
+		"glm-5.3-flash":       "zhipu",
+		"codegeex-4":          "zhipu",
+		"deepseek-v4.1-flash": "deepseek",
+	}
+	for model, expected := range tests {
+		t.Run(model, func(t *testing.T) {
+			require.Equal(t, expected, publicModelFamily(model, "unknown"))
+		})
+	}
+	require.Equal(t, "other", publicModelFamily("custom-model", "unknown"))
 }
 
 func TestPublicModelMarket_FieldWhitelist(t *testing.T) {

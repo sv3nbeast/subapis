@@ -245,7 +245,7 @@ describe('public ModelsView', () => {
       models: [{
         ...template,
         name: 'kimi-k3',
-        family: 'other',
+        family: 'kimi',
         official_price_currency: 'CNY',
         pricing: {
           ...template.pricing,
@@ -272,6 +272,30 @@ describe('public ModelsView', () => {
     const offerButton = wrapper.findAll('button').find((button) => button.text().includes('modelMarket.viewDetails'))
     await offerButton!.trigger('click')
     expect(wrapper.text()).toContain('modelMarket.officialPrice.token:￥3,￥15')
+  })
+
+  it('offers branded Chinese model filters without an other-model filter', async () => {
+    const response = await getPublicModels()
+    const template = response.groups[0].models[0]
+    response.groups[0].models = [
+      { ...template, name: 'kimi-k3', family: 'kimi' },
+      { ...template, name: 'glm-5.3-flash', family: 'zhipu' },
+      { ...template, name: 'deepseek-v4.1-flash', family: 'deepseek' },
+      { ...template, name: 'custom-model', family: 'other' },
+    ]
+    getPublicModels.mockResolvedValueOnce(response)
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const familyFilter = wrapper.get('[data-testid="model-market-family"]')
+    const optionValues = familyFilter.findAll('option').map((option) => option.attributes('value'))
+    expect(optionValues).toEqual(expect.arrayContaining(['kimi', 'zhipu', 'deepseek']))
+    expect(optionValues).not.toContain('other')
+    expect(familyFilter.text()).not.toContain('modelMarket.families.other')
+
+    await familyFilter.setValue('kimi')
+    expect(wrapper.findAll('article h2').map((heading) => heading.text())).toEqual(['kimi-k3'])
   })
 
   it('shows the full group name above wrapping metadata badges', async () => {

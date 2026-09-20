@@ -286,6 +286,12 @@ func publicModelFamily(modelName, internalPlatform string) string {
 		return "gemini"
 	case strings.HasPrefix(name, "grok"):
 		return "grok"
+	case strings.HasPrefix(name, "kimi"), strings.HasPrefix(name, "moonshot"):
+		return "kimi"
+	case strings.HasPrefix(name, "glm"), strings.HasPrefix(name, "codegeex"):
+		return "zhipu"
+	case strings.HasPrefix(name, "deepseek"):
+		return "deepseek"
 	case strings.HasPrefix(name, "gpt"), strings.HasPrefix(name, "chatgpt"),
 		strings.HasPrefix(name, "codex"), strings.HasPrefix(name, "dall-e"),
 		strings.HasPrefix(name, "sora"), strings.HasPrefix(name, "o1"),
@@ -304,6 +310,12 @@ func publicModelFamily(modelName, internalPlatform string) string {
 		return "gemini"
 	case service.PlatformGrok:
 		return "grok"
+	case service.PlatformKimi:
+		return "kimi"
+	case service.PlatformZhipu:
+		return "zhipu"
+	case service.PlatformDeepseek:
+		return "deepseek"
 	default:
 		return "other"
 	}

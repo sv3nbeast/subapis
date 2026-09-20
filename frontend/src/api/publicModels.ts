@@ -1,7 +1,7 @@
 import { apiClient } from './client'
 import type { UserSupportedModelPricing } from './channels'
 
-export type PublicModelFamily = 'claude' | 'openai' | 'gemini' | 'grok' | 'other'
+export type PublicModelFamily = 'claude' | 'openai' | 'gemini' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'other'
 
 export interface PublicModel {
   name: string

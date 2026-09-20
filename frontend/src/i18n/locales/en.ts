@@ -1658,6 +1658,7 @@ const baseMessages = {
       sortNameDesc: 'Name Z–A'
     },
     families: {
+      zhipu: 'Zhipu GLM',
       other: 'Other models'
     },
     billing: {

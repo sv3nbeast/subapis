@@ -73,7 +73,7 @@
             <Icon name="search" size="md" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input v-model="searchQuery" class="input h-10 pl-10" :placeholder="t('modelMarket.filters.search')" />
           </div>
-          <select v-model="familyFilter" class="input h-10">
+          <select v-model="familyFilter" class="input h-10" data-testid="model-market-family">
             <option value="">{{ t('modelMarket.filters.allFamilies') }}</option>
             <option v-for="family in familyOptions" :key="family" :value="family">{{ familyLabel(family) }}</option>
           </select>
@@ -300,7 +300,9 @@ const modelEntries = computed<ModelEntry[]>(() => {
     .sort((a, b) => a.name.localeCompare(b.name))
 })
 
-const familyOptions = computed<PublicModelFamily[]>(() => [...new Set(modelEntries.value.map((entry) => entry.family))].sort((a, b) => familyLabel(a).localeCompare(familyLabel(b))))
+const familyOptions = computed<PublicModelFamily[]>(() => [...new Set(modelEntries.value.map((entry) => entry.family))]
+  .filter((family) => family !== 'other')
+  .sort((a, b) => familyLabel(a).localeCompare(familyLabel(b))))
 const filteredModels = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
   const entries = modelEntries.value.filter((entry) => {
@@ -352,6 +354,9 @@ function familyLabel(family: string): string {
   if (family === 'openai') return 'GPT / OpenAI'
   if (family === 'gemini') return 'Gemini'
   if (family === 'grok') return 'Grok'
+  if (family === 'kimi') return 'Kimi'
+  if (family === 'zhipu') return t('modelMarket.families.zhipu')
+  if (family === 'deepseek') return 'DeepSeek'
   return t('modelMarket.families.other')
 }
 
@@ -360,6 +365,9 @@ function familyStylePlatform(family: string): string {
   if (family === 'openai') return 'openai'
   if (family === 'gemini') return 'gemini'
   if (family === 'grok') return 'grok'
+  if (family === 'kimi') return 'kimi'
+  if (family === 'zhipu') return 'zhipu'
+  if (family === 'deepseek') return 'deepseek'
   return ''
 }
 

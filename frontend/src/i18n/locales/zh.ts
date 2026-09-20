@@ -1633,6 +1633,7 @@ const baseMessages = {
       sortNameDesc: '名称 Z–A'
     },
     families: {
+      zhipu: '智谱 GLM',
       other: '其他模型'
     },
     billing: {
