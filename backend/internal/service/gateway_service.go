@@ -5741,9 +5741,14 @@ func (s *GatewayService) logDetailedSelectionFailure(
 	allowMixedScheduling bool,
 ) selectionFailureStats {
 	stats := s.collectSelectionFailureStats(ctx, accounts, requestedModel, platform, excludedIDs, allowMixedScheduling)
+	hiddenRateLimited := 0
+	if stats.Eligible == 0 && stats.ModelRateLimited == 0 && stats.ModelCapacityCooling == 0 {
+		hiddenRateLimited = s.countHiddenRateLimitedSupporters(ctx, groupID, requestedModel, platform, accounts, excludedIDs, allowMixedScheduling)
+		stats.ModelRateLimited += hiddenRateLimited
+	}
 	logger.LegacyPrintf(
 		"service.gateway",
-		"[SelectAccountDetailed] group_id=%v model=%s platform=%s session=%s total=%d eligible=%d excluded=%d unschedulable=%d platform_filtered=%d model_unsupported=%d model_rate_limited=%d model_capacity_cooling=%d sample_platform_filtered=%v sample_model_unsupported=%v sample_model_rate_limited=%v sample_model_capacity_cooling=%v",
+		"[SelectAccountDetailed] group_id=%v model=%s platform=%s session=%s total=%d eligible=%d excluded=%d unschedulable=%d platform_filtered=%d model_unsupported=%d model_rate_limited=%d model_capacity_cooling=%d sample_platform_filtered=%v sample_model_unsupported=%v sample_model_rate_limited=%v sample_model_capacity_cooling=%v account_rate_limited_hidden=%d",
 		derefGroupID(groupID),
 		requestedModel,
 		platform,
@@ -5760,8 +5765,73 @@ func (s *GatewayService) logDetailedSelectionFailure(
 		stats.SampleMappingIDs,
 		stats.SampleRateLimitIDs,
 		stats.SampleCapacityCooldownIDs,
+		hiddenRateLimited,
 	)
 	return stats
+}
+
+// countHiddenRateLimitedSupporters 统计"支持该模型、但因账号级限流(rate_limit_reset_at)
+// 暂时未进入调度快照"的分组账号数量。
+//
+// 背景：可调度账号列表(快照/DB 查询)在构建期就排除了 rate_limit_reset_at > now 的账号，
+// 所以当分组内支持该模型的账号全部处于短冷却(如 Kiro 上游 60s USER_REQUEST_RATE_EXCEEDED)
+// 时，失败统计里它们一个都不出现，剩下的列表可能只有不支持该模型的账号——此时错误会被
+// 归类为永久性的 400 "model not supported"，而真实状态是"稍后重试即可"。本函数把这些
+// 隐藏账号计入 ModelRateLimited，使分类器返回可重试的 429。仅在失败路径上调用。
+func (s *GatewayService) countHiddenRateLimitedSupporters(
+	ctx context.Context,
+	groupID *int64,
+	requestedModel string,
+	platform string,
+	visible []Account,
+	excludedIDs map[int64]struct{},
+	allowMixedScheduling bool,
+) int {
+	if s == nil || s.accountRepo == nil || groupID == nil || requestedModel == "" {
+		return 0
+	}
+	accounts, err := s.accountRepo.ListByGroup(ctx, *groupID)
+	if err != nil {
+		slog.Warn("selection_failure_hidden_rate_limited_query_failed",
+			"group_id", derefGroupID(groupID), "error", err)
+		return 0
+	}
+	visibleIDs := make(map[int64]struct{}, len(visible))
+	for i := range visible {
+		visibleIDs[visible[i].ID] = struct{}{}
+	}
+	now := time.Now()
+	count := 0
+	for i := range accounts {
+		acc := &accounts[i]
+		if _, ok := visibleIDs[acc.ID]; ok {
+			continue
+		}
+		if _, excluded := excludedIDs[acc.ID]; excluded {
+			continue
+		}
+		// 只统计"仅仅因为账号级限流窗口而缺席"的账号：其余维度必须可调度。
+		if acc.RateLimitResetAt == nil || !now.Before(*acc.RateLimitResetAt) {
+			continue
+		}
+		if !acc.IsActive() || !acc.Schedulable {
+			continue
+		}
+		if acc.OverloadUntil != nil && now.Before(*acc.OverloadUntil) {
+			continue
+		}
+		if acc.TempUnschedulableUntil != nil && now.Before(*acc.TempUnschedulableUntil) {
+			continue
+		}
+		if !s.isAccountAllowedForPlatform(acc, platform, allowMixedScheduling) {
+			continue
+		}
+		if !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
+			continue
+		}
+		count++
+	}
+	return count
 }
 
 func (s *GatewayService) noAvailableSelectionErrorForModel(

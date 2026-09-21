@@ -113,3 +113,42 @@ func TestClassifySelectionError_KiroUnavailableUsesGenericClientMessage(t *testi
 type errorString string
 
 func (e errorString) Error() string { return string(e) }
+
+// 生产事故回归（2026-09-21）：分组内支持该模型的账号全部处于账号级短冷却
+// （被调度快照排除，计入 model_rate_limited），列表里只剩不支持该模型的账号。
+// 此时必须返回可重试的 429，而不是永久性的 400 "model not supported"。
+func TestClassifySelectionError_RateLimitedWithUnsupportedBystandersIs429(t *testing.T) {
+	err := errorString("no available accounts supporting model: claude-opus-4-8 (total=1 eligible=0 excluded=0 unschedulable=0 platform_filtered=0 model_unsupported=1 model_rate_limited=5 model_capacity_cooling=0)")
+
+	cls := classifySelectionError(err)
+
+	if !cls.Handled {
+		t.Fatal("expected classification to handle the error")
+	}
+	if cls.StatusCode != 429 {
+		t.Fatalf("expected 429, got %d", cls.StatusCode)
+	}
+	if cls.ErrorType != "rate_limit_error" {
+		t.Fatalf("expected rate_limit_error, got %s", cls.ErrorType)
+	}
+	if cls.SkipMonitoring {
+		t.Fatal("temporarily rate limited pool must be visible in ops monitoring")
+	}
+}
+
+// 纯"模型不支持"（无任何限流计数）仍保持 400，不受本次放宽影响。
+func TestClassifySelectionError_PureUnsupportedStays400AfterRelaxation(t *testing.T) {
+	err := errorString("no available accounts supporting model: claude-fable-5 (total=6 eligible=0 excluded=0 unschedulable=0 platform_filtered=0 model_unsupported=6 model_rate_limited=0 model_capacity_cooling=0)")
+
+	cls := classifySelectionError(err)
+
+	if !cls.Handled {
+		t.Fatal("expected classification to handle the error")
+	}
+	if cls.StatusCode != 400 {
+		t.Fatalf("expected 400, got %d", cls.StatusCode)
+	}
+	if !cls.SkipMonitoring {
+		t.Fatal("pure unsupported stays skip-monitoring by design")
+	}
+}

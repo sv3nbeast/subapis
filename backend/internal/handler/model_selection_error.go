@@ -59,16 +59,8 @@ func classifySelectionError(err error) selectionErrorClassification {
 		}
 	}
 
-	if strings.Contains(lower, "supporting model:") && isPureUnsupportedSelectionSummary(lower) {
-		return selectionErrorClassification{
-			Handled:        true,
-			StatusCode:     400,
-			ErrorType:      "invalid_request_error",
-			Message:        "Requested model is not supported by this API key/group",
-			SkipMonitoring: true,
-		}
-	}
-
+	// 限流优先于"模型不支持"：只要有支持该模型的账号处于临时限流（含被调度快照
+	// 排除的账号级冷却），就必须返回可重试的 429，而不是永久性的 400。
 	if strings.Contains(lower, "supporting model:") && isPureRateLimitedSelectionSummary(lower) {
 		return selectionErrorClassification{
 			Handled:        true,
@@ -76,6 +68,16 @@ func classifySelectionError(err error) selectionErrorClassification {
 			ErrorType:      "rate_limit_error",
 			Message:        "Requested model is temporarily rate limited upstream, please retry later",
 			SkipMonitoring: false,
+		}
+	}
+
+	if strings.Contains(lower, "supporting model:") && isPureUnsupportedSelectionSummary(lower) {
+		return selectionErrorClassification{
+			Handled:        true,
+			StatusCode:     400,
+			ErrorType:      "invalid_request_error",
+			Message:        "Requested model is not supported by this API key/group",
+			SkipMonitoring: true,
 		}
 	}
 
@@ -120,6 +122,10 @@ func isPureUnsupportedSelectionSummary(msg string) bool {
 		stats.modelCapacityCooling == 0
 }
 
+// isPureRateLimitedSelectionSummary 判断本次选号失败是否应归类为临时限流。
+// 允许 model_unsupported > 0：列表里存在不支持该模型的账号不影响结论——
+// 只要还有支持该模型的账号在限流冷却（modelRateLimited 含被快照排除的
+// 账号级冷却计数），恢复后请求就能成功，属于可重试场景。
 func isPureRateLimitedSelectionSummary(msg string) bool {
 	stats, ok := parseSelectionFailureSummary(msg)
 	if !ok {
@@ -127,7 +133,6 @@ func isPureRateLimitedSelectionSummary(msg string) bool {
 	}
 
 	return stats.eligible == 0 &&
-		stats.modelUnsupported == 0 &&
 		stats.modelRateLimited > 0 &&
 		stats.modelCapacityCooling == 0
 }

@@ -2493,9 +2493,14 @@ func (s *GatewayService) logDetailedSelectionFailureNianzs(
 	allowMixedScheduling bool,
 ) nianzsSelectionFailureStats {
 	stats := s.collectSelectionFailureStatsNianzs(ctx, accounts, requestedModel, platform, excludedIDs, allowMixedScheduling)
+	hiddenRateLimited := 0
+	if stats.Eligible == 0 && stats.ModelRateLimited == 0 {
+		hiddenRateLimited = s.countHiddenRateLimitedSupporters(ctx, groupID, requestedModel, platform, accounts, excludedIDs, allowMixedScheduling)
+		stats.ModelRateLimited += hiddenRateLimited
+	}
 	logger.LegacyPrintf(
 		"service.gateway",
-		"[SelectAccountDetailed] group_id=%v model=%s platform=%s session=%s total=%d eligible=%d excluded=%d unschedulable=%d platform_filtered=%d model_unsupported=%d model_rate_limited=%d profit_threshold=%d profit_invalid_account_rate=%d sample_platform_filtered=%v sample_model_unsupported=%v sample_model_rate_limited=%v",
+		"[SelectAccountDetailed] group_id=%v model=%s platform=%s session=%s total=%d eligible=%d excluded=%d unschedulable=%d platform_filtered=%d model_unsupported=%d model_rate_limited=%d profit_threshold=%d profit_invalid_account_rate=%d sample_platform_filtered=%v sample_model_unsupported=%v sample_model_rate_limited=%v account_rate_limited_hidden=%d",
 		derefGroupID(groupID),
 		requestedModel,
 		platform,
@@ -2512,6 +2517,7 @@ func (s *GatewayService) logDetailedSelectionFailureNianzs(
 		stats.SamplePlatformIDs,
 		stats.SampleMappingIDs,
 		stats.SampleRateLimitIDs,
+		hiddenRateLimited,
 	)
 	return stats
 }
