@@ -20,8 +20,8 @@ func ptrStr(v string) *string { return &v }
 // "API Error: Content block not found".
 func assertAnthropicBlockLifecycle(t *testing.T, events []AnthropicStreamEvent) {
 	t.Helper()
-	open := map[int]bool{}   // index → currently open
-	seen := map[int]bool{}   // index → was ever started
+	open := map[int]bool{} // index → currently open
+	seen := map[int]bool{} // index → was ever started
 	for i, ev := range events {
 		switch ev.Type {
 		case "content_block_start":

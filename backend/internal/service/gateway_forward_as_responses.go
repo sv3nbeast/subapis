@@ -810,6 +810,7 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponseWithOptions(
 	return &ForwardResult{
 		RequestID:       requestID,
 		ResponseID:      responsesResp.ID,
+		UpstreamHeaders: resp.Header,
 		Usage:           usage,
 		Model:           originalModel,
 		ResponsesOutput: responsesResp.Output,
@@ -1073,6 +1074,7 @@ func (s *GatewayService) handleResponsesStreamingResponseWithOptions(
 		return &ForwardResult{
 			RequestID:        requestID,
 			ResponseID:       state.ResponseID,
+			UpstreamHeaders:  resp.Header,
 			Usage:            usage,
 			Model:            originalModel,
 			ResponsesOutput:  outputAccumulator.BuildOutput(),

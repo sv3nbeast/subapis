@@ -126,6 +126,7 @@ func (s *OpenAIGatewayService) forwardChatCompletionsViaResponsesWS(
 			bridgeContext,
 			account,
 			reqBody,
+			"",
 			token,
 			decision,
 			false,

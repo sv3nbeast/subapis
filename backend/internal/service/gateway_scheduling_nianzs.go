@@ -221,7 +221,7 @@ func (s *GatewayService) SelectAccountWithLoadAwarenessNianzs(ctx context.Contex
 		return nil, err
 	}
 	preferOAuth := platform == PlatformGemini
-	if s.debugModelRoutingEnabled() && platform == PlatformAnthropic && requestedModel != "" {
+	if s.debugModelRoutingEnabled() && requestedModel != "" && modelRoutingAppliesToTargetPlatform(platform) {
 		logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] load-aware enabled: group_id=%v model=%s session=%s platform=%s", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), platform)
 	}
 
@@ -248,10 +248,17 @@ func (s *GatewayService) SelectAccountWithLoadAwarenessNianzs(ctx context.Contex
 		return excluded
 	}
 
-	// 获取模型路由配置（anthropic 目标平台；composite 分组按目标平台判断）
+	// upstream 计费基准的渠道模型限制以账号映射后的上游模型为准，只能逐账号判定；
+	// 负载感知各层的候选过滤与粘性 gate 共用这一判定。
+	needsUpstreamCheck := s.needsUpstreamChannelRestrictionCheck(ctx, groupID)
+	isChannelRestricted := func(account *Account) bool {
+		return needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, requestedModel)
+	}
+
+	// 获取模型路由配置（anthropic / openai 目标平台；composite 分组按目标平台判断）
 	var routingAccountIDs []int64
-	if group != nil && requestedModel != "" && platform == PlatformAnthropic &&
-		(group.Platform == PlatformAnthropic || group.Platform == PlatformComposite) {
+	if group != nil && requestedModel != "" &&
+		modelRoutingAppliesToPlatform(platform, group.Platform) {
 		routingAccountIDs = group.GetRoutingAccountIDs(requestedModel)
 		if s.debugModelRoutingEnabled() {
 			logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] context group routing: group_id=%d model=%s enabled=%v rules=%d matched_ids=%v session=%s sticky_account=%d",
@@ -275,7 +282,7 @@ func (s *GatewayService) SelectAccountWithLoadAwarenessNianzs(ctx context.Contex
 	if len(routingAccountIDs) > 0 && s.concurrencyService != nil {
 		// 1. 过滤出路由列表中可调度的账号
 		var routingCandidates []*Account
-		var filteredExcluded, filteredMissing, filteredUnsched, filteredPlatform, filteredModelScope, filteredModelMapping, filteredWindowCost int
+		var filteredExcluded, filteredMissing, filteredUnsched, filteredPlatform, filteredModelScope, filteredModelMapping, filteredChannelRestricted, filteredWindowCost int
 		var modelScopeSkippedIDs []int64 // 记录因模型限流被跳过的账号 ID
 		for _, routingAccountID := range routingAccountIDs {
 			if isExcluded(routingAccountID) {
@@ -302,6 +309,10 @@ func (s *GatewayService) SelectAccountWithLoadAwarenessNianzs(ctx context.Contex
 				filteredModelMapping++
 				continue
 			}
+			if isChannelRestricted(account) {
+				filteredChannelRestricted++
+				continue
+			}
 			if !s.isAccountSchedulableForModelSelectionNianzs(ctx, account, requestedModel) {
 				filteredModelScope++
 				modelScopeSkippedIDs = append(modelScopeSkippedIDs, account.ID)
@@ -324,9 +335,9 @@ func (s *GatewayService) SelectAccountWithLoadAwarenessNianzs(ctx context.Contex
 		}
 
 		if s.debugModelRoutingEnabled() {
-			logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] routed candidates: group_id=%v model=%s routed=%d candidates=%d filtered(excluded=%d missing=%d unsched=%d platform=%d model_scope=%d model_mapping=%d window_cost=%d)",
+			logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] routed candidates: group_id=%v model=%s routed=%d candidates=%d filtered(excluded=%d missing=%d unsched=%d platform=%d model_scope=%d model_mapping=%d channel_restricted=%d window_cost=%d)",
 				derefGroupID(groupID), requestedModel, len(routingAccountIDs), len(routingCandidates),
-				filteredExcluded, filteredMissing, filteredUnsched, filteredPlatform, filteredModelScope, filteredModelMapping, filteredWindowCost)
+				filteredExcluded, filteredMissing, filteredUnsched, filteredPlatform, filteredModelScope, filteredModelMapping, filteredChannelRestricted, filteredWindowCost)
 			if len(modelScopeSkippedIDs) > 0 {
 				logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] model_rate_limited accounts skipped: group_id=%v model=%s account_ids=%v",
 					derefGroupID(groupID), requestedModel, modelScopeSkippedIDs)
@@ -352,6 +363,7 @@ func (s *GatewayService) SelectAccountWithLoadAwarenessNianzs(ctx context.Contex
 							s.isGatewayAccountProfitEligible(ctx, stickyAccount) &&
 							s.isAccountAllowedForPlatformNianzs(stickyAccount, platform, useMixed) &&
 							(requestedModel == "" || s.isModelSupportedByAccountWithContextNianzs(ctx, stickyAccount, requestedModel)) &&
+							!isChannelRestricted(stickyAccount) &&
 							s.isAccountSchedulableForModelSelectionNianzs(ctx, stickyAccount, requestedModel) &&
 							s.isAccountSchedulableForQuotaNianzs(stickyAccount) &&
 							s.isAccountSchedulableForWindowCostNianzs(ctx, stickyAccount, true)
@@ -536,6 +548,7 @@ func (s *GatewayService) SelectAccountWithLoadAwarenessNianzs(ctx context.Contex
 				platformOK := s.isAccountAllowedForPlatformNianzs(account, platform, useMixed)
 				profitOK := s.isGatewayAccountProfitEligible(ctx, account)
 				modelSupported := requestedModel == "" || s.isModelSupportedByAccountWithContextNianzs(ctx, account, requestedModel)
+				channelOK := !isChannelRestricted(account)
 				modelSchedulable := s.isAccountSchedulableForModelSelectionNianzs(ctx, account, requestedModel)
 				quotaOK := s.isAccountSchedulableForQuotaNianzs(account)
 				windowCostOK := s.isAccountSchedulableForWindowCostNianzs(ctx, account, true)
@@ -550,13 +563,14 @@ func (s *GatewayService) SelectAccountWithLoadAwarenessNianzs(ctx context.Contex
 					"platform_ok", platformOK,
 					"profit_ok", profitOK,
 					"model_supported", modelSupported,
+					"channel_ok", channelOK,
 					"model_schedulable", modelSchedulable,
 					"quota_ok", quotaOK,
 					"window_cost_ok", windowCostOK,
 					"rpm_ok", rpmOK,
 				)
 
-				if !clearSticky && platformOK && profitOK && modelSupported && modelSchedulable && quotaOK && windowCostOK && rpmOK && schedulable {
+				if !clearSticky && platformOK && profitOK && modelSupported && channelOK && modelSchedulable && quotaOK && windowCostOK && rpmOK && schedulable {
 					result, err := s.tryAcquireAccountSlotNianzs(ctx, accountID, account.Concurrency)
 					if err == nil && result.Acquired {
 						// 会话数量限制检查
@@ -641,6 +655,7 @@ func (s *GatewayService) SelectAccountWithLoadAwarenessNianzs(ctx context.Contex
 		"total_accounts", len(accounts),
 	)
 	candidates := make([]*Account, 0, len(accounts))
+	channelRestrictedCount := 0
 	for i := range accounts {
 		acc := &accounts[i]
 		if isExcluded(acc.ID) {
@@ -659,6 +674,10 @@ func (s *GatewayService) SelectAccountWithLoadAwarenessNianzs(ctx context.Contex
 			continue
 		}
 		if requestedModel != "" && !s.isModelSupportedByAccountWithContextNianzs(ctx, acc, requestedModel) {
+			continue
+		}
+		if isChannelRestricted(acc) {
+			channelRestrictedCount++
 			continue
 		}
 		if !s.isAccountSchedulableForModelSelectionNianzs(ctx, acc, requestedModel) {
@@ -683,6 +702,14 @@ func (s *GatewayService) SelectAccountWithLoadAwarenessNianzs(ctx context.Contex
 		if s.tryRecoverKiroCooldownPoolNianzs(ctx, accounts, requestedModel, excludedIDs, useMixed) {
 			retryCtx := context.WithValue(ctx, nianzsKiroCooldownRecoveryAttemptedKey, true)
 			return s.SelectAccountWithLoadAwarenessNianzs(retryCtx, groupID, sessionHash, requestedModel, excludedIDs, metadataUserID, sub2apiUserID)
+		}
+		if channelRestrictedCount > 0 {
+			slog.Warn("channel pricing restriction blocked request",
+				"group_id", derefGroupID(groupID),
+				"model", requestedModel,
+				"restricted_accounts", channelRestrictedCount,
+				"total_accounts", len(accounts))
+			return nil, fmt.Errorf("%w supporting model: %s (channel pricing restriction)", ErrNoAvailableAccounts, requestedModel)
 		}
 		return nil, ErrNoAvailableAccounts
 	}
@@ -848,7 +875,7 @@ func (s *GatewayService) ResolveGroupByIDNianzs(ctx context.Context, groupID int
 }
 
 func (s *GatewayService) routingAccountIDsForRequestNianzs(ctx context.Context, groupID *int64, requestedModel string, platform string) []int64 {
-	if groupID == nil || requestedModel == "" || platform != PlatformAnthropic {
+	if groupID == nil || requestedModel == "" || !modelRoutingAppliesToTargetPlatform(platform) {
 		return nil
 	}
 	group, err := s.resolveGroupByIDNianzs(ctx, *groupID)
@@ -858,11 +885,11 @@ func (s *GatewayService) routingAccountIDsForRequestNianzs(ctx context.Context, 
 		}
 		return nil
 	}
-	// Model routing applies only to requests resolved to Anthropic. Composite
-	// groups may still use those rules once their model resolved to Anthropic.
-	if group.Platform != PlatformAnthropic && group.Platform != PlatformComposite {
+	// 路由规则适用于解析到 Anthropic 或 OpenAI 的请求；composite 分组在其模型解析到
+	// 上述平台后同样可以复用这些规则。
+	if !modelRoutingAppliesToPlatform(platform, group.Platform) {
 		if s.debugModelRoutingEnabled() {
-			logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] skip: non-anthropic group platform: group_id=%d group_platform=%s model=%s", group.ID, group.Platform, requestedModel)
+			logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] skip: group platform not eligible: group_id=%d group_platform=%s target_platform=%s model=%s", group.ID, group.Platform, platform, requestedModel)
 		}
 		return nil
 	}

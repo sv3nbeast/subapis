@@ -43,7 +43,9 @@ func TestAstraModelContract(t *testing.T) {
 	for _, level := range d.SupportedReasoningLevels {
 		efforts = append(efforts, level.Effort)
 	}
-	require.Equal(t, []string{"low", "medium", "high", "xhigh", "max"}, efforts)
+	// 官方 2db78bd3d 按 Codex models.json 为 Astra 补上 Ultra 工作流档位（多智能体委派），
+	// 与本地“只认规范模型名”的约束无关：ultra 仍是 reasoning 参数，不是模型后缀。
+	require.Equal(t, []string{"low", "medium", "high", "xhigh", "max", "ultra"}, efforts)
 	require.True(t, isOpenAICodexImageInputModel("gpt-6-astra"))
 }
 

@@ -159,11 +159,11 @@ func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
 	if !cfg.Gateway.OpenAIWS.DynamicMaxConnsByAccountConcurrencyEnabled {
 		t.Fatalf("Gateway.OpenAIWS.DynamicMaxConnsByAccountConcurrencyEnabled = false, want true")
 	}
-	if cfg.Gateway.OpenAIWS.OAuthMaxConnsFactor != 1.0 {
-		t.Fatalf("Gateway.OpenAIWS.OAuthMaxConnsFactor = %v, want 1.0", cfg.Gateway.OpenAIWS.OAuthMaxConnsFactor)
+	if cfg.Gateway.OpenAIWS.OAuthMaxConnsFactor != 5.0 {
+		t.Fatalf("Gateway.OpenAIWS.OAuthMaxConnsFactor = %v, want 5.0", cfg.Gateway.OpenAIWS.OAuthMaxConnsFactor)
 	}
-	if cfg.Gateway.OpenAIWS.APIKeyMaxConnsFactor != 1.0 {
-		t.Fatalf("Gateway.OpenAIWS.APIKeyMaxConnsFactor = %v, want 1.0", cfg.Gateway.OpenAIWS.APIKeyMaxConnsFactor)
+	if cfg.Gateway.OpenAIWS.APIKeyMaxConnsFactor != 5.0 {
+		t.Fatalf("Gateway.OpenAIWS.APIKeyMaxConnsFactor = %v, want 5.0", cfg.Gateway.OpenAIWS.APIKeyMaxConnsFactor)
 	}
 	if cfg.Gateway.OpenAIWS.StickySessionTTLSeconds != 3600 {
 		t.Fatalf("Gateway.OpenAIWS.StickySessionTTLSeconds = %d, want 3600", cfg.Gateway.OpenAIWS.StickySessionTTLSeconds)
@@ -259,7 +259,16 @@ func TestLoadDefaultOpenAICompactModel(t *testing.T) {
 
 	cfg, err := Load()
 	require.NoError(t, err)
-	require.Equal(t, "gpt-5.4", cfg.Gateway.OpenAICompactModel)
+	require.Equal(t, "gpt-5.5", cfg.Gateway.OpenAICompactModel)
+}
+
+func TestLoadDefaultGatewayTextMaxBodySize(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, int64(32*1024*1024), cfg.Gateway.TextMaxBodySize)
+	require.LessOrEqual(t, cfg.Gateway.TextMaxBodySize, cfg.Gateway.MaxBodySize)
 }
 
 func TestLoadOpenAICompactModelFromEnv(t *testing.T) {
@@ -891,6 +900,21 @@ func TestLoadDefaultUsageCleanupConfig(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultOpsCleanupConfig(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !cfg.Ops.Cleanup.Enabled {
+		t.Fatal("Ops.Cleanup.Enabled = false, want true")
+	}
+	if cfg.Ops.Cleanup.SystemLogRetentionDays != 30 {
+		t.Fatalf("Ops.Cleanup.SystemLogRetentionDays = %d, want 30", cfg.Ops.Cleanup.SystemLogRetentionDays)
+	}
+}
+
 func TestValidateUsageCleanupConfigEnabled(t *testing.T) {
 	resetViperWithJWTSecret(t)
 
@@ -1461,6 +1485,11 @@ func TestValidateConfigErrors(t *testing.T) {
 			wantErr: "gateway.max_body_size",
 		},
 		{
+			name:    "gateway text body exceeds media body",
+			mutate:  func(c *Config) { c.Gateway.TextMaxBodySize = c.Gateway.MaxBodySize + 1 },
+			wantErr: "gateway.text_max_body_size",
+		},
+		{
 			name:    "gateway max idle conns",
 			mutate:  func(c *Config) { c.Gateway.MaxIdleConns = 0 },
 			wantErr: "gateway.max_idle_conns",
@@ -1731,6 +1760,11 @@ func TestValidateConfigErrors(t *testing.T) {
 			name:    "ops cleanup retention",
 			mutate:  func(c *Config) { c.Ops.Cleanup.ErrorLogRetentionDays = -1 },
 			wantErr: "ops.cleanup.error_log_retention_days",
+		},
+		{
+			name:    "ops cleanup system log retention",
+			mutate:  func(c *Config) { c.Ops.Cleanup.SystemLogRetentionDays = 0 },
+			wantErr: "ops.cleanup.system_log_retention_days",
 		},
 		{
 			name:    "ops cleanup minute retention",

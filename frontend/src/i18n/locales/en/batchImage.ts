@@ -1,5 +1,8 @@
 export default {
   batchImage: {
+    // Router meta keys for the /batch-image guide page (mirrors batchImageGuide.title/description).
+    title: 'Batch Image Generation',
+    description: 'Submit multiple prompts in one job and download the generated images when complete',
     columns: {
       taskName: 'Task name',
       model: 'Model',

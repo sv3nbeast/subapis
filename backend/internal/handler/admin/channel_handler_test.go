@@ -467,10 +467,11 @@ func TestPricingRequestToService_TimePricingNil(t *testing.T) {
 // 避免渠道倍率意外污染账号成本口径。
 func TestPricingRequestToService_MultipliersGatedByFlag(t *testing.T) {
 	req := channelModelPricingRequest{
-		Models:         []string{"gpt-5"},
-		BillingMode:    "token",
-		FastMultiplier: float64Ptr(2.5),
-		FlexMultiplier: float64Ptr(0.5),
+		Models:                       []string{"gpt-5"},
+		BillingMode:                  "token",
+		FastMultiplier:               float64Ptr(2.5),
+		FlexMultiplier:               float64Ptr(0.5),
+		MaxReasoningEffortMultiplier: float64Ptr(3),
 		Intervals: []pricingIntervalRequest{{
 			MinTokens:            272000,
 			InputMultiplier:      float64Ptr(2),
@@ -483,6 +484,7 @@ func TestPricingRequestToService_MultipliersGatedByFlag(t *testing.T) {
 	allowed := pricingRequestToService([]channelModelPricingRequest{req}, true)
 	require.Equal(t, float64Ptr(2.5), allowed[0].FastMultiplier)
 	require.Equal(t, float64Ptr(0.5), allowed[0].FlexMultiplier)
+	require.Equal(t, float64Ptr(3), allowed[0].MaxReasoningEffortMultiplier)
 	require.Equal(t, float64Ptr(2), allowed[0].Intervals[0].InputMultiplier)
 	require.Equal(t, float64Ptr(1.5), allowed[0].Intervals[0].OutputMultiplier)
 	require.Equal(t, float64Ptr(2), allowed[0].Intervals[0].CacheWriteMultiplier)
@@ -491,6 +493,7 @@ func TestPricingRequestToService_MultipliersGatedByFlag(t *testing.T) {
 	dropped := pricingRequestToService([]channelModelPricingRequest{req}, false)
 	require.Nil(t, dropped[0].FastMultiplier)
 	require.Nil(t, dropped[0].FlexMultiplier)
+	require.Nil(t, dropped[0].MaxReasoningEffortMultiplier)
 	require.Nil(t, dropped[0].Intervals[0].InputMultiplier)
 	require.Nil(t, dropped[0].Intervals[0].OutputMultiplier)
 	require.Nil(t, dropped[0].Intervals[0].CacheWriteMultiplier)
@@ -560,7 +563,7 @@ func TestSyncPricingModels_ValidPlatform_EmptyService(t *testing.T) {
 	svc := service.NewPricingService(nil, nil)
 	router := setupSyncPricingModelsRouter(svc)
 
-	for _, platform := range []string{"anthropic", "openai", "gemini", "antigravity", "grok", "cursor", "kimi", "zhipu", "deepseek"} {
+	for _, platform := range []string{"anthropic", "openai", "gemini", "antigravity", "grok", "cursor", "kimi", "zhipu", "deepseek", "minimax"} {
 		req := httptest.NewRequest(http.MethodGet, "/channels/pricing/sync-models?platform="+platform, nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -596,4 +599,60 @@ func TestSyncPricingModels_OpenAIIncludesStaticGPTFallbacks(t *testing.T) {
 	require.Contains(t, body.Data.Models, "gpt-5.6-sol")
 	require.Contains(t, body.Data.Models, "gpt-5.6-terra")
 	require.Contains(t, body.Data.Models, "gpt-5.6-luna")
+}
+
+func setupModelDefaultPricingRouter() *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	h := &ChannelHandler{billingService: service.NewBillingService(nil, nil)}
+	router.GET("/channels/model-pricing", h.GetModelDefaultPricing)
+	return router
+}
+
+func TestGetModelDefaultPricing_ReturnsFable51CacheTTLs(t *testing.T) {
+	router := setupModelDefaultPricingRouter()
+	req := httptest.NewRequest(http.MethodGet, "/channels/model-pricing?model=claude-fable-5-1", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var body struct {
+		Data struct {
+			Found                        bool     `json:"found"`
+			CacheWritePrice              float64  `json:"cache_write_price"`
+			CacheWrite1hPrice            *float64 `json:"cache_write_1h_price"`
+			MaxReasoningEffortMultiplier *float64 `json:"max_reasoning_effort_multiplier"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.True(t, body.Data.Found)
+	// 本地 Fable 5.1 价卡（42178f70f，2026-09-02）：$15/$75 per MTok，cache write 5m
+	// $18.75、1h $30、cache read $0.25。fallbackPrices 与
+	// resources/model-pricing/model_prices_and_context_window.json 两处一致。
+	// 官方此处按 claude-fable-5 的 $12.5/$20 断言，与生产实际计费口径不符，故改测试不改价卡。
+	require.InDelta(t, 18.75e-6, body.Data.CacheWritePrice, 1e-12)
+	require.NotNil(t, body.Data.CacheWrite1hPrice)
+	require.InDelta(t, 30e-6, *body.Data.CacheWrite1hPrice, 1e-12)
+	// 官方对 Fable 5.1 自动注入 max 推理强度倍率 3.0；本地默认关闭（自有价卡已含溢价，
+	// 生产从未存在该倍率），需要时由运营在渠道定价显式配置。
+	// 见 service.applyDefaultMaxReasoningEffortMultiplier。
+	require.Nil(t, body.Data.MaxReasoningEffortMultiplier)
+}
+
+func TestGetModelDefaultPricing_OmitsUnsupportedCache1hPrice(t *testing.T) {
+	router := setupModelDefaultPricingRouter()
+	req := httptest.NewRequest(http.MethodGet, "/channels/model-pricing?model=claude-sonnet-4", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var body struct {
+		Data struct {
+			Found             bool     `json:"found"`
+			CacheWrite1hPrice *float64 `json:"cache_write_1h_price"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.True(t, body.Data.Found)
+	require.Nil(t, body.Data.CacheWrite1hPrice)
 }

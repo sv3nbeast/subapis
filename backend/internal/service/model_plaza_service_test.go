@@ -57,6 +57,19 @@ func TestListPlazaGroups_GroupCentricAggregation(t *testing.T) {
 	require.Equal(t, "claude-sonnet", out[0].Models[1].Name)
 }
 
+func TestWithDefaultMaxReasoningEffortMultiplier_Fable51(t *testing.T) {
+	base := &ChannelModelPricing{}
+	// 本地默认不自动注入官方 3.0 倍率（见 applyDefaultMaxReasoningEffortMultiplier）。
+	require.Same(t, base, withDefaultMaxReasoningEffortMultiplier(base, "claude-fable-5-1"))
+	require.Nil(t, base.MaxReasoningEffortMultiplier)
+
+	// 运营显式配置的倍率仍然生效且不被覆盖。
+	configured := 2.0
+	custom := &ChannelModelPricing{MaxReasoningEffortMultiplier: &configured}
+	require.Same(t, custom, withDefaultMaxReasoningEffortMultiplier(custom, "claude-fable-5-1"))
+	require.Equal(t, 2.0, *custom.MaxReasoningEffortMultiplier)
+}
+
 func TestListPlazaGroups_DedupFirstWinsWithPricingUpgrade(t *testing.T) {
 	// 同名模型:先见者胜;仅当已存条目无定价而新条目有定价时升级替换。
 	unpriced := Channel{
@@ -339,7 +352,7 @@ func newPlazaServiceWithBilling(channels []Channel, groups []Group, groupPlatfor
 			return groupPlatforms, nil
 		},
 	}
-	cs := NewChannelService(repo, nil, nil, nil)
+	cs := NewChannelService(repo, nil, nil, nil, nil)
 	bs := NewBillingService(&config.Config{}, catalog)
 	return NewModelPlazaService(repo, &stubGroupRepoForAvailable{activeGroups: groups}, catalog, bs, NewModelPricingResolver(cs, bs))
 }

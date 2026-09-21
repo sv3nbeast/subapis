@@ -254,6 +254,11 @@
           :placeholder="t('admin.accounts.bulkEdit.baseUrlPlaceholder')"
           aria-labelledby="bulk-edit-base-url-label"
         />
+        <GrokBaseUrlPresets
+          v-if="allTargetsGrok"
+          class="mt-2"
+          @select="baseUrl = $event; enableBaseUrl = true"
+        />
         <p class="input-hint">
           {{ t('admin.accounts.bulkEdit.baseUrlNotice') }}
         </p>
@@ -970,8 +975,8 @@
           <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
             {{ t('admin.accounts.openai.wsModeDesc') }}
           </p>
-          <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
-            {{ t(openAIWSModeConcurrencyHintKey) }}
+          <p v-if="openAIWSModeHintKey" class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+            {{ t(openAIWSModeHintKey) }}
           </p>
           <Select
             v-model="openaiOAuthResponsesWebSocketV2Mode"
@@ -1093,6 +1098,45 @@
         </div>
       </div>
 
+      <!-- Upstream billing auto probe (any API-key platform) -->
+      <div v-if="allBillingProbeCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="mb-3 flex items-center justify-between">
+          <div class="flex-1 pr-4">
+            <label
+              id="bulk-edit-upstream-billing-auto-probe-label"
+              class="input-label mb-0"
+              for="bulk-edit-upstream-billing-auto-probe-enabled"
+            >
+              {{ t('admin.accounts.upstreamBilling.autoProbe') }}
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.upstreamBilling.autoProbeHint') }}
+            </p>
+          </div>
+          <input
+            v-model="enableUpstreamBillingAutoProbe"
+            id="bulk-edit-upstream-billing-auto-probe-enabled"
+            type="checkbox"
+            aria-controls="bulk-edit-upstream-billing-auto-probe"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div
+          id="bulk-edit-upstream-billing-auto-probe"
+          :class="!enableUpstreamBillingAutoProbe && 'pointer-events-none opacity-50'"
+          role="group"
+          aria-labelledby="bulk-edit-upstream-billing-auto-probe-label"
+        >
+          <Select
+            v-model="upstreamBillingAutoProbeMode"
+            :disabled="!enableUpstreamBillingAutoProbe"
+            data-testid="bulk-edit-upstream-billing-auto-probe-select"
+            :options="upstreamBillingAutoProbeOptions"
+            aria-labelledby="bulk-edit-upstream-billing-auto-probe-label"
+          />
+        </div>
+      </div>
+
       <!-- OpenAI API Key endpoint capabilities -->
       <div v-if="allOpenAIAPIKey" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between gap-4">
@@ -1185,8 +1229,8 @@
           <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
             {{ t('admin.accounts.openai.wsModeDesc') }}
           </p>
-          <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
-            {{ t(openAIAPIKeyWSModeConcurrencyHintKey) }}
+          <p v-if="openAIAPIKeyWSModeHintKey" class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+            {{ t(openAIAPIKeyWSModeHintKey) }}
           </p>
           <Select
             v-model="openaiAPIKeyResponsesWebSocketV2Mode"
@@ -1568,12 +1612,13 @@ import {
 import {
   buildHeaderOverridesObject,
   getHeaderOverrideTemplate,
-  isHeaderOverridePlatform,
+  isHeaderOverrideCapable,
   validateHeaderOverrideRows,
   HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY,
   HEADER_OVERRIDES_CREDENTIAL_KEY,
   type HeaderOverrideRow
 } from '@/components/account/credentialsBuilder'
+import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { needsMixedChannelCheck } from '@/utils/mixedChannel'
 import {
@@ -1582,7 +1627,7 @@ import {
   OPENAI_WS_MODE_PASSTHROUGH,
   OPENAI_WS_MODE_HTTP_BRIDGE,
   isOpenAIWSModeEnabled,
-  resolveOpenAIWSModeConcurrencyHintKey
+  resolveOpenAIWSModeHintKey
 } from '@/utils/openaiWsMode'
 import type { OpenAIWSMode } from '@/utils/openaiWsMode'
 interface Props {
@@ -1615,6 +1660,12 @@ const targetMode = computed(() => props.target?.mode ?? 'selected')
 const targetPreviewCount = computed(() => props.target?.previewCount ?? props.accountIds.length)
 const targetSelectedPlatforms = computed(() => props.target?.selectedPlatforms ?? props.selectedPlatforms)
 const targetSelectedTypes = computed(() => props.target?.selectedTypes ?? props.selectedTypes)
+// Grok 快捷端点仅在所选账号全部为 grok 平台时展示（其他平台不显示）
+const allTargetsGrok = computed(
+  () =>
+    targetSelectedPlatforms.value.length > 0 &&
+    targetSelectedPlatforms.value.every((p) => p === 'grok')
+)
 const isMixedPlatform = computed(() => targetSelectedPlatforms.value.length > 1)
 
 const allOpenAIPassthroughCapable = computed(() => {
@@ -1653,13 +1704,25 @@ const allOpenAIAPIKey = computed(() => {
   )
 })
 
-// 是否全部为 anthropic/openai 平台的 apikey 账号（请求头覆写仅在此条件下显示）
+// 上游倍率自动探测已放宽到全部 API-key 平台：只要求所选类型全为 apikey，
+// 平台不限（sub2api 上游即可应答 /v1/sub2api/billing）。
+const allBillingProbeCapable = computed(() => {
+  return (
+    targetSelectedTypes.value.length > 0 &&
+    targetSelectedTypes.value.every(t => t === 'apikey')
+  )
+})
+
+// 是否全部为支持请求头覆写的平台/账号类型
+// 所选平台 × 所选类型的全组合均需具备覆写资格（实际选中账号是该组合的子集，
+// 按交叉积判定偏保守但绝不放行不合资格的账号）
 const allHeaderOverrideCapable = computed(() => {
   return (
     targetSelectedPlatforms.value.length > 0 &&
-    targetSelectedPlatforms.value.every(p => isHeaderOverridePlatform(p)) &&
     targetSelectedTypes.value.length > 0 &&
-    targetSelectedTypes.value.every(t => t === 'apikey')
+    targetSelectedPlatforms.value.every(p =>
+      targetSelectedTypes.value.every(ty => isHeaderOverrideCapable(p, ty))
+    )
   )
 })
 
@@ -1714,6 +1777,7 @@ const enableOpenAIEndpointCapabilities = ref(false)
 const enableOpenAIResponsesMode = ref(false)
 const enableOpenAIWSMode = ref(false)
 const enableOpenAIAPIKeyWSMode = ref(false)
+const enableUpstreamBillingAutoProbe = ref(false)
 const enableOpenAIHTTPIngressWSOverride = ref(false)
 const enableCodexCLIOnly = ref(false)
 const enableCodexCLIOnlyAppServer = ref(false)
@@ -1786,6 +1850,7 @@ const openAIEndpointCapabilities = ref<OpenAIEndpointCapability[]>([
 const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
+const upstreamBillingAutoProbeMode = ref<'enabled' | 'disabled'>('enabled')
 type OpenAIHTTPIngressWSOverride = 'inherit' | 'on' | 'off'
 const openAIHTTPIngressWSOverride = ref<OpenAIHTTPIngressWSOverride>('inherit')
 const codexCLIOnlyEnabled = ref(false)
@@ -1826,6 +1891,10 @@ const commonErrorCodes = [
 const statusOptions = computed(() => [
   { value: 'active', label: t('common.active') },
   { value: 'inactive', label: t('common.inactive') }
+])
+const upstreamBillingAutoProbeOptions = computed(() => [
+  { value: 'enabled', label: t('common.enabled') },
+  { value: 'disabled', label: t('common.disabled') }
 ])
 const isOpenAIModelRestrictionDisabled = computed(
   () =>
@@ -1872,7 +1941,8 @@ const openAIEndpointCapabilityOptions = computed<
   Array<{ value: OpenAIEndpointCapability; label: string }>
 >(() => [
   { value: 'chat_completions', label: openAITextEndpointCapabilityLabel.value },
-  { value: 'embeddings', label: t('admin.accounts.openai.capabilityEmbeddings') }
+  { value: 'embeddings', label: t('admin.accounts.openai.capabilityEmbeddings') },
+  { value: 'seedance', label: 'Seedance (Ark)' }
 ])
 const openAITextGenerationCapabilityEnabled = computed(() =>
   openAIEndpointCapabilities.value.includes('chat_completions')
@@ -1882,9 +1952,9 @@ const openAIResponsesModeApplicable = computed(
 )
 
 const normalizeOpenAIEndpointCapabilities = (values: OpenAIEndpointCapability[]) => {
-  const allowed: OpenAIEndpointCapability[] = ['chat_completions', 'embeddings']
+  const allowed: OpenAIEndpointCapability[] = ['chat_completions', 'embeddings', 'seedance']
   const selected = allowed.filter((value) => values.includes(value))
-  return selected.length > 0 ? selected : allowed
+  return selected.length > 0 ? selected : ['chat_completions', 'embeddings'] as OpenAIEndpointCapability[]
 }
 
 const toggleOpenAIEndpointCapability = (
@@ -1910,11 +1980,11 @@ const toggleOpenAIEndpointCapability = (
     capability
   ])
 }
-const openAIWSModeConcurrencyHintKey = computed(() =>
-  resolveOpenAIWSModeConcurrencyHintKey(openaiOAuthResponsesWebSocketV2Mode.value)
+const openAIWSModeHintKey = computed(() =>
+  resolveOpenAIWSModeHintKey(openaiOAuthResponsesWebSocketV2Mode.value)
 )
-const openAIAPIKeyWSModeConcurrencyHintKey = computed(() =>
-  resolveOpenAIWSModeConcurrencyHintKey(openaiAPIKeyResponsesWebSocketV2Mode.value)
+const openAIAPIKeyWSModeHintKey = computed(() =>
+  resolveOpenAIWSModeHintKey(openaiAPIKeyResponsesWebSocketV2Mode.value)
 )
 
 // Model mapping helpers
@@ -2081,7 +2151,7 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
 
   if (applyOpenAIEndpointCapabilities) {
     credentials.openai_capabilities =
-      openAIEndpointCapabilities.value.length === 2
+      openAIEndpointCapabilities.value.length === 2 && !openAIEndpointCapabilities.value.includes('seedance')
         ? null
         : [...openAIEndpointCapabilities.value]
     credentialsChanged = true
@@ -2160,6 +2230,10 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     extra.openai_apikey_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(
       openaiAPIKeyResponsesWebSocketV2Mode.value
     )
+  }
+
+  if (enableUpstreamBillingAutoProbe.value) {
+    updates.upstream_billing_probe_enabled = upstreamBillingAutoProbeMode.value === 'enabled'
   }
 
   if (enableOpenAIHTTPIngressWSOverride.value) {
@@ -2322,6 +2396,7 @@ const handleSubmit = async () => {
     enableGroups.value ||
     enableOpenAIWSMode.value ||
     enableOpenAIAPIKeyWSMode.value ||
+    enableUpstreamBillingAutoProbe.value ||
     enableOpenAIHTTPIngressWSOverride.value ||
     enableCodexCLIOnly.value ||
     enableCodexCLIOnlyAppServer.value ||
@@ -2335,6 +2410,16 @@ const handleSubmit = async () => {
   if (!hasAnyFieldEnabled) {
     appStore.showError(t('admin.accounts.bulkEdit.noFieldsSelected'))
     return
+  }
+
+  // base_url 现在也会作用于 Grok OAuth 订阅账号的转发端点；坏值会让请求期
+  // 校验失败、账号请求全挂，因此保存前强制格式校验（与单账号编辑一致）。
+  if (enableBaseUrl.value) {
+    const trimmedBaseUrl = baseUrl.value.trim()
+    if (trimmedBaseUrl && !/^https?:\/\//i.test(trimmedBaseUrl)) {
+      appStore.showError(t('admin.accounts.grokCustomBaseUrl.invalid'))
+      return
+    }
   }
 
   if (enableHeaderOverride.value && headerOverrideEnabled.value) {
@@ -2464,6 +2549,7 @@ watch(
       enableOpenAIResponsesMode.value = false
       enableOpenAIWSMode.value = false
       enableOpenAIAPIKeyWSMode.value = false
+      enableUpstreamBillingAutoProbe.value = false
       enableOpenAIHTTPIngressWSOverride.value = false
       enableCodexCLIOnly.value = false
       enableCodexCLIOnlyAppServer.value = false
@@ -2499,6 +2585,7 @@ watch(
       groupIds.value = []
       openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
       openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
+      upstreamBillingAutoProbeMode.value = 'enabled'
       openAIHTTPIngressWSOverride.value = 'inherit'
       codexCLIOnlyEnabled.value = false
       codexCLIOnlyAppServerEnabled.value = false

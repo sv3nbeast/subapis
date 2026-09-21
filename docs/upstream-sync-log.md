@@ -3063,3 +3063,64 @@ aa4a3509c debug(kiro): separate translated 与 client stream capture
 - GLM/Zhipu、Kimi、DeepSeek 建组、账号绑定、组合路由、配额、定价、协议及相关同步遗漏已补齐；本地 Kiro/Droid/count_tokens/WS/计费合同保留。此前检查点剩余清单已关闭。
 - 本机索引占槽增量约 0.268 ms，线上 TTFT 未宣称验收；没有推送或生产部署。后续发布仍须 production-release 流程。
 - 完整验收矩阵及证据：`docs/cn-platform-sync-audit-20260905.md`。
+
+## 2026-09-20 21:53:50 +0800
+
+- 模式: `ai`
+- 目标分支: `codex/official-sync-main-20260920`
+- 官方引用: `origin/main`
+- 本地提交: `60530c4c3519e7637a19a535521750d2a5a37302`
+- 官方提交: `7c700729c23187d31ed320f6b19c790e2f194826`
+- 合并基线: `b1748c4ea99ce2120401a269142aa071e18a84da`
+- 官方领先数量: `553`
+- 本地领先数量: `863`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+7c700729c 杂项：更新gitignore
+87957a608 合并拉取请求 #7413（来源：ranxi2001/ci/release-build-matrix）
+d1556a7a9 持续集成：point release helper 测试 at their final directory
+d2416a9b6 持续集成：keep release tooling 与 cache keys stable across jobs
+d2e319b2a 测试：修复 WebSocket 同线程抢占测试的关闭时序竞态
+0892ef3a9 持续集成：build release targets 时 independent matrix runners
+95134201b 文档：删除误合入的 Codex 积分文档和截图
+acdf3c54d 合并拉取请求 #7401（来源：StarryKira/codex/codex-credits-referrals-upstream）
+fc96132e7 修复（openai）：加固 referral outcomes 与 isolate HTTP transport
+8f6bbb59c 测试：稳定 Gemini keepalive test
+fbb9006ad 合并拉取请求 #7402（来源：Wei-Shaw/fix/7268-openai-http2-keepalive）
+e009ea303 修复（upstream）：恢复 OpenAI HTTP/2 保活容错期限
+e50993738 文档：增加Codex referral UI validation screenshots
+5090ffe05 新增（openai）：show Codex credits 与 manage referral invitations
+bbdcfbac0 合并拉取请求 #7304（来源：wucm667/fix/issue-7298-response-model-alias）
+7403a0117 合并拉取请求 #7314（来源：wucm667/fix/issue-7306-keyword-reminder-bypass）
+53b4bbe73 合并拉取请求 #7349（来源：wucm667/fix/issue-7348-preserve-client-version）
+8bb48622a 合并拉取请求 #7362（来源：wucm667/fix/issue-7358-preserve-account-errors）
+f28adb6dd 合并拉取请求 #7387（来源：Brisbanehuang/codex/upstream-content-audit-typesafe）
+19794bc46 合并拉取请求 #7397（来源：Wei-Shaw/feat/hostservice-account-metadata）
+
+### 本地领先
+
+60530c4c3 修复（channel-monitor）：use gateway route 针对 GLM probes
+69ea1ceb7 修复（channel-monitor）：fallback zhipu probes through compatible gateway
+a8459288c 修复（channel-monitor）：register CN provider probes
+5b1c42163 修复（model-market）：use branded model filters
+80644a2f5 修复（model-market）：respect native pricing currency
+6e82ef0a1 新增（model-market）：增加USD 与 RMB display toggle
+6a1bbfa57 新增（pricing）：增加Kimi channel pricing
+e288e2cd0 修复（网关）：make Claude compaction preflight actionable
+ee2863572 新增（subscription）：增加shared model quota groups
+57fdf7eb8 修复（cursor）：report the reason Cursor gave 针对 refusing a turn
+ee175cac5 修复（cursor）：carry the system prompt 中的 the message history
+6bd7396ad 修复（kiro）：保留valid responses 时 parser edge cases
+5b721b3f5 修复（kiro）：preflight native Anthropic context limits
+9935c6e74 修复（kiro）：omit unsupported billing probe 时 create
+517073785 修复（kiro）：expose direct API key routing 设置
+bc008afe0 新增（web-chat）：edit an image from a generated artifact or an upload
+6009d1709 修复（grok）：keep the cross-client model map across a restart
+adcfaddf4 修复（cursor）：answer Claude Code count_tokens locally
+80f72b867 修复（web-chat）：publish a generated image 与 show it 中的 the feed
+fdaa3ac9d 修复（grok）：prove a paid plan from the scheduler's projected account

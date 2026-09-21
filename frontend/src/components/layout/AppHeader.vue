@@ -74,11 +74,13 @@
           <span class="hidden sm:inline">{{ t('nav.docs') }}</span>
         </a>
 
-        <!-- Price and model catalog -->
+        <!-- Price and model catalog (icon only below sm) -->
         <router-link
           v-if="user && modelMarketEnabled"
           to="/model-plaza"
-          class="hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white sm:flex"
+          :title="t('modelMarket.navLabel')"
+          :aria-label="t('modelMarket.navLabel')"
+          class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
         >
           <Icon name="cube" size="sm" />
           <span class="hidden sm:inline">{{ t('modelMarket.navLabel') }}</span>
@@ -87,8 +89,8 @@
         <!-- Language Switcher -->
         <LocaleSwitcher class="header-locale" appearance="icon" />
 
-        <!-- Subscription Progress (for users with active subscriptions) -->
-        <SubscriptionProgressMini v-if="user" class="header-subscription" />
+        <!-- Subscription Progress (for users with active subscriptions; not mounted at all when the feature is off) -->
+        <SubscriptionProgressMini v-if="user && subscriptionFeatureEnabled" class="header-subscription" />
 
         <!-- Balance Display -->
         <div
@@ -355,6 +357,8 @@ import Icon from '@/components/icons/Icon.vue'
 import { useBottomSheetGesture } from '@/composables/useBottomSheetGesture'
 import { sanitizeUrl } from '@/utils/url'
 import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
+import { resolveRouteMetaKeys } from '@/router/title'
+import { resolveSiteBillingMode } from '@/utils/siteBillingMode'
 
 const props = withDefaults(defineProps<{
   uiVersion?: 'legacy' | 'v2'
@@ -439,6 +443,14 @@ const displayName = computed(() => {
   return user.value.username || user.value.email?.split('@')[0] || ''
 })
 
+// 订阅功能关闭时不挂载顶栏订阅徽章（组件 onMounted 会拉取订阅接口）。
+const subscriptionFeatureEnabled = computed(() => isFeatureFlagEnabled(FeatureFlags.subscription))
+
+// /purchase 的标题/描述随站点计费模式切换，与 document.title 共用同一解析。
+const routeMetaKeys = computed(() => resolveRouteMetaKeys(route, {
+  billingMode: resolveSiteBillingMode(appStore.cachedPublicSettings),
+}))
+
 const pageTitle = computed(() => {
   // For custom pages, use the menu item's label instead of generic "自定义页面"
   if (route.name === 'CustomPage') {
@@ -448,7 +460,7 @@ const pageTitle = computed(() => {
       ?? (authStore.isAdmin ? adminSettingsStore.customMenuItems.find((item) => item.id === id) : undefined)
     if (menuItem?.label) return menuItem.label
   }
-  const titleKey = route.meta.titleKey as string
+  const titleKey = routeMetaKeys.value.titleKey
   if (titleKey) {
     return t(titleKey)
   }
@@ -456,7 +468,7 @@ const pageTitle = computed(() => {
 })
 
 const pageDescription = computed(() => {
-  const descKey = route.meta.descriptionKey as string
+  const descKey = routeMetaKeys.value.descriptionKey
   if (descKey) {
     return t(descKey)
   }

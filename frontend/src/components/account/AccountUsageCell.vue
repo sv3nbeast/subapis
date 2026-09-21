@@ -141,6 +141,7 @@
           :utilization="openAISevenDay.utilization"
           :resets-at="openAISevenDay.resets_at"
           :window-stats="openAISevenDay.window_stats"
+          :estimated-total-cost="openAISevenDayEstimatedTotalCost"
           :show-now-when-idle="true"
           color="emerald"
         />
@@ -663,7 +664,7 @@
     </template>
 
     <!-- CN providers (Kimi / Zhipu / DeepSeek): coding-plan quota or payg balance -->
-    <template v-else-if="account.platform === 'kimi' || account.platform === 'zhipu' || account.platform === 'deepseek'">
+    <template v-else-if="account.platform === 'kimi' || account.platform === 'zhipu' || account.platform === 'deepseek' || account.platform === 'minimax' || account.platform === 'opencode_go'">
       <!-- 挂在 CN 平台下的 Ollama Cloud 账号（资格由后端下发 eligible）：用量由
            Ollama 用量窗口负责。这类账号不是国产厂商订阅，CN 的额度/余额探测端点由
            base_url 衍生，对 ollama.com 会被后端出站 URL 白名单拒绝，渲染出来只会
@@ -808,6 +809,11 @@
     <AccountQuotaInfo v-if="account.platform === 'gemini'" :account="account" />
     <!-- Key/Bedrock accounts: show today stats + optional quota bars -->
     <div v-else class="space-y-1">
+      <OllamaCloudUsageCell
+        v-if="account.ollama_cloud_usage?.eligible"
+        :account="account"
+        @updated="handleOllamaCloudUsageUpdated"
+      />
       <!-- Today stats row (requests, tokens, cost, user_cost) -->
       <div
         v-if="todayStats"
@@ -974,6 +980,17 @@ const showUsageWindows = computed(() => {
   // Kiro direct accounts expose upstream Credits windows. Relay API-key accounts
   // are external Anthropic-compatible upstreams, so they only show local stats.
   if (props.account.platform === 'kiro') return isKiroDirectAccount.value
+  // CN providers: apikey 账号也有滚动用量窗口（coding plan）或余额（payg），
+  // 由 CNProviderQuotaCell / CNProviderBalanceCell 自行探测与展示。
+  if (
+    props.account.platform === 'kimi' ||
+    props.account.platform === 'zhipu' ||
+    props.account.platform === 'deepseek' ||
+    props.account.platform === 'minimax' ||
+    props.account.platform === 'opencode_go'
+  ) {
+    return true
+  }
   return props.account.type === 'oauth' || props.account.type === 'setup-token'
 })
 
@@ -1053,6 +1070,25 @@ const openAISevenDay = computed<UsageProgress | null>(() => {
 const hasOpenAIUsageFallback = computed(() => {
   if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return false
   return !!openAIFiveHour.value || !!openAISevenDay.value
+})
+
+const openAISevenDayEstimatedTotalCost = computed(() => {
+  const sevenDay = usageInfo.value?.seven_day
+  const utilization = sevenDay?.utilization
+  const currentCost = sevenDay?.window_stats?.cost
+  if (
+    typeof utilization !== 'number' ||
+    typeof currentCost !== 'number' ||
+    !Number.isFinite(utilization) ||
+    !Number.isFinite(currentCost) ||
+    utilization <= 0 ||
+    currentCost <= 0
+  ) {
+    return null
+  }
+
+  const estimate = (currentCost * 100) / utilization
+  return Number.isFinite(estimate) && estimate > 0 ? estimate : null
 })
 
 const openAIUsageRefreshKey = computed(() => buildOpenAIUsageRefreshKey(props.account))

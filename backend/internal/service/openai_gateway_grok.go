@@ -447,6 +447,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(patchedBody, originalModel)
 	result := &OpenAIForwardResult{
 		RequestID:        firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id")),
+		UpstreamHeaders:  resp.Header,
 		UpstreamEndpoint: OpenAIUpstreamEndpointResponses,
 		ResponseID:       responseID,
 		Usage:            *usage,
@@ -1140,11 +1141,14 @@ func grokSupportsReasoningEffort(model string) bool {
 	}
 }
 
-var grokResponsesUnsupportedRecursiveFields = map[string]struct{}{
+// grokUnsupportedRecursiveFields 定义 Grok 平台（Responses 和 Chat Completions）不支持的字段
+var grokUnsupportedRecursiveFields = map[string]struct{}{
 	"external_web_access": {},
 }
 
-func sanitizeGrokResponsesUnsupportedFields(body []byte) ([]byte, error) {
+// sanitizeGrokUnsupportedFields 递归移除 Grok 平台不支持的字段
+// 适用于 Responses API 和 Chat Completions API
+func sanitizeGrokUnsupportedFields(body []byte) ([]byte, error) {
 	if !bytes.Contains(body, []byte(`"external_web_access"`)) {
 		return body, nil
 	}
@@ -1174,11 +1178,14 @@ func sanitizeGrokResponsesUnsupportedFields(body []byte) ([]byte, error) {
 	return marshalOpenAIUpstreamJSON(payload)
 }
 
+// sanitizeGrokResponsesUnsupportedFields 保留旧函数名作为别名，向后兼容
+var sanitizeGrokResponsesUnsupportedFields = sanitizeGrokUnsupportedFields
+
 // Unsupported protocol settings are not user data: never recurse into
 // input/tool outputs, schema property names, enum/const/default examples.
 func deleteGrokProtocolFields(object map[string]any) bool {
 	changed := false
-	for field := range grokResponsesUnsupportedRecursiveFields {
+	for field := range grokUnsupportedRecursiveFields {
 		if _, exists := object[field]; exists {
 			delete(object, field)
 			changed = true

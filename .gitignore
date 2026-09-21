@@ -145,15 +145,25 @@ docs/*
 !docs/CLAUDE_CLI_MIMICRY_AUDIT.md
 !docs/ANTIGRAVITY_429_QUOTA_EXHAUSTED.md
 !docs/upstream-sync-conflict-ledger.md
+!docs/upstream-sync-conflict-ledger-2026-09-20.md
+!docs/ANTIGRAVITY_ATTRIBUTION_429.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md
 !docs/UI_V2_ROLLOUT.md
+!docs/ASYNC_IMAGE_TASKS.md
+!docs/BATCH_IMAGE_MVP.md
+!docs/COMPOSITE_GROUPS.md
+!docs/PLUGIN_DEVELOPMENT.md
+!docs/channel-monitor-v2-safe-defaults.md
+!docs/codex-credits.md
 !docs/legal/
 !docs/legal/*.md
 !docs/screenshots/
 docs/screenshots/*
 !docs/screenshots/mobile-account-actions-menu.png
+!docs/screenshots/codex-referral-dialog.png
+!docs/screenshots/codex-referral-success.png
 .serena/
 .codex/
 .superpowers/
@@ -161,6 +171,7 @@ frontend/coverage/
 aicodex
 output/
 .codegraph/
+issues/
 
 # Vitest / Vite cache at repo root
 .vite/

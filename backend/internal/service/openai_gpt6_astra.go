@@ -8,13 +8,6 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// Astra has one model ID. Reasoning effort belongs in the request parameters,
-// never in a synthetic model suffix. Keep the shared provider/name spelling
-// normalization, without introducing any Astra-specific aliases.
-func isOpenAIGPT6AstraModel(model string) bool {
-	return canonicalizeOpenAIModelAliasSpelling(model) == "gpt-6-astra"
-}
-
 func normalizeOpenAIAstraLegacyCacheOptions(req map[string]any) bool {
 	model, _ := req["model"].(string)
 	if !isOpenAIGPT6AstraModel(model) {

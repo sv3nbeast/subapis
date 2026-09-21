@@ -1,6 +1,8 @@
 // Package claude provides constants and helpers for Claude API integration.
 package claude
 
+import "strings"
+
 // Claude Code 客户端相关常量
 
 // Beta header 常量
@@ -24,14 +26,16 @@ const (
 	BetaFastMode                 = "fast-mode-2026-02-01"
 
 	// 新增（对齐官方 CLI 2.1.9x 以来的流量）
-	BetaPromptCachingScope    = "prompt-caching-scope-2026-01-05"
-	BetaEffort                = "effort-2025-11-24"
-	BetaRedactThinking        = "redact-thinking-2026-02-12"
-	BetaContextManagement     = "context-management-2025-06-27"
-	BetaExtendedCacheTTL      = "extended-cache-ttl-2025-04-11"
-	BetaAdvancedToolUse       = "advanced-tool-use-2025-11-20"
-	BetaStructuredOutputs     = "structured-outputs-2025-12-15"
-	BetaMidConversationSystem = "mid-conversation-system-2026-04-07"
+	BetaPromptCachingScope          = "prompt-caching-scope-2026-01-05"
+	BetaEffort                      = "effort-2025-11-24"
+	BetaRedactThinking              = "redact-thinking-2026-02-12"
+	BetaContextManagement           = "context-management-2025-06-27"
+	BetaThinkingBindingControls     = "thinking-binding-controls-2026-08-01"
+	BetaMidConversationOutputConfig = "mid-conversation-output-config-2026-07-01"
+	BetaExtendedCacheTTL            = "extended-cache-ttl-2025-04-11"
+	BetaAdvancedToolUse             = "advanced-tool-use-2025-11-20"
+	BetaStructuredOutputs           = "structured-outputs-2025-12-15"
+	BetaMidConversationSystem       = "mid-conversation-system-2026-04-07"
 
 	// Server-side fallback fields are accepted only when the caller explicitly
 	// advertises the matching beta. They are intentionally not added to the
@@ -80,10 +84,13 @@ const APIKeyHaikuBetaHeader = BetaInterleavedThinking + "," + BetaContextManagem
 // 客户端缺省时统一使用 5m"，这样既不浪费 1h 缓存额度，也保留客户端自定义能力。
 const DefaultCacheControlTTL = "5m"
 
-// CLICurrentVersion 是 sub2api 当前对外伪装的 Claude Code CLI 版本号（三段 semver）。
+// CLICurrentVersion 是内置的 Claude Code CLI 伪装版本号基线（三段 semver）。
 // 用于 billing attribution block 中的 cc_version=X.Y.Z.{fp} 前缀以及 fingerprint 计算。
 // 必须与 DefaultHeaders["User-Agent"] 中的版本号严格一致；不一致会被 Anthropic 判第三方。
-const CLICurrentVersion = "2.1.220"
+//
+// ⚠️ 读取实际生效的版本号请用 CLIVersion()，它会叠加 SUB2API_CLAUDE_CLI_VERSION 覆盖。
+// 直接引用本常量只在"表达内置基线"时才正确（例如覆盖值的下限校验）。
+const CLICurrentVersion = "2.1.258"
 
 // FullClaudeCodeMimicryBetas 返回最"像"真实 Claude Code CLI 的完整 beta 列表，
 // 用于 OAuth 账号伪装成 Claude Code 时使用。
@@ -100,6 +107,8 @@ func FullClaudeCodeMimicryBetas() []string {
 		BetaOAuth,
 		BetaInterleavedThinking,
 		BetaContextManagement,
+		BetaThinkingBindingControls,
+		BetaMidConversationOutputConfig,
 		BetaPromptCachingScope,
 		BetaMidConversationSystem,
 		BetaAdvancedToolUse,
@@ -111,8 +120,12 @@ func FullClaudeCodeMimicryBetas() []string {
 // DefaultHeaders 是 Claude Code 客户端默认请求头(plain CLI 主对话形式)。
 // 与 PlainCLICanonicalUserAgent / PlainCLICanonicalFingerprint 一一对应。
 var DefaultHeaders = map[string]string{
-	// Keep these in sync with current official Claude Code CLI traffic.
-	"User-Agent":                                "claude-cli/2.1.220 (external, cli)",
+	// Keep these in sync with current official Claude Code CLI traffic to reduce
+	// the chance that Claude Code-scoped OAuth credentials are rejected as
+	// "non-CLI" usage. 版本号必须与 CLIVersion()（内置基线 CLICurrentVersion +
+	// SUB2API_CLAUDE_CLI_VERSION 覆盖）一致，否则 UA 与 billing attribution 的
+	// cc_version 自相矛盾会被上游判第三方。
+	"User-Agent":                                "claude-cli/" + CLIVersion() + " (external, cli)",
 	"X-Stainless-Lang":                          "js",
 	"X-Stainless-Package-Version":               "0.94.0",
 	"X-Stainless-OS":                            "MacOS",
@@ -138,15 +151,28 @@ var DefaultHeaders = map[string]string{
 // 固定值,fingerprint cache key 升级为 fingerprint:<account.ID>:<form>。
 // agent-sdk 形式锁 admin 真实的 2.1.181 + MacOS/arm64;plain CLI 形式使用
 // 已验证 CCH 请求形态的 2.1.220 + MacOS/arm64。
-const (
+var (
 	// PlainCLICanonicalUserAgent 是 plain Claude CLI 主对话形式的统一 UA。
-	// 版本号与 CLICurrentVersion 一致,不轻易升版避免触发上游 prompt cache 失效。
-	PlainCLICanonicalUserAgent = "claude-cli/2.1.220 (external, cli)"
+	// 版本号必须与 CLIVersion() 一致：Anthropic 会按客户端版本闸门拒绝新模型
+	// （例如 claude-fable-5-1 要求 claude-cli >= 2.1.251，否则 400
+	// claude_code_version_too_old），因此不能再钉死旧版本；UA 与请求体
+	// billing 块的 cc_version 由 syncBillingHeaderVersion 保持一致。
+	PlainCLICanonicalUserAgent = "claude-cli/" + CLIVersion() + " (external, cli)"
 
 	// AgentSDKCanonicalUserAgent 是 Claude Code Task 子代理 / Agent SDK 桥接形式
-	// 的统一 UA,对齐 admin 真实客户端 2.1.181 + agent-sdk/0.3.181。
-	AgentSDKCanonicalUserAgent = "claude-cli/2.1.181 (external, claude-desktop-3p, agent-sdk/0.3.181)"
+	// 的统一 UA。形式标识（claude-desktop-3p + agent-sdk）保持 admin 真实客户端
+	// 的形态，版本号同样跟随 CLIVersion() 以通过上游版本闸门。
+	AgentSDKCanonicalUserAgent = "claude-cli/" + CLIVersion() + " (external, claude-desktop-3p, agent-sdk/0.3." + cliVersionPatch(CLIVersion()) + ")"
 )
+
+// cliVersionPatch 返回三段 semver 的 patch 段（"2.1.258" → "258"），用于拼装
+// 与 CLI 版本同代的 agent-sdk 版本号。
+func cliVersionPatch(version string) string {
+	if idx := strings.LastIndex(version, "."); idx >= 0 && idx+1 < len(version) {
+		return version[idx+1:]
+	}
+	return version
+}
 
 // CanonicalFingerprint 表示一套固定的 X-Stainless-* 指纹字段(不含 ClientID)。
 // 真正写入缓存时 ClientID 由 generateClientID 生成,其余字段直接拷贝该常量。

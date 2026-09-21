@@ -869,6 +869,7 @@ function addPricingEntry(sectionIdx: number) {
     cache_read_price: null,
     fast_multiplier: null,
     flex_multiplier: null,
+    max_reasoning_effort_multiplier: null,
     image_input_price: null,
     image_output_price: null,
     per_request_price: null,
@@ -992,6 +993,7 @@ function pricingEntryToAPI(entry: PricingFormEntry, platform: GroupPlatform): Ch
     cache_read_price: mTokToPerToken(entry.cache_read_price),
     fast_multiplier: entry.fast_multiplier != null && entry.fast_multiplier !== '' ? Number(entry.fast_multiplier) : null,
     flex_multiplier: entry.flex_multiplier != null && entry.flex_multiplier !== '' ? Number(entry.flex_multiplier) : null,
+    max_reasoning_effort_multiplier: entry.max_reasoning_effort_multiplier != null && entry.max_reasoning_effort_multiplier !== '' ? Number(entry.max_reasoning_effort_multiplier) : null,
     image_input_price: mTokToPerToken(entry.image_input_price),
     image_output_price: mTokToPerToken(entry.image_output_price),
     per_request_price: entry.per_request_price != null && entry.per_request_price !== '' ? Number(entry.per_request_price) : null,
@@ -1013,6 +1015,7 @@ function pricingAPIToForm(pricing: ChannelModelPricing): PricingFormEntry {
     cache_read_price: perTokenToMTok(pricing.cache_read_price),
     fast_multiplier: pricing.fast_multiplier,
     flex_multiplier: pricing.flex_multiplier,
+    max_reasoning_effort_multiplier: pricing.max_reasoning_effort_multiplier,
     image_input_price: perTokenToMTok(pricing.image_input_price),
     image_output_price: perTokenToMTok(pricing.image_output_price),
     per_request_price: pricing.per_request_price,
@@ -1468,7 +1471,9 @@ async function handleSubmit() {
     for (const entry of section.model_pricing) {
       if (entry.enabled === false) continue
       const validationError =
-        (!isValidPositiveMultiplier(entry.fast_multiplier) || !isValidPositiveMultiplier(entry.flex_multiplier))
+        (!isValidPositiveMultiplier(entry.fast_multiplier) ||
+          !isValidPositiveMultiplier(entry.flex_multiplier) ||
+          !isValidPositiveMultiplier(entry.max_reasoning_effort_multiplier))
           ? t('admin.channels.form.multiplierPositive')
           : validateIntervals(entry.intervals || [], entry.billing_mode, t) || validateTimePricing(entry.time_pricing, t)
       if (validationError) {
@@ -1483,7 +1488,9 @@ async function handleSubmit() {
       for (const entry of rule.pricing) {
         if (entry.enabled === false) continue
         const validationError =
-          (!isValidPositiveMultiplier(entry.fast_multiplier) || !isValidPositiveMultiplier(entry.flex_multiplier))
+          (!isValidPositiveMultiplier(entry.fast_multiplier) ||
+            !isValidPositiveMultiplier(entry.flex_multiplier) ||
+            !isValidPositiveMultiplier(entry.max_reasoning_effort_multiplier))
             ? t('admin.channels.form.multiplierPositive')
             : validateIntervals(entry.intervals || [], entry.billing_mode, t) || validateTimePricing(entry.time_pricing, t)
         if (validationError) {

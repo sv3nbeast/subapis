@@ -12,7 +12,7 @@ type ErrInvalidOpenAIServiceTier struct {
 }
 
 func (e *ErrInvalidOpenAIServiceTier) Error() string {
-	return fmt.Sprintf("invalid service_tier %q: must be one of auto, default, fast, flex, priority, scale", e.Value)
+	return fmt.Sprintf("invalid service_tier %q: must be one of auto, default, fast, flex, priority, scale, ultrafast", e.Value)
 }
 
 const invalidOpenAIServiceTierValueMaxLen = 64

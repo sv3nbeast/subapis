@@ -560,3 +560,29 @@ type helperConcurrencyCacheStubWithError struct {
 func (s *helperConcurrencyCacheStubWithError) AcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int, requestID string) (bool, error) {
 	return false, s.err
 }
+
+func TestSetClaudeCodeClientContext_ParsedRequestProbeWithoutSystemPrompt(t *testing.T) {
+	c, _ := newHelperTestContext(http.MethodPost, "/v1/messages")
+	c.Request.Header.Set("User-Agent", "claude-cli/2.1.260 (external, cli)")
+
+	// The hot path reuses ParsedRequest instead of re-parsing the body; the probe
+	// marker must survive that projection or the exemption only works cold.
+	parsed := &service.ParsedRequest{Model: "claude-sonnet-4-5", MaxTokens: 1}
+	SetClaudeCodeClientContext(c, nil, parsed)
+	require.True(t, service.IsClaudeCodeClient(c.Request.Context()))
+
+	// 反向对照：证明放行来自 max_tokens=1 探测标记而不是 UA。
+	// 必须用「裸」claude-cli UA —— 本地 b06ba2470 对 `(external, ...)` 变体
+	// （Claude Desktop 3P / Agent SDK 的工具续写探测常常不带完整 system/metadata）
+	// 有意放宽为“UA 命中即视为 Claude Code 客户端”，官方无此放宽。
+	c2, _ := newHelperTestContext(http.MethodPost, "/v1/messages")
+	c2.Request.Header.Set("User-Agent", "claude-cli/2.1.260")
+	SetClaudeCodeClientContext(c2, nil, &service.ParsedRequest{Model: "claude-sonnet-4-5", MaxTokens: 64})
+	require.False(t, service.IsClaudeCodeClient(c2.Request.Context()))
+
+	// 固化本地放宽语义：external 变体即便没有探测标记也仍是 Claude Code 客户端。
+	c3, _ := newHelperTestContext(http.MethodPost, "/v1/messages")
+	c3.Request.Header.Set("User-Agent", "claude-cli/2.1.260 (external, cli)")
+	SetClaudeCodeClientContext(c3, nil, &service.ParsedRequest{Model: "claude-sonnet-4-5", MaxTokens: 64})
+	require.True(t, service.IsClaudeCodeClient(c3.Request.Context()))
+}

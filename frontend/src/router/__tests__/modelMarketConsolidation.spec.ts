@@ -26,7 +26,8 @@ const gatewayRoutesSource = readFileSync(
 
 describe("model market consolidation", () => {
   it("keeps /model-plaza canonical and redirects the colliding /models SPA path", () => {
-    expect(gatewayRoutesSource).toContain('r.GET("/models"');
+    // 官方同步后根路由统一经 rootRoute 注册：根 GET /models 仍与 SPA 的 /models 冲突。
+    expect(gatewayRoutesSource).toMatch(/rootRoute\(http\.MethodGet, "\/models"/);
     expect(routerSource).toMatch(/path: ["']\/models["']/);
     expect(routerSource).toMatch(/path: ["']\/model-plaza["']/);
     expect(routerSource).toMatch(

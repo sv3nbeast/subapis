@@ -182,6 +182,8 @@ var providerAdapters = map[string]providerAdapter{
 	// distinct monitor provider for filtering and presentation while reusing
 	// the proven wire protocol adapter.
 	MonitorProviderGrok: providerOpenAIChatAdapter,
+	// MiniMax（官方 19382f275）：OpenAI 兼容 Chat Completions，复用同一适配器。
+	MonitorProviderMiniMax: providerOpenAIChatAdapter,
 	MonitorProviderAnthropic: {
 		buildPath: func(string) string { return providerAnthropicPath },
 		buildBody: func(model, prompt string) ([]byte, error) {
@@ -225,7 +227,7 @@ var providerAdapters = map[string]providerAdapter{
 		buildBody: func(_, prompt string) ([]byte, error) {
 			return json.Marshal(map[string]any{
 				"contents": []map[string]any{
-					{"parts": []map[string]any{{"text": prompt}}},
+					{"role": "user", "parts": []map[string]any{{"text": prompt}}},
 				},
 				"generationConfig": map[string]any{"maxOutputTokens": monitorChallengeMaxTokens},
 			})
@@ -329,13 +331,14 @@ func callProvider(ctx context.Context, provider, endpoint, apiKey, model, prompt
 	if provider == MonitorProviderAnthropic {
 		headers["User-Agent"] = claudeUpstreamUserAgentForCheck(opts)
 	}
-	full := joinURL(endpoint, adapter.buildPath(model))
+	primaryPath, fallbackPath := resolveProviderProbePaths(adapter, endpoint, model)
+	full := joinURL(endpoint, primaryPath)
 	respBytes, status, err := postRawJSON(ctx, full, body, headers)
 	if err != nil {
 		return "", "", status, err
 	}
-	if status == http.StatusNotFound && adapter.fallbackPath != nil {
-		fallbackURL := joinURL(endpoint, adapter.fallbackPath(model))
+	if status == http.StatusNotFound && fallbackPath != "" {
+		fallbackURL := joinURL(endpoint, fallbackPath)
 		if fallbackURL != full {
 			respBytes, status, err = postRawJSON(ctx, fallbackURL, body, headers)
 			if err != nil {
@@ -569,6 +572,7 @@ var bodyMergeKeyDenyList = map[string]map[string]bool{
 	MonitorProviderKimi:     {"model": true, "messages": true, "stream": true},
 	MonitorProviderZhipu:    {"model": true, "messages": true, "stream": true},
 	MonitorProviderDeepseek: {"model": true, "messages": true, "stream": true},
+	MonitorProviderMiniMax:  {"model": true, "messages": true, "stream": true},
 }
 
 func checkAPIMode(opts *CheckOptions) string {
@@ -590,7 +594,7 @@ func bodyMergeDenyKey(provider, apiMode string) string {
 func isOpenAICompatibleChatProvider(provider string) bool {
 	switch provider {
 	case MonitorProviderOpenAI, MonitorProviderGrok,
-		MonitorProviderKimi, MonitorProviderZhipu, MonitorProviderDeepseek:
+		MonitorProviderKimi, MonitorProviderZhipu, MonitorProviderDeepseek, MonitorProviderMiniMax:
 		return true
 	default:
 		return false
@@ -662,12 +666,46 @@ func postRawJSON(ctx context.Context, fullURL string, payload []byte, headers ma
 	return respBody, resp.StatusCode, nil
 }
 
-// joinURL 把 base origin 与 path 拼成完整 URL。
-// 容忍 base 末尾有/无斜杠，path 必带前导斜杠。
+// resolveProviderProbePaths 决定探活的首选与回退路径。
+// 默认首选 adapter.buildPath（智谱等国产 provider 为 OpenAI 兼容网关的 /v1 入口，
+// 含 Sub2API 自身），404 后回退 provider 原生路径；但若端点本身已带原生路径前缀
+// （如智谱直连 https://open.bigmodel.cn/api/paas/v4），说明用户配置的就是原生入口，
+// 直接首选原生路径，避免拼出 /api/paas/v4/v1/chat/completions 这种假 404。
+func resolveProviderProbePaths(adapter providerAdapter, endpoint, model string) (primary, fallback string) {
+	primary = adapter.buildPath(model)
+	if adapter.fallbackPath == nil {
+		return primary, ""
+	}
+	fallback = adapter.fallbackPath(model)
+	if endpointCarriesPathPrefix(endpoint, fallback) {
+		return fallback, primary
+	}
+	return primary, fallback
+}
+
+// endpointCarriesPathPrefix 报告 endpoint 是否已带 path 的目录前缀（即 joinURL 会去重）。
+func endpointCarriesPathPrefix(endpoint, path string) bool {
+	base := strings.TrimRight(endpoint, "/")
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return joinURL(base, path) != base+path
+}
+
+// joinURL 保留 base 的上游路径前缀，并避免重复追加已有的 API 路径前缀。
+// 使用 EscapedPath 匹配完整路径段，避免把 hostname 或编码斜杠当作路径。
 func joinURL(base, path string) string {
 	base = strings.TrimRight(base, "/")
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
+	}
+	if u, err := url.Parse(base); err == nil {
+		basePath := u.EscapedPath()
+		for end := strings.LastIndex(path, "/"); end > 0; end = strings.LastIndex(path[:end], "/") {
+			if strings.HasSuffix(basePath, path[:end]) {
+				return base + path[end:]
+			}
+		}
 	}
 	return base + path
 }

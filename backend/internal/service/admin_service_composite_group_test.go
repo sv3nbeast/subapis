@@ -207,7 +207,7 @@ func TestAdminService_CompositeModelsListCandidatesIncludeConcreteAccountMapping
 
 // Only verified account mappings should populate CN group candidates.
 func TestAdminService_CNProviderModelsListCandidatesUseBoundAccounts(t *testing.T) {
-	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek} {
+	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax} {
 		t.Run(platform, func(t *testing.T) {
 			require.Empty(t, defaultModelsListCandidateIDs(platform))
 			svc := &adminServiceImpl{

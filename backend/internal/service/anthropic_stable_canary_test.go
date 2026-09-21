@@ -433,7 +433,7 @@ func TestAnthropicStableCanaryRejectsChannelPolicyThatWouldChangeOrDenyRawModel(
 			}))
 			fixture.service.channelService = NewChannelService(&stableCanaryChannelRepoStub{
 				channel: tt.channel, groupPlatforms: map[int64]string{71: PlatformAnthropic},
-			}, nil, nil, nil)
+			}, nil, nil, nil, nil)
 			strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
 
 			_, err := fixture.service.ForwardAnthropicStableCanaryRaw(

@@ -1,5 +1,8 @@
 export default {
   batchImage: {
+    // Router meta keys for the /batch-image guide page (mirrors batchImageGuide.title/description).
+    title: '图片批量生成',
+    description: '一次提交多条提示词，任务完成后可统一下载图片结果',
     columns: {
       taskName: '任务名称',
       model: '模型',

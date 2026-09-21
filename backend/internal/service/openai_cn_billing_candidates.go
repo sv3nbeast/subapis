@@ -8,7 +8,7 @@ import (
 // A CN provider serving Claude-compatible aliases must not inherit Claude list
 // pricing unless the operator explicitly configured a group/channel price.
 func (s *OpenAIGatewayService) filterCNProviderBillingModelCandidates(ctx context.Context, account *Account, apiKey *APIKey, candidates []string) []string {
-	if account == nil || !account.IsCNProvider() {
+	if account == nil || (!account.IsCNProvider() && !account.IsOpenCodeGo()) {
 		return candidates
 	}
 	out := make([]string, 0, len(candidates))

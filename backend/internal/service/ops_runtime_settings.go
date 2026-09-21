@@ -40,7 +40,7 @@ func (s *OpsService) initRuntimeSettings(ctx context.Context) {
 	if s == nil {
 		return
 	}
-	defaults := defaultOpsAdvancedSettings()
+	defaults := defaultOpsAdvancedSettingsForConfig(s.cfg)
 	s.runtimeSettings.Store(&opsRuntimeSettingsSnapshot{monitoringEnabled: true, advanced: *defaults})
 	_ = s.RefreshRuntimeSettings(ctx)
 }
@@ -62,14 +62,26 @@ func (s *OpsService) RefreshRuntimeSettings(ctx context.Context) error {
 	if raw, ok := values[SettingKeyOpsMonitoringEnabled]; ok {
 		monitoringEnabled = parseOpsMonitoringEnabled(raw)
 	}
-	advanced := defaultOpsAdvancedSettings()
+	advanced := defaultOpsAdvancedSettingsForConfig(s.cfg)
 	if raw, ok := values[SettingKeyOpsAdvancedSettings]; ok {
 		if err := json.Unmarshal([]byte(raw), advanced); err != nil {
-			advanced = defaultOpsAdvancedSettings()
+			advanced = defaultOpsAdvancedSettingsForConfig(s.cfg)
 		}
 	}
 	normalizeOpsAdvancedSettings(advanced)
 	s.runtimeSettings.Store(&opsRuntimeSettingsSnapshot{monitoringEnabled: monitoringEnabled, advanced: *advanced})
+	if s.systemLogSink != nil {
+		persistAccessLogs := false
+		if raw, ok := values[SettingKeyOpsRuntimeLogConfig]; ok {
+			var runtimeCfg struct {
+				PersistAccessLogs bool `json:"persist_access_logs"`
+			}
+			if json.Unmarshal([]byte(raw), &runtimeCfg) == nil {
+				persistAccessLogs = runtimeCfg.PersistAccessLogs
+			}
+		}
+		s.systemLogSink.SetPersistAccessLogs(persistAccessLogs)
+	}
 	return nil
 }
 
@@ -77,7 +89,7 @@ func (s *OpsService) RefreshRuntimeSettings(ctx context.Context) error {
 // repositories that only implement GetValue while still using the production
 // GetMultiple path whenever it is available.
 func getOpsRuntimeSettingsValues(ctx context.Context, repo SettingRepository) (values map[string]string, err error) {
-	keys := []string{SettingKeyOpsMonitoringEnabled, SettingKeyOpsAdvancedSettings}
+	keys := []string{SettingKeyOpsMonitoringEnabled, SettingKeyOpsAdvancedSettings, SettingKeyOpsRuntimeLogConfig}
 	defer func() {
 		if recover() == nil {
 			return
@@ -221,7 +233,7 @@ func (s *OpsService) SetMonitoringEnabled(enabled bool) {
 	s.runtimeSettingsMu.Lock()
 	defer s.runtimeSettingsMu.Unlock()
 	current := s.runtimeSettings.Load()
-	next := &opsRuntimeSettingsSnapshot{monitoringEnabled: enabled, advanced: *defaultOpsAdvancedSettings()}
+	next := &opsRuntimeSettingsSnapshot{monitoringEnabled: enabled, advanced: *defaultOpsAdvancedSettingsForConfig(s.cfg)}
 	if current != nil {
 		next.advanced = current.advanced
 	}

@@ -719,52 +719,85 @@ func (s *SubscriptionService) RestoreSubscription(ctx context.Context, subscript
 	return restored, nil
 }
 
+func (s *SubscriptionService) withSubscriptionUpdateTx(ctx context.Context, fn func(context.Context) error) error {
+	if dbent.TxFromContext(ctx) != nil {
+		return fn(ctx)
+	}
+	if s.entClient == nil {
+		return fn(ctx)
+	}
+
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	txCtx := dbent.NewTxContext(ctx, tx)
+
+	if err := fn(txCtx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
+}
+
 // ExtendSubscription 调整订阅时长（正数延长，负数缩短）
 func (s *SubscriptionService) ExtendSubscription(ctx context.Context, subscriptionID int64, days int) (*UserSubscription, error) {
-	sub, err := s.userSubRepo.GetByID(ctx, subscriptionID)
-	if err != nil {
-		return nil, ErrSubscriptionNotFound
-	}
+	err := s.withSubscriptionUpdateTx(ctx, func(txCtx context.Context) error {
+		// Lock the row before reading its expiry. Without this lock, concurrent
+		// adjustments can both calculate from the same stale expiry and lose one
+		// of the updates when they write the absolute timestamp.
+		sub, err := s.userSubRepo.GetByIDForUpdate(txCtx, subscriptionID)
+		if err != nil {
+			return ErrSubscriptionNotFound
+		}
 
-	// 限制调整天数范围
-	if days > MaxValidityDays {
-		days = MaxValidityDays
-	}
-	if days < -MaxValidityDays {
-		days = -MaxValidityDays
-	}
+		// 限制调整天数范围
+		if days > MaxValidityDays {
+			days = MaxValidityDays
+		}
+		if days < -MaxValidityDays {
+			days = -MaxValidityDays
+		}
 
-	now := time.Now()
-	isExpired := !sub.ExpiresAt.After(now)
+		now := time.Now()
+		if s.now != nil {
+			now = s.now()
+		}
+		isExpired := !sub.ExpiresAt.After(now)
 
-	// 如果订阅已过期，不允许负向调整
-	if isExpired && days < 0 {
-		return nil, infraerrors.BadRequest("CANNOT_SHORTEN_EXPIRED", "cannot shorten an expired subscription")
-	}
+		// 如果订阅已过期，不允许负向调整
+		if isExpired && days < 0 {
+			return infraerrors.BadRequest("CANNOT_SHORTEN_EXPIRED", "cannot shorten an expired subscription")
+		}
 
-	// 计算新的过期时间
-	var newExpiresAt time.Time
-	if isExpired {
-		// 已过期：从当前时间开始增加天数
-		newExpiresAt = now.AddDate(0, 0, days)
-	} else {
-		// 未过期：从原过期时间增加/减少天数
-		newExpiresAt = sub.ExpiresAt.AddDate(0, 0, days)
-	}
+		// 计算新的过期时间
+		var newExpiresAt time.Time
+		if isExpired {
+			// 已过期：从当前时间开始增加天数
+			newExpiresAt = now.AddDate(0, 0, days)
+		} else {
+			// 未过期：从原过期时间增加/减少天数
+			newExpiresAt = sub.ExpiresAt.AddDate(0, 0, days)
+		}
 
-	if newExpiresAt.After(MaxExpiresAt) {
-		newExpiresAt = MaxExpiresAt
-	}
+		if newExpiresAt.After(MaxExpiresAt) {
+			newExpiresAt = MaxExpiresAt
+		}
 
-	// 检查新的过期时间必须大于当前时间
-	if !newExpiresAt.After(now) {
-		return nil, ErrAdjustWouldExpire
-	}
+		// 检查新的过期时间必须大于当前时间
+		if !newExpiresAt.After(now) {
+			return ErrAdjustWouldExpire
+		}
 
-	if err := s.runInTx(ctx, func(txCtx context.Context) error {
 		if err := s.userSubRepo.ExtendExpiry(txCtx, subscriptionID, newExpiresAt); err != nil {
 			return err
 		}
+		// 本地行为（0b2a61d92 / bf1e0bc3a）：过期续期重置配额周期用量，
+		// 未过期调整则同步配额周期边界。
 		if isExpired {
 			windowStart := startOfDay(now)
 			cycleDays := normalizeAssignValidityDays(days)
@@ -777,6 +810,7 @@ func (s *SubscriptionService) ExtendSubscription(ctx context.Context, subscripti
 				return err
 			}
 		}
+
 		// 如果订阅已过期，恢复为active状态
 		if sub.Status == SubscriptionStatusExpired {
 			if err := s.userSubRepo.UpdateStatus(txCtx, subscriptionID, SubscriptionStatusActive); err != nil {
@@ -784,7 +818,13 @@ func (s *SubscriptionService) ExtendSubscription(ctx context.Context, subscripti
 			}
 		}
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	sub, err := s.userSubRepo.GetByID(ctx, subscriptionID)
+	if err != nil {
 		return nil, err
 	}
 
@@ -799,7 +839,7 @@ func (s *SubscriptionService) ExtendSubscription(ctx context.Context, subscripti
 		}()
 	}
 
-	return s.userSubRepo.GetByID(ctx, subscriptionID)
+	return sub, nil
 }
 
 // GetByID 根据ID获取订阅

@@ -48,6 +48,25 @@ func (r *lockingRenewalRepo) ExtendExpiry(_ context.Context, _ int64, expiresAt 
 	return nil
 }
 
+// 本地 ExtendSubscription 在行锁事务内同步配额周期（未过期 SetQuotaCycle /
+// 已过期 ResetUsageForQuotaCycle，0b2a61d92 与 bf1e0bc3a）；官方桩内嵌的
+// userSubRepoNoop 会对这两个调用 panic，这里按锁定的 current 行落地。
+func (r *lockingRenewalRepo) SetQuotaCycle(_ context.Context, _ int64, startAt, endAt time.Time, cycleDays int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.current.QuotaCycleStartAt, r.current.QuotaCycleEndAt, r.current.QuotaCycleDays = &startAt, &endAt, cycleDays
+	return nil
+}
+
+func (r *lockingRenewalRepo) ResetUsageForQuotaCycle(_ context.Context, _ int64, windowStart, cycleStartAt, cycleEndAt time.Time, cycleDays int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.current.DailyUsageUSD, r.current.WeeklyUsageUSD, r.current.MonthlyUsageUSD = 0, 0, 0
+	r.current.DailyWindowStart, r.current.WeeklyWindowStart, r.current.MonthlyWindowStart = &windowStart, &windowStart, &windowStart
+	r.current.QuotaCycleStartAt, r.current.QuotaCycleEndAt, r.current.QuotaCycleDays = &cycleStartAt, &cycleEndAt, cycleDays
+	return nil
+}
+
 func (r *lockingRenewalRepo) UpdateStatus(_ context.Context, _ int64, status string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -113,6 +132,22 @@ func TestAssignOrExtendSubscriptionSerializedRenewalsAccumulateDays(t *testing.T
 
 	require.Equal(t, 2, repo.lockReads)
 	require.Equal(t, initialExpiry.AddDate(0, 0, 14), second.ExpiresAt)
+}
+
+func TestExtendSubscriptionUsesLockedCurrentRow(t *testing.T) {
+	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	initialExpiry := now.AddDate(0, 0, 10)
+	repo := &lockingRenewalRepo{current: UserSubscription{
+		ID: 37, UserID: 41, GroupID: 43, ExpiresAt: initialExpiry, Status: SubscriptionStatusActive,
+	}}
+	svc := NewSubscriptionService(nil, repo, nil, nil, nil)
+	svc.now = func() time.Time { return now }
+
+	updated, err := svc.ExtendSubscription(context.Background(), 7, 5)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, repo.lockReads)
+	require.Equal(t, initialExpiry.AddDate(0, 0, 5), updated.ExpiresAt)
 }
 
 func TestAssignSubscriptionDoesNotReactivateRowSuspendedAfterStaleRead(t *testing.T) {

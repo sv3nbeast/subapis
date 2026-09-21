@@ -416,6 +416,7 @@ const builtInClientTabs = computed((): ClientTabConfig[] => {
         { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon, kind: 'opencode', sortOrder: 30 }
       ]
     case 'deepseek':
+    case 'minimax':
     case 'composite':
       return [
         { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon, kind: 'claude_code', sortOrder: 10 },
@@ -892,6 +893,8 @@ function generateRoutedCodexFiles(
     kimi: 'kimi-k2.5',
     zhipu: 'glm-4.7',
     deepseek: 'deepseek-v4-pro',
+    minimax: 'MiniMax-M3',
+    opencode_go: 'glm-5.3',
     composite: usageConfig.value.codex_model
   }
   const model = selectCodexCatalogModel(preferredModels[platform] || usageConfig.value.codex_model)
@@ -906,6 +909,8 @@ function generateRoutedCodexFiles(
     kimi: 'Kimi',
     zhipu: 'Zhipu',
     deepseek: 'DeepSeek',
+    minimax: 'MiniMax',
+    opencode_go: 'OpenCode',
     composite: 'Composite'
   }
   const label = labels[platform] || platform
@@ -933,7 +938,7 @@ supports_websockets = false`
       path: joinConfigPath(configDir, 'config.toml', isWindows),
       content: configContent,
       hint: t(
-        platform === 'deepseek' || platform === 'composite'
+        platform === 'deepseek' || platform === 'minimax' || platform === 'composite'
           ? `keys.useKeyModal.${platform}.codexConfigTomlHint`
           : 'keys.useKeyModal.routedCodex.configTomlHint'
       )
@@ -1038,6 +1043,12 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     }
   }
   const openaiModels = {
+    'gpt-6': {
+      name: 'GPT-6 (Astra)',
+      limit: { context: 1050000, output: 128000 },
+      options: { store: false },
+      variants: { low: {}, medium: {}, high: {}, xhigh: {}, max: {} }
+    },
     'gpt-6-astra': {
       name: 'GPT-6 Astra',
       limit: { context: 1050000, output: 128000 },

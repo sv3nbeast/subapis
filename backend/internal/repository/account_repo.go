@@ -83,6 +83,8 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 
 var schedulerNeutralExtraKeys = map[string]struct{}{
 	"codex_usage_updated_at":     {},
+	"codex_credits_snapshot":     {},
+	"codex_referral_snapshot":    {},
 	"session_window_utilization": {},
 	"grok_billing_snapshot":      {},
 }
@@ -246,6 +248,10 @@ func (r *accountRepository) CreateWithAccountGroups(ctx context.Context, account
 		if err := lockAnthropicStableCanaryGroupMutation(ctx, txClient, groupID); err != nil {
 			return err
 		}
+	}
+	// 官方 4a4fd35e0：与分组删除互斥；放在金丝雀 FOR UPDATE 之后以免 FOR SHARE 升级死锁。
+	if err := lockLiveGroups(ctx, txClient, groupIDs); err != nil {
+		return err
 	}
 	account.GroupIDs = groupIDs
 	txRepo := newAccountRepositoryWithSQL(txClient, txClient, r.schedulerCache)
@@ -639,7 +645,7 @@ func lockAndMergeAccountProbeExtra(
 		SELECT
 			platform = $2 AND type = $3 AND credentials = $4::jsonb AND proxy_id IS NOT DISTINCT FROM $5,
 			COALESCE(
-				platform IN ('openai', 'anthropic', 'kimi', 'zhipu', 'deepseek') AND $2 IN ('openai', 'anthropic', 'kimi', 'zhipu', 'deepseek')
+				platform IN (`+ollamaCloudUsagePlatformsSQL+`) AND $2 IN (`+ollamaCloudUsagePlatformsSQL+`)
 				AND type = 'apikey' AND $3 = 'apikey'
 				AND credentials -> 'api_key' IS NOT DISTINCT FROM $4::jsonb -> 'api_key'
 				AND `+ollamaCloudBaseURLMatchesSQL("credentials ->> 'base_url'")+`
@@ -824,7 +830,7 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 		UPDATE accounts
 		SET credentials = $1::jsonb,
 			extra = CASE
-				WHEN platform IN ('openai', 'anthropic', 'kimi', 'zhipu', 'deepseek') AND type = 'apikey'
+				WHEN platform IN (`+ollamaCloudUsagePlatformsSQL+`) AND type = 'apikey'
 					AND credentials IS DISTINCT FROM $1::jsonb
 					AND (
 						credentials -> 'api_key' IS DISTINCT FROM $1::jsonb -> 'api_key'
@@ -1373,12 +1379,21 @@ func (r *accountRepository) ListOAuthRefreshCandidates(ctx context.Context) ([]s
 	// NOT (a AND b) 在 PG 三值逻辑下会把 a 或 b 为 NULL 的行（即绝大多数
 	// 健康账号：temp_unschedulable_until=NULL）也排除，导致后台 token
 	// 刷新工作器漏掉所有正常账号 → access_token 到期后请求开始 401。
+	//
+	// Deliberately NO `schedulable = TRUE` filter here (官方 8e34ca5e3): paused accounts
+	// (schedulable=false, status=active) still hold valid refresh tokens and
+	// their stored access_token must keep working for the admin usage-window
+	// probe. Excluding them lets the token silently expire, after which the
+	// dashboard reports a false "needs re-auth" even though Test Connection
+	// (which refreshes on demand) succeeds. Permanent rejection is already
+	// covered by the status = 'active' filter (error accounts drop out), and
+	// accounts whose refresh actually fails are rate-limited by the
+	// retry-exhausted cooldown clause below.
 	rows, err := r.sql.QueryContext(ctx, `
 		SELECT id
 		FROM accounts
 		WHERE deleted_at IS NULL
 			AND status = 'active'
-			AND schedulable = TRUE
 			AND type IN ('oauth', 'setup-token')
 			AND platform IN ('anthropic', 'openai', 'gemini', 'antigravity', 'kiro', 'grok')
 			AND credentials ? 'refresh_token'
@@ -2014,6 +2029,10 @@ func (r *accountRepository) AddToGroup(ctx context.Context, accountID, groupID i
 	if err := lockAnthropicStableCanaryGroupMembershipAccount(ctx, client, accountID); err != nil {
 		return err
 	}
+	// 官方 4a4fd35e0：与分组删除互斥；放在金丝雀 FOR UPDATE 之后以免 FOR SHARE 升级死锁。
+	if err := lockLiveGroups(ctx, client, []int64{groupID}); err != nil {
+		return err
+	}
 	_, err = client.AccountGroup.Create().
 		SetAccountID(accountID).
 		SetGroupID(groupID).
@@ -2021,6 +2040,11 @@ func (r *accountRepository) AddToGroup(ctx context.Context, accountID, groupID i
 		Save(ctx)
 	if err != nil {
 		return err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 	}
 	payload := buildSchedulerGroupPayload([]int64{groupID})
 	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountGroupsChanged, &accountID, nil, payload); err != nil {
@@ -2122,6 +2146,10 @@ func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, gro
 		if err := lockAnthropicStableCanaryGroupMutation(ctx, client, groupID); err != nil {
 			return err
 		}
+	}
+	// 官方 4a4fd35e0：与分组删除互斥；放在金丝雀 FOR UPDATE 之后以免 FOR SHARE 升级死锁。
+	if err := lockLiveGroups(ctx, client, groupIDs); err != nil {
+		return err
 	}
 	if err := lockAnthropicStableCanaryGroupMembershipAccount(ctx, client, accountID); err != nil {
 		return err
@@ -2515,6 +2543,61 @@ func (r *accountRepository) SetRateLimited(ctx context.Context, id int64, resetA
 	}
 	r.syncSchedulerAccountSnapshot(ctx, id)
 	return nil
+}
+
+// SetRateLimitedIfUnchanged atomically applies a rate-limit reset only while the
+// account still carries exactly the generation the caller observed: its
+// UpdatedAt row version, its RateLimitedAt and its RateLimitResetAt (nil means
+// that field is currently unset). It is the write-back CAS counterpart to
+// ClearRateLimitIfObserved: an async rate-limit reset (e.g. an Ollama Cloud
+// usage probe) must not overwrite a newer 429, an admin clear, a re-armed
+// generation, or a key/state change observed by another writer between the
+// caller's read and this write. The whole update is a single statement, so the
+// write itself is race-free. updated reports whether the write happened, and the
+// caller must ONLY send its scheduling notification when updated == true (this
+// method already performed the DB update; no further SetRateLimited call is
+// allowed, as a second unconditional write would reintroduce the race). No new
+// migration is required.
+func (r *accountRepository) SetRateLimitedIfUnchanged(
+	ctx context.Context,
+	id int64,
+	expectedUpdatedAt time.Time,
+	expectedLimitedAt, expectedResetAt *time.Time,
+	newResetAt time.Time,
+) (bool, error) {
+	preds := []dbpredicate.Account{dbaccount.IDEQ(id), dbaccount.UpdatedAtEQ(expectedUpdatedAt)}
+	if expectedLimitedAt == nil {
+		preds = append(preds, dbaccount.RateLimitedAtIsNil())
+	} else {
+		preds = append(preds, dbaccount.RateLimitedAtEQ(*expectedLimitedAt))
+	}
+	if expectedResetAt == nil {
+		preds = append(preds, dbaccount.RateLimitResetAtIsNil())
+	} else {
+		preds = append(preds, dbaccount.RateLimitResetAtEQ(*expectedResetAt))
+	}
+
+	now := time.Now()
+	updated, err := r.client.Account.Update().
+		Where(preds...).
+		SetRateLimitedAt(now).
+		SetRateLimitResetAt(newResetAt).
+		Save(ctx)
+	if err != nil {
+		return false, err
+	}
+	if updated == 0 {
+		// The generation changed concurrently (cleared, re-armed, or the account
+		// was otherwise updated elsewhere): do not announce anything, just
+		// refresh the local scheduler snapshot.
+		r.syncSchedulerAccountSnapshot(ctx, id)
+		return false, nil
+	}
+	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue rate limit failed: account=%d err=%v", id, err)
+	}
+	r.syncSchedulerAccountSnapshot(ctx, id)
+	return true, nil
 }
 
 func (r *accountRepository) SetModelRateLimit(ctx context.Context, id int64, scope string, resetAt time.Time, reason ...string) error {

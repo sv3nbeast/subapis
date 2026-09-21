@@ -408,12 +408,14 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 		ChannelMonitorHideThroughput:         settings.ChannelMonitorHideThroughput,
 		ChannelMonitorShowQuota:              settings.ChannelMonitorShowQuota,
+		ChannelMonitorHideUserRanking:        settings.ChannelMonitorHideUserRanking,
 
 		GrokDefaultTextModel:           settings.GrokDefaultTextModel,
 		GrokCrossClientModelMapEnabled: settings.GrokCrossClientModelMapEnabled,
 		GrokDefaultBaseURLMode:         settings.GrokDefaultBaseURLMode,
 
 		AvailableChannelsEnabled:              settings.AvailableChannelsEnabled,
+		SubscriptionEnabled:                   settings.SubscriptionEnabled,
 		PublicModelMarketEnabled:              settings.PublicModelMarketEnabled,
 		PublicModelMarketReferenceUSDCNYRate:  settings.PublicModelMarketReferenceUSDCNYRate,
 		PublicModelMarketSettlementUSDCNYRate: settings.PublicModelMarketSettlementUSDCNYRate,
@@ -526,6 +528,7 @@ type UpdateSettingsRequest struct {
 	ChannelMonitorMode             *string `json:"channel_monitor_mode"`
 	ChannelMonitorHideThroughput   *bool   `json:"channel_monitor_hide_throughput"`
 	ChannelMonitorShowQuota        *bool   `json:"channel_monitor_show_quota"`
+	ChannelMonitorHideUserRanking  *bool   `json:"channel_monitor_hide_user_ranking"`
 	// 注册设置
 	RegistrationEnabled              bool                         `json:"registration_enabled"`
 	EmailVerifyEnabled               bool                         `json:"email_verify_enabled"`
@@ -829,10 +832,14 @@ type UpdateSettingsRequest struct {
 	ChannelMonitorDefaultIntervalSeconds *int  `json:"channel_monitor_default_interval_seconds"`
 
 	// Available Channels feature switch (user-facing)
-	AvailableChannelsEnabled *bool   `json:"available_channels_enabled"`
-	ModelPlazaEnabled        *bool   `json:"model_plaza_enabled"`
-	ModelPlazaRequireAuth    *bool   `json:"model_plaza_require_auth"`
-	ModelPlazaDescription    *string `json:"model_plaza_description"`
+	AvailableChannelsEnabled *bool `json:"available_channels_enabled"`
+
+	// Subscription feature switch (user-facing subscription surface; see SettingKeySubscriptionEnabled)
+	SubscriptionEnabled *bool `json:"subscription_enabled"`
+
+	ModelPlazaEnabled     *bool   `json:"model_plaza_enabled"`
+	ModelPlazaRequireAuth *bool   `json:"model_plaza_require_auth"`
+	ModelPlazaDescription *string `json:"model_plaza_description"`
 
 	// Public Model Market feature switch (anonymous)
 	PublicModelMarketEnabled              *bool    `json:"public_model_market_enabled"`
@@ -1886,6 +1893,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		ChannelMonitorMode:               previousSettings.ChannelMonitorMode,
 		ChannelMonitorHideThroughput:     previousSettings.ChannelMonitorHideThroughput,
 		ChannelMonitorShowQuota:          previousSettings.ChannelMonitorShowQuota,
+		ChannelMonitorHideUserRanking:    previousSettings.ChannelMonitorHideUserRanking,
 		CompactHomeEnabled:               previousSettings.CompactHomeEnabled,
 		GrokDefaultBaseURLMode:           previousSettings.GrokDefaultBaseURLMode,
 		DefaultPlatformQuotas:            req.DefaultPlatformQuotas,
@@ -2288,6 +2296,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.AvailableChannelsEnabled
 		}(),
+		SubscriptionEnabled: func() bool {
+			if req.SubscriptionEnabled != nil {
+				return *req.SubscriptionEnabled
+			}
+			return previousSettings.SubscriptionEnabled
+		}(),
 		ModelPlazaEnabled: func() bool {
 			if req.ModelPlazaEnabled != nil {
 				return *req.ModelPlazaEnabled
@@ -2456,6 +2470,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 	if req.ChannelMonitorShowQuota != nil {
 		settings.ChannelMonitorShowQuota = *req.ChannelMonitorShowQuota
+	}
+	if req.ChannelMonitorHideUserRanking != nil {
+		settings.ChannelMonitorHideUserRanking = *req.ChannelMonitorHideUserRanking
 	}
 	if err := h.settingService.UpdateSettingsWithAuthSourceDefaultsOmitting(c.Request.Context(), settings, authSourceDefaults, omitted); err != nil {
 		response.ErrorFrom(c, err)
@@ -2767,9 +2784,11 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		ChannelMonitorMode:                   updatedSettings.ChannelMonitorMode,
 		ChannelMonitorHideThroughput:         updatedSettings.ChannelMonitorHideThroughput,
 		ChannelMonitorShowQuota:              updatedSettings.ChannelMonitorShowQuota,
+		ChannelMonitorHideUserRanking:        updatedSettings.ChannelMonitorHideUserRanking,
 		ChannelMonitorDefaultIntervalSeconds: updatedSettings.ChannelMonitorDefaultIntervalSeconds,
 
 		AvailableChannelsEnabled:              updatedSettings.AvailableChannelsEnabled,
+		SubscriptionEnabled:                   updatedSettings.SubscriptionEnabled,
 		ModelPlazaEnabled:                     updatedSettings.ModelPlazaEnabled,
 		ModelPlazaRequireAuth:                 updatedSettings.ModelPlazaRequireAuth,
 		ModelPlazaDescription:                 updatedSettings.ModelPlazaDescription,
@@ -3358,6 +3377,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.AvailableChannelsEnabled != after.AvailableChannelsEnabled {
 		changed = append(changed, "available_channels_enabled")
+	}
+	if before.SubscriptionEnabled != after.SubscriptionEnabled {
+		changed = append(changed, "subscription_enabled")
 	}
 	if before.ModelPlazaEnabled != after.ModelPlazaEnabled {
 		changed = append(changed, "model_plaza_enabled")

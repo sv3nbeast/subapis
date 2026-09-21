@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"strings"
+	"time"
 )
 
 // resolveAccountStatsCost computes the cost snapshot used by account statistics.
@@ -14,6 +15,9 @@ import (
 //  2. If ApplyPricingToAccountStats is enabled, use this request's pre-multiplier totalCost.
 //  3. Fallback to model pricing file using the final upstream model.
 //  4. nil -> legacy formula.
+//
+// pricingAt 与本次客户计费使用同一时刻，避免跨峰谷请求的成本与售价错位。
+// reasoningEffort 是最终转发等级；Fable 5.1 max 默认按 3 倍额度消耗（官方 8249ab37d）。
 func resolveAccountStatsCost(
 	ctx context.Context,
 	channelService *ChannelService,
@@ -25,7 +29,13 @@ func resolveAccountStatsCost(
 	requestCount int,
 	totalCost float64,
 	serviceTier string,
+	pricingAt time.Time,
+	reasoningEfforts ...string,
 ) *float64 {
+	reasoningEffort := ""
+	if len(reasoningEfforts) > 0 {
+		reasoningEffort = reasoningEfforts[0]
+	}
 	if channelService == nil || strings.TrimSpace(upstreamModel) == "" {
 		return nil
 	}
@@ -35,7 +45,7 @@ func resolveAccountStatsCost(
 	}
 
 	platform := channelService.GetGroupPlatform(ctx, groupID)
-	if cost := tryAccountStatsCustomRules(channel, accountID, groupID, platform, upstreamModel, tokens, requestCount); cost != nil {
+	if cost := tryAccountStatsCustomRules(channel, accountID, groupID, platform, upstreamModel, tokens, requestCount, reasoningEffort); cost != nil {
 		return cost
 	}
 
@@ -48,7 +58,7 @@ func resolveAccountStatsCost(
 	}
 
 	if billingService != nil {
-		return tryAccountStatsModelFilePricing(billingService, upstreamModel, tokens, serviceTier)
+		return tryAccountStatsModelFilePricing(billingService, upstreamModel, tokens, serviceTier, pricingAt, reasoningEffort)
 	}
 	return nil
 }
@@ -61,7 +71,12 @@ func tryAccountStatsCustomRules(
 	model string,
 	tokens UsageTokens,
 	requestCount int,
+	reasoningEfforts ...string,
 ) *float64 {
+	reasoningEffort := ""
+	if len(reasoningEfforts) > 0 {
+		reasoningEffort = reasoningEfforts[0]
+	}
 	modelLower := strings.ToLower(model)
 	for _, rule := range channel.AccountStatsPricingRules {
 		if !matchAccountStatsRule(&rule, accountID, groupID) {
@@ -71,15 +86,33 @@ func tryAccountStatsCustomRules(
 		if pricing == nil {
 			continue
 		}
-		return calculateAccountStatsCost(pricing, tokens, requestCount)
+		cost := calculateAccountStatsCost(pricing, tokens, requestCount)
+		if cost != nil {
+			*cost *= maxReasoningEffortBillingMultiplier(model, reasoningEffort, nil)
+		}
+		return cost
 	}
 	return nil
 }
 
-func tryAccountStatsModelFilePricing(billingService *BillingService, model string, tokens UsageTokens, serviceTier string) *float64 {
-	breakdown, err := billingService.CalculateCostWithServiceTier(
-		model, tokens, 1, normalizeBillingServiceTier(serviceTier),
-	)
+// tryAccountStatsModelFilePricing 使用模型定价文件（LiteLLM/fallback）中的价格计算费用。
+// 与用户计费共用同一条定价管线；解析器不配置渠道或分组，保持优先级 3 的
+// 语义：只取模型定价文件，不引入自定义售价。
+func tryAccountStatsModelFilePricing(billingService *BillingService, model string, tokens UsageTokens, serviceTier string, pricingAt time.Time, reasoningEfforts ...string) *float64 {
+	reasoningEffort := ""
+	if len(reasoningEfforts) > 0 {
+		reasoningEffort = reasoningEfforts[0]
+	}
+	breakdown, err := billingService.CalculateCostUnified(CostInput{
+		Ctx:             context.Background(),
+		Model:           model,
+		Tokens:          tokens,
+		RateMultiplier:  1,
+		ServiceTier:     normalizeBillingServiceTier(serviceTier),
+		ReasoningEffort: reasoningEffort,
+		PricingAt:       pricingAt,
+		Resolver:        NewModelPricingResolver(nil, billingService),
+	})
 	if err != nil || breakdown == nil || breakdown.TotalCost <= 0 {
 		return nil
 	}
@@ -253,6 +286,7 @@ func applyAccountStatsCost(
 	requestedModel string,
 	tokens UsageTokens,
 	totalCost float64,
+	pricingAt time.Time,
 ) {
 	model := upstreamModel
 	if model == "" {
@@ -263,8 +297,12 @@ func applyAccountStatsCost(
 		requestCount = usageLog.ImageCount
 	}
 	serviceTier := ""
+	reasoningEffort := ""
 	if usageLog != nil && usageLog.ServiceTier != nil {
 		serviceTier = *usageLog.ServiceTier
+	}
+	if usageLog != nil && usageLog.ReasoningEffort != nil {
+		reasoningEffort = *usageLog.ReasoningEffort
 	}
 	usageLog.AccountStatsCost = resolveAccountStatsCost(
 		ctx,
@@ -277,5 +315,7 @@ func applyAccountStatsCost(
 		requestCount,
 		totalCost,
 		serviceTier,
+		pricingAt,
+		reasoningEffort,
 	)
 }

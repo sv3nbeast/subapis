@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -74,6 +75,153 @@ func (s *HTTPUpstreamSuite) TestGetOrCreateClient_InvalidURLReturnsError() {
 	svc := s.newService()
 	_, err := svc.getClientEntry("://bad-proxy-url", 1, 1, service.HTTPUpstreamProfileDefault, false, false)
 	require.Error(s.T(), err, "expected error for invalid proxy URL")
+}
+
+func (s *HTTPUpstreamSuite) TestOpenAIProfileDefaultsToHTTP2AndNoHeaderTimeout() {
+	s.cfg.Gateway = config.GatewayConfig{
+		ResponseHeaderTimeout: 600,
+		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{
+			Enabled:                   true,
+			AllowProxyFallbackToHTTP1: true,
+		},
+	}
+	svc := s.newService()
+	entry, err := svc.getClientEntry("", 1, 1, service.HTTPUpstreamProfileOpenAI, false, false)
+	require.NoError(s.T(), err)
+	transport, ok := entry.client.Transport.(*http.Transport)
+	require.True(s.T(), ok, "expected *http.Transport")
+	require.Equal(s.T(), time.Duration(0), transport.ResponseHeaderTimeout, "OpenAI profile should not inherit generic header timeout")
+	require.True(s.T(), transport.ForceAttemptHTTP2, "OpenAI profile should prefer HTTP/2")
+	require.Equal(s.T(), upstreamProtocolModeOpenAIH2, entry.protocolMode)
+}
+
+func (s *HTTPUpstreamSuite) TestLongStreamProfileUsesSharedHTTP2KeepAlive() {
+	s.cfg.Gateway = config.GatewayConfig{
+		ResponseHeaderTimeout: 600,
+		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{
+			Enabled: false,
+		},
+	}
+	svc := s.newService()
+	entry, err := svc.getClientEntry("", 1, 1, service.HTTPUpstreamProfileLongStream, false, false)
+	require.NoError(s.T(), err)
+	transport, ok := entry.client.Transport.(*http.Transport)
+	require.True(s.T(), ok, "expected *http.Transport")
+	require.Equal(s.T(), 600*time.Second, transport.ResponseHeaderTimeout, "long-stream profile should retain the generic header timeout")
+	require.True(s.T(), transport.ForceAttemptHTTP2, "long-stream profile must enable HTTP/2 independently of OpenAI settings")
+	require.True(s.T(), transport.Protocols.HTTP2(), "long-stream profile must install HTTP/2 PING health checks")
+	require.Equal(s.T(), upstreamProtocolModeLongStreamH2, entry.protocolMode)
+}
+
+func (s *HTTPUpstreamSuite) TestOpenAIProfileCustomHeaderTimeout() {
+	s.cfg.Gateway = config.GatewayConfig{
+		ResponseHeaderTimeout:       600,
+		OpenAIResponseHeaderTimeout: 1800,
+		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{
+			Enabled: true,
+		},
+	}
+	svc := s.newService()
+	entry, err := svc.getClientEntry("", 1, 1, service.HTTPUpstreamProfileOpenAI, false, false)
+	require.NoError(s.T(), err)
+	transport, ok := entry.client.Transport.(*http.Transport)
+	require.True(s.T(), ok, "expected *http.Transport")
+	require.Equal(s.T(), 1800*time.Second, transport.ResponseHeaderTimeout)
+}
+
+func (s *HTTPUpstreamSuite) TestOpenAIProfileTLSFingerprintDoesNotInheritGenericHeaderTimeout() {
+	s.cfg.Gateway = config.GatewayConfig{
+		ResponseHeaderTimeout: 600,
+		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{
+			Enabled: true,
+		},
+	}
+	svc := s.newService()
+	entry, err := svc.getClientEntryWithTLS("", 1, 1, &tlsfingerprint.Profile{Name: "test"}, service.HTTPUpstreamProfileOpenAI, false, false)
+	require.NoError(s.T(), err)
+	// OpenAI profile 的池配置必须把通用 600s 首字节超时归零（poolKey 由 applyProfilePoolSettings 之后的 settings 生成）。
+	require.Contains(s.T(), entry.poolKey, "header_timeout:0s", "OpenAI TLS path should not inherit generic header timeout")
+	switch transport := entry.client.Transport.(type) {
+	case *http.Transport:
+		require.Equal(s.T(), time.Duration(0), transport.ResponseHeaderTimeout, "OpenAI TLS path should not inherit generic header timeout")
+	case *http2.Transport:
+		// 本地 TLS 指纹直连走 utls + HTTP/2（无 ResponseHeaderTimeout 字段），首字节等待只受请求 ctx 约束，
+		// 天然不会继承通用 header 超时。
+		require.NotNil(s.T(), transport.DialTLSContext, "utls fingerprint dialer must be installed")
+	default:
+		s.T().Fatalf("unexpected transport type %T", entry.client.Transport)
+	}
+}
+
+func (s *HTTPUpstreamSuite) TestOpenAIProfileHTTP2DisabledUsesHTTP1Transport() {
+	s.cfg.Gateway = config.GatewayConfig{
+		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{Enabled: false},
+	}
+	svc := s.newService()
+	entry, err := svc.getClientEntry("", 1, 1, service.HTTPUpstreamProfileOpenAI, false, false)
+	require.NoError(s.T(), err)
+	transport, ok := entry.client.Transport.(*http.Transport)
+	require.True(s.T(), ok, "expected *http.Transport")
+	require.False(s.T(), transport.ForceAttemptHTTP2, "OpenAI HTTP/2 disabled should not force H2")
+	require.NotNil(s.T(), transport.TLSNextProto, "HTTP/1 mode should disable automatic H2 negotiation")
+	require.Equal(s.T(), upstreamProtocolModeOpenAIH1, entry.protocolMode)
+}
+
+func (s *HTTPUpstreamSuite) TestOpenAIHeaderTimeoutChangeRebuildsClient() {
+	s.cfg.Gateway = config.GatewayConfig{
+		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{Enabled: true},
+	}
+	svc := s.newService()
+	entry1, err := svc.getClientEntry("", 1, 1, service.HTTPUpstreamProfileOpenAI, false, false)
+	require.NoError(s.T(), err)
+
+	s.cfg.Gateway.OpenAIResponseHeaderTimeout = 1800
+	entry2, err := svc.getClientEntry("", 1, 1, service.HTTPUpstreamProfileOpenAI, false, false)
+	require.NoError(s.T(), err)
+	require.NotSame(s.T(), entry1, entry2, "OpenAI header timeout changes must rebuild cached client")
+	transport, ok := entry2.client.Transport.(*http.Transport)
+	require.True(s.T(), ok, "expected *http.Transport")
+	require.Equal(s.T(), 1800*time.Second, transport.ResponseHeaderTimeout)
+}
+
+func (s *HTTPUpstreamSuite) TestOpenAIHTTP2TimeoutDoesNotActivateProxyFallback() {
+	s.cfg.Gateway = config.GatewayConfig{
+		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{
+			Enabled:                   true,
+			AllowProxyFallbackToHTTP1: true,
+			FallbackErrorThreshold:    1,
+			FallbackWindowSeconds:     60,
+			FallbackTTLSeconds:        600,
+		},
+	}
+	svc := s.newService()
+	proxyURL := "http://proxy.local:8080"
+	svc.recordOpenAIHTTP2Failure(service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, proxyURL, errors.New("http2: timeout awaiting response headers"))
+	require.False(s.T(), svc.isOpenAIHTTP2FallbackActive(proxyURL), "header timeout should not be treated as H2 compatibility failure")
+}
+
+func (s *HTTPUpstreamSuite) TestOpenAIHTTP2ProxyCompatibilityErrorActivatesFallback() {
+	s.cfg.Gateway = config.GatewayConfig{
+		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{
+			Enabled:                   true,
+			AllowProxyFallbackToHTTP1: true,
+			FallbackErrorThreshold:    1,
+			FallbackWindowSeconds:     60,
+			FallbackTTLSeconds:        600,
+		},
+	}
+	svc := s.newService()
+	proxyURL := "http://proxy.local:8080"
+	svc.recordOpenAIHTTP2Failure(service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, proxyURL, errors.New("http2: protocol error"))
+	require.True(s.T(), svc.isOpenAIHTTP2FallbackActive(proxyURL))
+
+	entry, err := svc.getClientEntry(proxyURL, 1, 1, service.HTTPUpstreamProfileOpenAI, false, false)
+	require.NoError(s.T(), err)
+	transport, ok := entry.client.Transport.(*http.Transport)
+	require.True(s.T(), ok, "expected *http.Transport")
+	require.False(s.T(), transport.ForceAttemptHTTP2)
+	require.NotNil(s.T(), transport.TLSNextProto)
+	require.Equal(s.T(), upstreamProtocolModeOpenAIH1Fallback, entry.protocolMode)
 }
 
 // TestNormalizeProxyURL_Canonicalizes 测试代理 URL 规范化
@@ -476,4 +624,64 @@ func hasEntry(svc *httpUpstreamService, target *upstreamClientEntry) bool {
 		}
 	}
 	return false
+}
+
+func TestHTTPUpstreamDoPublicHostsOnlyRejectsPrivateDestinationBeforeConnecting(t *testing.T) {
+	var calls atomic.Int64
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(target.Close)
+
+	upstream := NewHTTPUpstream(nil)
+
+	plain, err := http.NewRequestWithContext(t.Context(), http.MethodGet, target.URL, nil)
+	require.NoError(t, err)
+	resp, err := upstream.Do(plain, "", 1, 1)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, int64(1), calls.Load(), "loopback stays reachable for requests without the marker")
+
+	guarded, err := http.NewRequestWithContext(service.WithHTTPUpstreamPublicHostsOnly(t.Context()), http.MethodGet, target.URL, nil)
+	require.NoError(t, err)
+	resp, err = upstream.Do(guarded, "", 1, 1)
+	require.Error(t, err)
+	require.Nil(t, resp)
+	require.Contains(t, err.Error(), "not allowed")
+	require.Equal(t, int64(1), calls.Load(), "marked request must be rejected before any connection is made")
+}
+
+func TestHTTPUpstreamPublicHostsOnlyValidatesEveryRedirectHop(t *testing.T) {
+	upstream, ok := NewHTTPUpstream(nil).(*httpUpstreamService)
+	require.True(t, ok)
+	base := &http.Client{}
+
+	plain, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://cdn.example.com/a.png", nil)
+	require.NoError(t, err)
+	require.Same(t, base, upstream.httpClientForUpstreamRequest(base, plain))
+
+	guarded, err := http.NewRequestWithContext(service.WithHTTPUpstreamPublicHostsOnly(t.Context()), http.MethodGet, "https://cdn.example.com/a.png", nil)
+	require.NoError(t, err)
+	client := upstream.httpClientForUpstreamRequest(base, guarded)
+	require.NotSame(t, base, client)
+	require.NotNil(t, client.CheckRedirect)
+	require.Nil(t, base.CheckRedirect, "the cached client must stay untouched")
+
+	via := []*http.Request{guarded}
+	for _, hop := range []string{
+		"http://127.0.0.1:8080/a.png",
+		"http://[::1]:8080/a.png",
+		"http://10.0.0.8/a.png",
+		"http://169.254.169.254/latest/meta-data/",
+		"http://0.0.0.0/a.png",
+	} {
+		hopReq, err := http.NewRequestWithContext(guarded.Context(), http.MethodGet, hop, nil)
+		require.NoError(t, err)
+		require.Error(t, client.CheckRedirect(hopReq, via), "hop=%s", hop)
+	}
+	publicHop, err := http.NewRequestWithContext(guarded.Context(), http.MethodGet, "http://93.184.216.34/a.png", nil)
+	require.NoError(t, err)
+	require.NoError(t, client.CheckRedirect(publicHop, via))
+	require.Error(t, client.CheckRedirect(publicHop, make([]*http.Request, 10)), "redirect chain stays capped")
 }

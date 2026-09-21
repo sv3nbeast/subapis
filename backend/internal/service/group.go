@@ -12,7 +12,7 @@ import (
 )
 
 type OpenAIMessagesDispatchModelConfig = domain.OpenAIMessagesDispatchModelConfig
-type GroupModelsListConfig = domain.GroupModelsListConfig
+type GroupCodexModelsManifestConfig = domain.GroupCodexModelsManifestConfig
 type ReasoningEffortMapping = domain.ReasoningEffortMapping
 type SubscriptionModelQuotaGroup = domain.SubscriptionModelQuotaGroup
 
@@ -101,16 +101,19 @@ type Group struct {
 	SortOrder int
 
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
-	AllowMessagesDispatch        bool
-	AllowNonStreamMessages       bool // 是否允许 /v1/messages 非流式请求（内部转流式聚合）
-	AllowLive                    bool // 是否允许 OpenAI Live 接口
-	ForceOpenAIFast              bool // 强制 OpenAI 网关请求使用 service_tier=priority
-	FreeOpenAIFast               bool // OpenAI Fast 请求按 Standard 价格向用户计费
-	RequireOAuthOnly             bool // 仅允许非 apikey 类型账号关联（OpenAI/Antigravity/Anthropic/Gemini）
-	RequirePrivacySet            bool // 调度时仅允许 privacy 已成功设置的账号（OpenAI/Antigravity/Anthropic/Gemini）
-	DefaultMappedModel           string
-	MessagesDispatchModelConfig  OpenAIMessagesDispatchModelConfig
-	ModelsListConfig             GroupModelsListConfig
+	AllowMessagesDispatch       bool
+	AllowNonStreamMessages      bool // 是否允许 /v1/messages 非流式请求（内部转流式聚合）
+	AllowLive                   bool // 是否允许 OpenAI Live 接口
+	ForceOpenAIFast             bool // 强制 OpenAI 网关请求使用 service_tier=priority
+	FreeOpenAIFast              bool // OpenAI Fast 请求按 Standard 价格向用户计费
+	RequireOAuthOnly            bool // 仅允许非 apikey 类型账号关联（OpenAI/Antigravity/Anthropic/Gemini）
+	RequirePrivacySet           bool // 调度时仅允许 privacy 已成功设置的账号（OpenAI/Antigravity/Anthropic/Gemini）
+	DefaultMappedModel          string
+	MessagesDispatchModelConfig OpenAIMessagesDispatchModelConfig
+	ModelAllowlist              GroupModelAllowlist
+	// CodexModelsManifestConfig 开启后，普通模型列表与 Codex manifest 优先使用
+	// 固定账号列表拉取并合并，不经过调度器（仅 openai 平台）。
+	CodexModelsManifestConfig    GroupCodexModelsManifestConfig
 	GrokChatUpstreamMode         string
 	GrokChatResponsesGrayPercent int
 
@@ -118,7 +121,11 @@ type Group struct {
 	// 一旦设置即接管该分组用户的限流（覆盖用户级 rpm_limit），可被 user-group rpm_override 进一步覆盖。
 	RPMLimit int
 
-	MaxReasoningEffort          string
+	// MaxReasoningEffort limits the effective Anthropic/OpenAI reasoning effort.
+	// Empty means unlimited; supported values are minimal/low/medium/high/xhigh/max.
+	MaxReasoningEffort string
+	// MaxReasoningEffortOverLimit is the access control when an explicit effort
+	// exceeds the ceiling: downgrade (default) or deny.
 	MaxReasoningEffortOverLimit string
 	ReasoningEffortMappings     []ReasoningEffortMapping
 
@@ -450,6 +457,12 @@ func normalizeGrokChatUpstreamFields(g *Group) {
 	}
 	g.GrokChatUpstreamMode = g.EffectiveGrokChatUpstreamMode()
 	g.GrokChatResponsesGrayPercent = g.EffectiveGrokChatResponsesGrayPercent()
+}
+
+// IsGroupBindableInSimpleMode is the shared policy for groups that may be
+// surfaced and bound to accounts while running in simple mode.
+func IsGroupBindableInSimpleMode(group *Group) bool {
+	return group != nil && group.Platform != PlatformComposite
 }
 
 func (g *Group) IsActive() bool {

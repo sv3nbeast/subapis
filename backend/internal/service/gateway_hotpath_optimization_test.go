@@ -623,7 +623,7 @@ func TestGetAvailableModels_PrefersGroupChannelSupportedModels(t *testing.T) {
 		accountRepo:        accountRepo,
 		modelsListCache:    gocache.New(time.Minute, time.Minute),
 		modelsListCacheTTL: time.Minute,
-		channelService:     NewChannelService(channelRepo, nil, nil, nil),
+		channelService:     NewChannelService(channelRepo, nil, nil, nil, nil),
 	}
 
 	models := svc.GetAvailableModels(context.Background(), &groupID, "")

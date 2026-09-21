@@ -343,7 +343,8 @@ const routes: RouteRecordRaw[] = [
       requiresAdmin: false,
       title: 'My Subscriptions',
       titleKey: 'userSubscriptions.title',
-      descriptionKey: 'userSubscriptions.description'
+      descriptionKey: 'userSubscriptions.description',
+      requiresSubscription: true
     }
   },
   {
@@ -964,7 +965,10 @@ router.beforeEach(async (to, _from, next) => {
   // 无 __APP_CONFIG__ 注入）。此时 cachedPublicSettings 为空会把 payment/risk_control
   // 误判为“未启用”而错误拦截，故这里先确保设置加载完成。
   if (
-    (to.meta.requiresPayment || to.meta.requiresRiskControl || to.meta.requiresWebChat) &&
+    (to.meta.requiresPayment ||
+      to.meta.requiresRiskControl ||
+      to.meta.requiresWebChat ||
+      to.meta.requiresSubscription) &&
     !appStore.publicSettingsLoaded
   ) {
     try {
@@ -1003,10 +1007,19 @@ router.beforeEach(async (to, _from, next) => {
     return
   }
 
+  // 订阅功能是 opt-out 开关：只有显式 false 才拦截「我的订阅」页直达。
+  if (
+    to.meta.requiresSubscription &&
+    appStore.publicSettingsLoaded &&
+    appStore.cachedPublicSettings?.subscription_enabled === false
+  ) {
+    next(authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
+    return
+  }
+
   // 简易模式下限制访问某些页面
   if (authStore.isSimpleMode) {
     const restrictedPaths = [
-      '/admin/groups',
       '/admin/subscriptions',
       '/admin/redeem',
       '/subscriptions',

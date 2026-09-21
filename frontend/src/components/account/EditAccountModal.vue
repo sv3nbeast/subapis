@@ -47,7 +47,7 @@
             @select="editBaseUrl = $event"
           />
           <CnBaseUrlPresets
-            v-if="isCNApiKeyAccount"
+            v-if="isCNApiKeyAccount && account.platform !== 'opencode_go'"
             class="mt-2"
             :platform="cnPresetPlatform"
             :mode="editAccountMode"
@@ -70,8 +70,60 @@
             {{ t('admin.accounts.cnProviders.apiProtocol.responsesFallbackDesc') }}
           </p>
         </div>
+        <!-- OpenCode Zen vs GO -->
+        <div v-if="isCNApiKeyAccount && account.platform === 'opencode_go'">
+          <label class="input-label">{{ t('admin.accounts.cnProviders.accountMode.title') }}</label>
+          <div class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              @click="editOpenCodeAccountMode = 'zen'"
+              :class="[
+                'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+                editOpenCodeAccountMode === 'zen'
+                  ? 'border-amber-500 bg-amber-50 dark:bg-amber-900/20'
+                  : 'border-gray-200 hover:border-gray-400 dark:border-dark-600 dark:hover:border-gray-600'
+              ]"
+            >
+              <div
+                :class="[
+                  'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                  editOpenCodeAccountMode === 'zen' ? 'bg-amber-500 text-white' : 'bg-gray-100 text-gray-500 dark:bg-dark-600 dark:text-gray-400'
+                ]"
+              >
+                <Icon name="creditCard" size="sm" />
+              </div>
+              <div>
+                <span class="block text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.accounts.opencodeGo.accountMode.zen') }}</span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.opencodeGo.accountMode.zenDesc') }}</span>
+              </div>
+            </button>
+            <button
+              type="button"
+              @click="editOpenCodeAccountMode = 'go'"
+              :class="[
+                'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+                editOpenCodeAccountMode === 'go'
+                  ? 'border-amber-500 bg-amber-50 dark:bg-amber-900/20'
+                  : 'border-gray-200 hover:border-gray-400 dark:border-dark-600 dark:hover:border-gray-600'
+              ]"
+            >
+              <div
+                :class="[
+                  'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                  editOpenCodeAccountMode === 'go' ? 'bg-amber-500 text-white' : 'bg-gray-100 text-gray-500 dark:bg-dark-600 dark:text-gray-400'
+                ]"
+              >
+                <Icon name="bolt" size="sm" />
+              </div>
+              <div>
+                <span class="block text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.accounts.opencodeGo.accountMode.go') }}</span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.opencodeGo.accountMode.goDesc') }}</span>
+              </div>
+            </button>
+          </div>
+        </div>
         <!-- Account Mode Selection (CN providers) -->
-        <div v-if="isCNApiKeyAccount">
+        <div v-if="isCNApiKeyAccount && account.platform !== 'opencode_go'">
           <label class="input-label">{{ t('admin.accounts.cnProviders.accountMode.title') }}</label>
           <div class="mt-2 flex flex-wrap gap-2">
             <button
@@ -91,7 +143,7 @@
           </div>
           <p class="input-hint">{{ t(`admin.accounts.cnProviders.accountMode.${editAccountMode}Desc`) }}</p>
         </div>
-        <!-- API Protocol Selection (CN providers) -->
+        <!-- API Protocol Selection (CN providers / OpenCode) -->
         <div v-if="isCNApiKeyAccount">
           <label class="input-label">{{ t('admin.accounts.cnProviders.apiProtocol.title') }}</label>
           <div class="mt-2 flex flex-wrap gap-2">
@@ -112,6 +164,11 @@
           </div>
           <p class="input-hint">{{ t(`admin.accounts.cnProviders.apiProtocol.${cnProtocolDescKey}Desc`) }}</p>
         </div>
+        <OpenCodeGoProtocolRulesEditor
+          v-if="account.platform === 'opencode_go' && editApiProtocol === 'adaptive'"
+          v-model:rows="editOpenCodeGoProtocolRules"
+          :plan="editOpenCodeAccountMode"
+        />
         <!-- Zhipu 团队版 Coding Plan：组织/项目 ID（可选，填写后用量查询走团队版端点） -->
         <div v-if="account.platform === 'zhipu' && editAccountMode === 'coding'">
           <div class="flex items-center">
@@ -565,6 +622,58 @@
         </div>
       </div>
 
+      <!-- Grok OAuth media generation eligibility override -->
+      <div
+        v-if="isGrokOAuthAccount"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="grok-media-eligibility-card"
+      >
+        <div class="space-y-3">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.grokMediaEligibility.title') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.grokMediaEligibility.hint') }}
+            </p>
+          </div>
+          <select
+            v-model="grokMediaEligibilityMode"
+            class="input"
+            data-testid="grok-media-eligibility-mode"
+            :disabled="grokMediaEligibilityLoading"
+          >
+            <option value="auto">{{ t('admin.accounts.grokMediaEligibility.auto') }}</option>
+            <option value="enabled">{{ t('admin.accounts.grokMediaEligibility.enabled') }}</option>
+            <option value="disabled">{{ t('admin.accounts.grokMediaEligibility.disabled') }}</option>
+          </select>
+          <p v-if="grokMediaEligibilityLoading" class="text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.grokMediaEligibility.loading') }}
+          </p>
+          <p v-else-if="grokMediaEligibilityError" class="text-xs text-red-600 dark:text-red-400">
+            {{ grokMediaEligibilityError }}
+          </p>
+          <div v-else-if="grokMediaEligibilityState" class="rounded-lg bg-gray-50 p-3 text-xs dark:bg-dark-700">
+            <span class="font-medium">{{ t('admin.accounts.grokMediaEligibility.current') }}</span>
+            <span class="ml-1" data-testid="grok-media-eligibility-status">
+              {{ grokMediaEligibilityState.eligible ? t('admin.accounts.grokMediaEligibility.eligible') : t('admin.accounts.grokMediaEligibility.ineligible') }}
+              · {{ t(`admin.accounts.grokMediaEligibility.reasons.${grokMediaEligibilityState.reason}`) }}
+            </span>
+          </div>
+          <div
+            v-if="grokMediaEligibilityMode === 'enabled'"
+            class="rounded-lg bg-amber-50 p-3 dark:bg-amber-900/20"
+          >
+            <p class="text-xs text-amber-700 dark:text-amber-400">
+              <Icon name="exclamationTriangle" size="sm" class="mr-1 inline" :stroke-width="2" />
+              {{ t('admin.accounts.grokMediaEligibility.forceEnableWarning') }}
+            </p>
+          </div>
+          <p v-else-if="grokMediaEligibilityMode === 'auto'" class="text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.grokMediaEligibility.autoHint') }}
+          </p>
+        </div>
+      </div>
+
+      <!-- Grok OAuth Custom Upstream URL (仅改写转发端点，OAuth 授权/刷新不受影响) -->
       <div
         v-if="account.platform === 'grok' && account.type === 'oauth'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
@@ -1464,6 +1573,17 @@
             </p>
           </div>
 
+          <div class="mb-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              @click="syncAntigravityUpstreamModels"
+              :disabled="isSyncingAntigravityUpstream || !account?.id"
+              class="rounded-lg border border-emerald-200 px-3 py-1.5 text-sm text-emerald-600 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-800 dark:text-emerald-400 dark:hover:bg-emerald-900/30"
+            >
+              {{ isSyncingAntigravityUpstream ? t('admin.accounts.syncUpstreamModelsLoading') : t('admin.accounts.syncUpstreamModels') }}
+            </button>
+          </div>
+
           <div v-if="antigravityModelMappings.length > 0" class="mb-3 space-y-2">
             <div
               v-for="(mapping, index) in antigravityModelMappings"
@@ -1813,6 +1933,12 @@
         </p>
       </div>
 
+      <UpstreamRequestIdHeaderField
+        v-model="upstreamRequestIdHeader"
+        :platform="account.platform"
+        :type="account.type"
+      />
+
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
@@ -1882,6 +2008,14 @@
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <label class="input-label">{{ t('admin.accounts.expiresAt') }}</label>
         <input v-model="expiresAtInput" type="datetime-local" class="input" />
+        <div class="mt-2 flex gap-2">
+          <button type="button" class="btn btn-secondary btn-sm" @click="form.expires_at = getAccountExpiryTimestamp(1)">
+            {{ t('payment.oneMonth') }}
+          </button>
+          <button type="button" class="btn btn-secondary btn-sm" @click="form.expires_at = getAccountExpiryTimestamp(12)">
+            {{ t('payment.oneYear') }}
+          </button>
+        </div>
         <p class="input-hint">
           {{ t('admin.accounts.expiresAtHint') }}
           {{ t('admin.accounts.expiresAtTimezoneHint', { timezone: browserTimeZone }) }}
@@ -1904,6 +2038,24 @@
           :aria-label="t('admin.accounts.upstreamBilling.autoProbe')"
           @update:model-value="handleUpstreamBillingAutoProbeChange"
         />
+      </div>
+
+      <!-- OpenAI 订阅档位手动覆盖（Plus/Pro/Free），仅 OAuth 非影子账号 -->
+      <div
+        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <label class="input-label mb-0">{{ t('admin.accounts.openai.planType') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.planTypeDesc') }}
+            </p>
+          </div>
+          <div class="w-44 flex-shrink-0">
+            <Select v-model="editPlanType" :options="planTypeOptions" />
+          </div>
+        </div>
       </div>
 
       <!-- OpenAI 自动透传开关（OAuth/API Key） -->
@@ -1968,7 +2120,7 @@
       </div>
 
       <div
-        v-if="account?.platform === 'openai' && !isSparkShadow && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
+        v-if="account?.platform === 'openai' && !isSparkShadow && !hideAccountLongContextBilling && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -2076,8 +2228,8 @@
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.openai.wsModeDesc') }}
             </p>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {{ t(openAIWSModeConcurrencyHintKey) }}
+            <p v-if="openAIWSModeHintKey" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t(openAIWSModeHintKey) }}
             </p>
           </div>
           <div class="w-52">
@@ -2163,6 +2315,43 @@
           <p class="input-hint">{{ t('admin.accounts.openai.endpointCapabilitiesDesc') }}</p>
         </div>
       </div>
+
+      <!-- OpenAI APIKey images: backfill b64_json from url -->
+      <div
+        v-if="account?.platform === 'openai' && account?.type === 'apikey'"
+        class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div>
+          <label class="input-label mb-0">{{ t('admin.accounts.openai.imagesUrlToB64Json') }}</label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.openai.imagesUrlToB64JsonDesc') }}
+          </p>
+        </div>
+        <button
+          type="button"
+          data-testid="openai-images-url-to-b64-json-toggle"
+          role="switch"
+          :aria-checked="openAIImagesUrlToB64JsonEnabled"
+          @click="openAIImagesUrlToB64JsonEnabled = !openAIImagesUrlToB64JsonEnabled"
+          :class="[
+            'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+            openAIImagesUrlToB64JsonEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+          ]"
+        >
+          <span
+            :class="[
+              'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+              openAIImagesUrlToB64JsonEnabled ? 'translate-x-5' : 'translate-x-0'
+            ]"
+          />
+        </button>
+      </div>
+
+      <OllamaCloudUsageSettings
+        v-if="account?.ollama_cloud_usage?.eligible"
+        :account="account"
+        @updated="handleOllamaCloudUsageUpdated"
+      />
 
       <!-- Anthropic API Key 自动透传开关 -->
       <div
@@ -3112,9 +3301,8 @@
 
       <!-- Group Selection - 仅标准模式显示 -->
       <GroupSelector
-        v-if="!authStore.isSimpleMode"
         v-model="form.group_ids"
-        :groups="groups"
+        :groups="selectableGroups"
         :platform="account?.platform"
         :mixed-scheduling="mixedScheduling"
         :openai-kiro-bridge-enabled="openAIKiroBridgeEnabled"
@@ -3165,23 +3353,29 @@
 import { ref, reactive, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
-import { useAuthStore } from '@/stores/auth'
+
 import { adminAPI } from '@/api/admin'
 import type { AnthropicStableIdentityStatus } from '@/api/admin/accounts'
 import type {
   Account,
   Proxy,
   AdminGroup,
+  Group,
   CheckMixedChannelResponse,
   OpenAICompactMode,
   OpenAIResponsesMode,
-  OpenAIEndpointCapability
+  OpenAIEndpointCapability,
+  OllamaCloudUsageState,
+  GrokMediaEligibilityMode,
+  GrokMediaEligibilityState
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
+import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import Toggle from '@/components/common/Toggle.vue'
+import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
@@ -3191,12 +3385,21 @@ import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
+import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtocolRulesEditor.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import {
   applyAntigravityProjectID,
   applyHeaderOverride,
   applyInterceptWarmup,
+  applyOpenCodeGoProtocolRules,
+  applyPlanType,
   buildCursorCredentials,
+  buildPlanTypeOptions,
+  cloneOpenCodeGoProtocolRules,
+  defaultOpenCodeProtocolRules,
+  parseOpenCodeGoProtocolRules,
+  readPlanType,
+  resolveOpenCodeAccountMode,
   isCustomGrokBaseUrl,
   isHeaderOverrideCapable,
   splitHeaderOverridesObject,
@@ -3204,17 +3407,23 @@ import {
   cnSupportsNativeResponses,
   defaultCNAdaptiveBaseUrls,
   defaultCNBaseUrl,
+  isCNProviderPlatform,
   HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY,
   HEADER_OVERRIDES_CREDENTIAL_KEY,
   type CnAccountMode,
   type CnApiProtocol,
   type CnNativeApiProtocol,
-  type HeaderOverrideRow
+  type CnProviderPlatform,
+  type HeaderOverrideRow,
+  type OpenCodeAccountMode,
+  type OpenCodeGoProtocolRule
 } from '@/components/account/credentialsBuilder'
 import { formatDateTime, formatDateTimeLocalInput, getBrowserTimeZone, parseDateTimeLocalInput } from '@/utils/format'
 import { needsMixedChannelCheck as platformNeedsMixedChannelCheck } from '@/utils/mixedChannel'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { useQuotaNotifyState } from '@/composables/useQuotaNotifyState'
+import { getAccountExpiryTimestamp } from '@/components/account/accountExpiry'
+import { allSelectedGroupsEnableLongContextPricing } from '@/components/account/longContextBilling'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import {
   OPENAI_WS_MODE_CTX_POOL,
@@ -3222,7 +3431,7 @@ import {
   OPENAI_WS_MODE_PASSTHROUGH,
   OPENAI_WS_MODE_HTTP_BRIDGE,
   isOpenAIWSModeEnabled,
-  resolveOpenAIWSModeConcurrencyHintKey,
+  resolveOpenAIWSModeHintKey,
   type OpenAIWSMode,
   resolveOpenAIWSModeFromExtra
 } from '@/utils/openaiWsMode'
@@ -3249,12 +3458,31 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const appStore = useAppStore()
-const authStore = useAuthStore()
 const browserTimeZone = getBrowserTimeZone()
+
+const selectableGroups = computed(() => {
+  const groups = new Map<number, Group>(props.groups.map(group => [group.id, group]))
+  const assignedIds = new Set(props.account?.group_ids ?? [])
+  for (const group of props.account?.groups ?? []) {
+    if (assignedIds.has(group.id) && !groups.has(group.id)) {
+      groups.set(group.id, group)
+    }
+  }
+  return Array.from(groups.values())
+})
 
 // Spark 影子账号(parent_account_id 非空):代理恒继承母账号,不可独立编辑(外审 B/P1),
 // 故隐藏代理选择器。
 const isSparkShadow = computed(() => props.account?.parent_account_id != null)
+
+// 所选分组全部启用长上下文定价时，账号级长上下文开关无意义，隐藏之（官方行为）。
+const hideAccountLongContextBilling = computed(() => {
+  return allSelectedGroupsEnableLongContextPricing(form.group_ids, props.groups)
+})
+
+const handleOllamaCloudUsageUpdated = (state: OllamaCloudUsageState) => {
+  if (props.account) emit('updated', { ...props.account, ollama_cloud_usage: state })
+}
 
 // Platform-specific hint for Base URL
 const baseUrlHint = computed(() => {
@@ -3310,16 +3538,29 @@ const editApiKey = ref('')
 const isCNApiKeyAccount = computed(
   () =>
     props.account?.type === 'apikey' &&
-    (props.account.platform === 'kimi' ||
-      props.account.platform === 'zhipu' ||
-      props.account.platform === 'deepseek')
+    (isCNProviderPlatform(props.account.platform) || props.account.platform === 'opencode_go')
 )
-const cnPresetPlatform = computed<'kimi' | 'zhipu' | 'deepseek'>(() => {
+// CnBaseUrlPresets 的 platform prop 是平台字面量联合类型，模板里不能写
+// `as` 断言（其中的 `|` 会被 eslint 误判为 Vue2 filter 语法），经此 computed 传递。
+const cnPresetPlatform = computed<CnProviderPlatform>(() => {
   const platform = props.account?.platform
-  return platform === 'kimi' || platform === 'zhipu' || platform === 'deepseek' ? platform : 'kimi'
+  if (isCNProviderPlatform(platform ?? '')) {
+    return platform as CnProviderPlatform
+  }
+  return 'kimi'
+})
+const adaptivePresetPlatform = computed<CnProviderPlatform | 'opencode_go'>(() => {
+  if (props.account?.platform === 'opencode_go') return 'opencode_go'
+  return cnPresetPlatform.value
 })
 const editApiProtocol = ref<CnApiProtocol>('adaptive')
+const editOpenCodeGoProtocolRules = ref<OpenCodeGoProtocolRule[]>(cloneOpenCodeGoProtocolRules())
 const editAccountMode = ref<CnAccountMode>('payg')
+const editOpenCodeAccountMode = ref<OpenCodeAccountMode>('go')
+function currentOpenCodeOrCNMode(): CnAccountMode | OpenCodeAccountMode {
+  return props.account?.platform === 'opencode_go' ? editOpenCodeAccountMode.value : editAccountMode.value
+}
+// 智谱团队版 Coding Plan：组织/项目 ID，写入 credentials 供额度探测切换团队端点
 const editZhipuOrganization = ref('')
 const editZhipuProject = ref('')
 const editAdaptiveBaseUrls = ref<Record<CnNativeApiProtocol, string>>({
@@ -3361,7 +3602,7 @@ const editAdaptiveProtocolOptions = computed<Array<{ value: CnNativeApiProtocol;
 watch(editApiProtocol, (protocol, previousProtocol) => {
   if (!isCNApiKeyAccount.value || syncingForm.value) return
   if (protocol === 'adaptive') {
-    const defaults = defaultCNAdaptiveBaseUrls(cnPresetPlatform.value, editAccountMode.value)
+    const defaults = defaultCNAdaptiveBaseUrls(adaptivePresetPlatform.value, currentOpenCodeOrCNMode())
     for (const item of editAdaptiveProtocolOptions.value) {
       if (!editAdaptiveBaseUrls.value[item.value]) editAdaptiveBaseUrls.value[item.value] = defaults[item.value]
     }
@@ -3373,22 +3614,24 @@ watch(editApiProtocol, (protocol, previousProtocol) => {
   }
   if (previousProtocol === 'adaptive') {
     editBaseUrl.value = editAdaptiveBaseUrls.value[protocol] ||
-      defaultCNBaseUrl(props.account!.platform, editAccountMode.value, protocol)
+      defaultCNBaseUrl(props.account!.platform, currentOpenCodeOrCNMode(), protocol)
     return
   }
-  editBaseUrl.value = defaultCNBaseUrl(props.account!.platform, editAccountMode.value, protocol)
+  editBaseUrl.value = defaultCNBaseUrl(props.account!.platform, currentOpenCodeOrCNMode(), protocol)
 })
 
 watch(editAccountMode, (mode, previousMode) => {
   if (!isCNApiKeyAccount.value || syncingForm.value) return
+  if (props.account?.platform === 'opencode_go') return
+  // deepseek 无 coding 套餐：防御性回退（UI 已隐藏该选项）。
   const effectiveMode = props.account!.platform === 'deepseek' && mode === 'coding' ? 'payg' : mode
   if (effectiveMode !== mode) {
     editAccountMode.value = effectiveMode
     return
   }
   if (editApiProtocol.value === 'adaptive') {
-    const previousDefaults = defaultCNAdaptiveBaseUrls(cnPresetPlatform.value, previousMode)
-    const nextDefaults = defaultCNAdaptiveBaseUrls(cnPresetPlatform.value, mode)
+    const previousDefaults = defaultCNAdaptiveBaseUrls(adaptivePresetPlatform.value, previousMode)
+    const nextDefaults = defaultCNAdaptiveBaseUrls(adaptivePresetPlatform.value, mode)
     for (const item of editAdaptiveProtocolOptions.value) {
       if (!editAdaptiveBaseUrls.value[item.value] || editAdaptiveBaseUrls.value[item.value] === previousDefaults[item.value]) {
         editAdaptiveBaseUrls.value[item.value] = nextDefaults[item.value]
@@ -3399,7 +3642,25 @@ watch(editAccountMode, (mode, previousMode) => {
   }
   editBaseUrl.value = defaultCNBaseUrl(props.account!.platform, mode, editApiProtocol.value)
 })
-
+watch(editOpenCodeAccountMode, (mode, previousMode) => {
+  if (!isCNApiKeyAccount.value || props.account?.platform !== 'opencode_go' || syncingForm.value) return
+  if (editApiProtocol.value === 'adaptive') {
+    const previousDefaults = defaultCNAdaptiveBaseUrls('opencode_go', previousMode)
+    const nextDefaults = defaultCNAdaptiveBaseUrls('opencode_go', mode)
+    for (const item of editAdaptiveProtocolOptions.value) {
+      if (!editAdaptiveBaseUrls.value[item.value] || editAdaptiveBaseUrls.value[item.value] === previousDefaults[item.value]) {
+        editAdaptiveBaseUrls.value[item.value] = nextDefaults[item.value]
+      }
+    }
+    editBaseUrl.value = editAdaptiveBaseUrls.value.chat_completions
+  } else {
+    editBaseUrl.value = defaultCNBaseUrl('opencode_go', mode, editApiProtocol.value)
+  }
+  const previousRules = JSON.stringify(defaultOpenCodeProtocolRules(previousMode))
+  if (JSON.stringify(editOpenCodeGoProtocolRules.value) === previousRules) {
+    editOpenCodeGoProtocolRules.value = cloneOpenCodeGoProtocolRules(defaultOpenCodeProtocolRules(mode))
+  }
+})
 const cnProtocolDescKey = computed(
   () => `admin.accounts.cnProviders.apiProtocol.${editApiProtocol.value}Desc`
 )
@@ -3454,6 +3715,47 @@ const grokOAuthCustomBaseUrlEnabled = ref(false)
 const grokOAuthBaseUrl = ref('')
 const GROK_CLIENT_TOOL_CACHE_EXTRA_KEY = 'grok_client_tool_cache_enabled'
 const grokClientToolCacheEnabled = ref(true)
+const isGrokOAuthAccount = computed(
+  () => props.account?.platform === 'grok' && props.account?.type === 'oauth'
+)
+const grokMediaEligibilityMode = ref<GrokMediaEligibilityMode>('auto')
+const grokMediaEligibilityInitialMode = ref<GrokMediaEligibilityMode>('auto')
+const grokMediaEligibilityState = ref<GrokMediaEligibilityState | null>(null)
+const grokMediaEligibilityLoading = ref(false)
+const grokMediaEligibilityError = ref('')
+let grokMediaEligibilityRequestVersion = 0
+
+const modeFromGrokMediaExtra = (extra: Record<string, unknown> | undefined): GrokMediaEligibilityMode => {
+  if (extra?.grok_media_eligible === true) return 'enabled'
+  if (extra?.grok_media_eligible === false) return 'disabled'
+  return 'auto'
+}
+
+const loadGrokMediaEligibility = async (accountID: number): Promise<GrokMediaEligibilityState | null> => {
+  if (!isGrokOAuthAccount.value || typeof adminAPI.accounts.getGrokMediaEligibility !== 'function') {
+    return null
+  }
+  const requestVersion = ++grokMediaEligibilityRequestVersion
+  grokMediaEligibilityLoading.value = true
+  grokMediaEligibilityError.value = ''
+  try {
+    const state = await adminAPI.accounts.getGrokMediaEligibility(accountID)
+    if (requestVersion !== grokMediaEligibilityRequestVersion) return null
+    grokMediaEligibilityState.value = state
+    grokMediaEligibilityMode.value = state.mode
+    grokMediaEligibilityInitialMode.value = state.mode
+    return state
+  } catch (error: any) {
+    if (requestVersion !== grokMediaEligibilityRequestVersion) return null
+    grokMediaEligibilityError.value = error?.message || t('admin.accounts.grokMediaEligibility.loadFailed')
+    return null
+  } finally {
+    if (requestVersion === grokMediaEligibilityRequestVersion) {
+      grokMediaEligibilityLoading.value = false
+    }
+  }
+}
+
 const interceptWarmupRequests = ref(false)
 const autoPauseOnExpired = ref(false)
 const autoPause5hThreshold = ref<number | null>(null)
@@ -3465,11 +3767,18 @@ const autoResetCredit5hThreshold = ref(100)
 const autoResetCredit7dThreshold = ref(100)
 const mixedScheduling = ref(false) // Enable cross-platform mixed scheduling for supported Claude-compatible accounts
 const openAIKiroBridgeEnabled = ref(false)
+// 上游ID：直接上游声明请求标识的响应头名，留空不记录。
+const upstreamRequestIdHeader = ref('')
+const readUpstreamRequestIdHeader = (extra: unknown): string => {
+  const value = (extra as Record<string, unknown> | undefined)?.upstream_request_id_header
+  return typeof value === 'string' ? value : ''
+}
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
 const antigravityProjectId = ref('')
 const antigravityModelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const antigravityWhitelistModels = ref<string[]>([])
 const antigravityModelMappings = ref<ModelMapping[]>([])
+const isSyncingAntigravityUpstream = ref(false)
 const tempUnschedEnabled = ref(false)
 const accountSchedulingThresholdOverrideEnabled = ref(false)
 const accountSchedulingThresholdOverrideValue = ref(100)
@@ -3533,8 +3842,13 @@ const openaiFlattenNamespacesEnabled = ref(false)
 const openAILongContextBillingEnabled = ref(false)
 const upstreamBillingAutoProbeEnabled = ref(false)
 const upstreamBillingRateSyncEnabled = ref(false)
+// OpenAI 订阅档位（Plus / Pro 20x / Pro 5x / Business Standard / Business Premium / Free）手动覆盖值,
+// 存于 credentials.plan_type;'' 表示清空/自动识别
+const editPlanType = ref<string>('')
 const openAICompactMode = ref<OpenAICompactMode>('auto')
 const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
+// Images 非流式响应缺 b64_json 时由网关下载 url 回填（仅 OpenAI API Key）。
+const openAIImagesUrlToB64JsonEnabled = ref(false)
 const openAIEndpointCapabilities = ref<OpenAIEndpointCapability[]>(['chat_completions', 'embeddings'])
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
@@ -3621,8 +3935,8 @@ const openaiResponsesWebSocketV2Mode = computed({
     openaiOAuthResponsesWebSocketV2Mode.value = mode
   }
 })
-const openAIWSModeConcurrencyHintKey = computed(() =>
-  resolveOpenAIWSModeConcurrencyHintKey(openaiResponsesWebSocketV2Mode.value)
+const openAIWSModeHintKey = computed(() =>
+  resolveOpenAIWSModeHintKey(openaiResponsesWebSocketV2Mode.value)
 )
 const codexImageGenerationBridgeOptions = computed<
   Array<{
@@ -3681,6 +3995,10 @@ const openAICompactModeOptions = computed(() => [
   { value: 'force_on', label: t('admin.accounts.openai.compactModeForceOn') },
   { value: 'force_off', label: t('admin.accounts.openai.compactModeForceOff') }
 ])
+// OpenAI 订阅档位手动覆盖选项(清空 + Plus/Pro/Free;别名/自定义值友好显示且保留 canonical)
+const planTypeOptions = computed(() =>
+  buildPlanTypeOptions(editPlanType.value, t('admin.accounts.openai.planTypeClear'))
+)
 const openAIResponsesModeOptions = computed(() => [
   { value: 'auto', label: t('admin.accounts.openai.responsesModeAuto') },
   { value: 'force_responses', label: t('admin.accounts.openai.responsesModeForceResponses') },
@@ -3704,16 +4022,17 @@ const openAITextEndpointCapabilityLabel = computed(() => {
 })
 const openAIEndpointCapabilityOptions = computed<{ value: OpenAIEndpointCapability; label: string }[]>(() => [
   { value: 'chat_completions', label: openAITextEndpointCapabilityLabel.value },
-  { value: 'embeddings', label: t('admin.accounts.openai.capabilityEmbeddings') }
+  { value: 'embeddings', label: t('admin.accounts.openai.capabilityEmbeddings') },
+  { value: 'seedance', label: 'Seedance (Ark)' }
 ])
 const openAITextGenerationCapabilityEnabled = computed(() =>
   openAIEndpointCapabilities.value.includes('chat_completions')
 )
 
 const normalizeOpenAIEndpointCapabilities = (values: OpenAIEndpointCapability[]) => {
-  const allowed: OpenAIEndpointCapability[] = ['chat_completions', 'embeddings']
+  const allowed: OpenAIEndpointCapability[] = ['chat_completions', 'embeddings', 'seedance']
   const selected = allowed.filter((value) => values.includes(value))
-  return selected.length > 0 ? selected : allowed
+  return selected.length > 0 ? selected : ['chat_completions', 'embeddings'] as OpenAIEndpointCapability[]
 }
 
 const readOpenAIEndpointCapabilities = (credentials?: Record<string, unknown>): OpenAIEndpointCapability[] => {
@@ -3721,7 +4040,7 @@ const readOpenAIEndpointCapabilities = (credentials?: Record<string, unknown>): 
   if (Array.isArray(raw)) {
     return normalizeOpenAIEndpointCapabilities(
       raw.filter((value): value is OpenAIEndpointCapability =>
-        value === 'chat_completions' || value === 'embeddings'
+        value === 'chat_completions' || value === 'embeddings' || value === 'seedance'
       )
     )
   }
@@ -3759,7 +4078,7 @@ const toggleOpenAIEndpointCapability = (capability: OpenAIEndpointCapability, ev
 
 const applyOpenAIEndpointCapabilities = (credentials: Record<string, unknown>) => {
   const capabilities = normalizeOpenAIEndpointCapabilities(openAIEndpointCapabilities.value)
-  if (capabilities.length === 2) {
+  if (capabilities.length === 2 && !capabilities.includes('seedance')) {
     delete credentials.openai_capabilities
     return
   }
@@ -3844,6 +4163,17 @@ const defaultBaseUrl = computed(() => {
   if (props.account?.platform === 'gemini') return 'https://generativelanguage.googleapis.com'
   if (props.account?.platform === 'grok') return 'https://api.x.ai/v1'
   if (props.account?.platform === 'kiro') return ''
+  // CN 供应商：按当前模式/协议回落到官方预设（清空输入框提交时使用），
+  // 不能落到 anthropic 默认值（会被当 CC base 拼出错误端点）。
+  if (
+    props.account?.platform === 'kimi' ||
+    props.account?.platform === 'zhipu' ||
+    props.account?.platform === 'deepseek' ||
+    props.account?.platform === 'minimax' ||
+    props.account?.platform === 'opencode_go'
+  ) {
+    return defaultCNBaseUrl(props.account.platform, currentOpenCodeOrCNMode(), editApiProtocol.value)
+  }
   return 'https://api.anthropic.com'
 })
 
@@ -4009,6 +4339,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   mixedScheduling.value = extra?.mixed_scheduling === true
   openAIKiroBridgeEnabled.value = extra?.openai_kiro_bridge_enabled === true
   allowOverages.value = extra?.allow_overages === true
+  upstreamRequestIdHeader.value = readUpstreamRequestIdHeader(extra)
+  openAIImagesUrlToB64JsonEnabled.value = extra?.images_url_to_b64_json === true
   autoPause5hThreshold.value = typeof extra?.auto_pause_5h_threshold === 'number' ? extra.auto_pause_5h_threshold * 100 : null
   autoPause7dThreshold.value = typeof extra?.auto_pause_7d_threshold === 'number' ? extra.auto_pause_7d_threshold * 100 : null
   autoPause5hDisabled.value = extra?.auto_pause_5h_disabled === true
@@ -4034,6 +4366,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openaiPassthroughEnabled.value = false
   openaiFlattenNamespacesEnabled.value = false
   openAILongContextBillingEnabled.value = false
+  editPlanType.value = ''
   openAICompactMode.value = 'auto'
   openAIResponsesMode.value = 'auto'
   openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
@@ -4053,6 +4386,10 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     openaiFlattenNamespacesEnabled.value =
       newAccount.type === 'oauth' && extra?.openai_responses_flatten_namespaces === true
     openAILongContextBillingEnabled.value = extra?.openai_long_context_billing_enabled === true
+    // plan_type 手动覆盖仅 OAuth 有实际调度语义(IsOpenAIChatGPTSubscription 要求 oauth),故只对 oauth 回填
+    editPlanType.value = newAccount.type === 'oauth'
+      ? readPlanType(newAccount.credentials as Record<string, unknown> | undefined)
+      : ''
     openAICompactMode.value = (extra?.openai_compact_mode as OpenAICompactMode) || 'auto'
     const accountCredentials = newAccount.credentials as Record<string, unknown> | undefined
     if (newAccount.type === 'apikey') {
@@ -4230,6 +4567,15 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     newAccount.platform === 'grok' &&
     newAccount.type === 'oauth' &&
     (grokClientToolCacheSetting === undefined || grokClientToolCacheSetting === true)
+  grokMediaEligibilityMode.value = modeFromGrokMediaExtra(extra)
+  grokMediaEligibilityInitialMode.value = grokMediaEligibilityMode.value
+  grokMediaEligibilityState.value = null
+  grokMediaEligibilityError.value = ''
+  if (newAccount.platform === 'grok' && newAccount.type === 'oauth') {
+    void loadGrokMediaEligibility(newAccount.id)
+  } else {
+    grokMediaEligibilityRequestVersion++
+  }
   if (newAccount.platform === 'grok' && newAccount.type === 'oauth' && newAccount.credentials) {
     const grokCreds = newAccount.credentials as Record<string, unknown>
     if (isCustomGrokBaseUrl(grokCreds.base_url)) {
@@ -4243,8 +4589,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     const credentials = newAccount.credentials as Record<string, unknown>
     // 国产供应商：读取 account_mode 与 api_protocol 作为可编辑初始值
     // （编辑弹窗允许修正两者，用于修复早期存错默认值的账号）。
-    if (newAccount.platform === 'kimi' || newAccount.platform === 'zhipu' || newAccount.platform === 'deepseek') {
-      editAccountMode.value = credentials.account_mode === 'coding' ? 'coding' : 'payg'
+    if (isCNProviderPlatform(newAccount.platform) || newAccount.platform === 'opencode_go') {
+      if (newAccount.platform === 'opencode_go') {
+        editOpenCodeAccountMode.value = resolveOpenCodeAccountMode(credentials.account_mode)
+      } else {
+        editAccountMode.value = credentials.account_mode === 'coding' ? 'coding' : 'payg'
+      }
       const storedProtocol = credentials.api_protocol
       editApiProtocol.value =
         storedProtocol === 'adaptive' ||
@@ -4256,7 +4606,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       if (!cnSupportsNativeResponses(newAccount.platform) && editApiProtocol.value === 'responses') {
         editApiProtocol.value = 'chat_completions'
       }
-      const adaptiveDefaults = defaultCNAdaptiveBaseUrls(newAccount.platform, editAccountMode.value)
+      const adaptiveDefaults = defaultCNAdaptiveBaseUrls(newAccount.platform, currentOpenCodeOrCNMode())
       const storedBaseUrls = (credentials.api_base_urls as Record<string, unknown> | undefined) || {}
       const legacyBaseUrl = typeof credentials.base_url === 'string' ? credentials.base_url.trim() : ''
       const storedChatBaseUrl = typeof storedBaseUrls.chat_completions === 'string'
@@ -4292,6 +4642,11 @@ const syncFormFromAccount = (newAccount: Account | null) => {
         editZhipuOrganization.value = typeof credentials.zhipu_organization === 'string' ? credentials.zhipu_organization : ''
         editZhipuProject.value = typeof credentials.zhipu_project === 'string' ? credentials.zhipu_project : ''
       }
+      if (newAccount.platform === 'opencode_go') {
+        editOpenCodeGoProtocolRules.value =
+          parseOpenCodeGoProtocolRules(credentials.protocol_rules) ??
+          cloneOpenCodeGoProtocolRules(defaultOpenCodeProtocolRules(editOpenCodeAccountMode.value))
+      }
     }
     const platformDefaultUrl =
       newAccount.platform === 'openai'
@@ -4304,8 +4659,16 @@ const syncFormFromAccount = (newAccount: Account | null) => {
               ? ''
               : newAccount.platform === 'droid'
                 ? 'https://api.factory.ai/api/llm'
-                : 'https://api.anthropic.com'
-    editBaseUrl.value = (credentials.base_url as string) || platformDefaultUrl
+                : newAccount.platform === 'kimi' ||
+                    newAccount.platform === 'zhipu' ||
+                    newAccount.platform === 'deepseek' ||
+                    newAccount.platform === 'minimax' ||
+                    newAccount.platform === 'opencode_go'
+                  ? defaultCNBaseUrl(newAccount.platform, currentOpenCodeOrCNMode(), editApiProtocol.value)
+                  : 'https://api.anthropic.com'
+    editBaseUrl.value = isCNApiKeyAccount.value && editApiProtocol.value === 'adaptive'
+      ? editAdaptiveBaseUrls.value.chat_completions
+      : (credentials.base_url as string) || platformDefaultUrl
 
     // Load model mappings and detect mode
     const existingMappings = credentials.model_mapping as Record<string, string> | undefined
@@ -4597,6 +4960,54 @@ const addAntigravityPresetMapping = (from: string, to: string) => {
     return
   }
   antigravityModelMappings.value.push({ from, to })
+}
+
+const syncAntigravityUpstreamModels = async () => {
+  if (!props.account?.id || isSyncingAntigravityUpstream.value) return
+
+  isSyncingAntigravityUpstream.value = true
+  try {
+    const result = await adminAPI.accounts.syncUpstreamModels(props.account.id)
+    const upstreamModels = result.models.map((model) => model.trim()).filter(Boolean)
+    if (upstreamModels.length === 0) {
+      appStore.showInfo(t('admin.accounts.syncUpstreamModelsEmpty'))
+      return
+    }
+
+    let addedCount = 0
+    for (const model of upstreamModels) {
+      const exists = antigravityModelMappings.value.some((mapping) => mapping.from === model)
+      if (!exists) {
+        antigravityModelMappings.value.push({ from: model, to: model })
+        addedCount += 1
+      }
+    }
+
+    const warnings = result.warnings ?? []
+    const hasPartialMetadata = warnings.some(
+      (warning) => warning.code === 'upstream_model_metadata_partial'
+    )
+    const hasIncompleteMetadata = warnings.some(
+      (warning) => warning.code === 'upstream_model_metadata_incomplete'
+    )
+    if (hasIncompleteMetadata) {
+      appStore.showWarning(t('admin.accounts.syncUpstreamModelsMetadataIncomplete'))
+      return
+    }
+    if (addedCount > 0) {
+      appStore.showSuccess(t('admin.accounts.syncUpstreamModelsSuccess', { count: addedCount, total: upstreamModels.length }))
+    } else {
+      appStore.showInfo(t('admin.accounts.syncUpstreamModelsNoChanges', { count: upstreamModels.length }))
+    }
+    if (hasPartialMetadata) {
+      appStore.showWarning(t('admin.accounts.syncUpstreamModelsMetadataPartial'))
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : t('admin.accounts.syncUpstreamModelsFailed')
+    appStore.showError(t('admin.accounts.syncUpstreamModelsError', { message }))
+  } finally {
+    isSyncingAntigravityUpstream.value = false
+  }
 }
 
 // Error code toggle helper
@@ -5040,10 +5451,48 @@ const handleClose = () => {
   emit('close')
 }
 
+const persistGrokMediaEligibility = async (accountID: number, updatedAccount: Account): Promise<Account> => {
+  if (
+    !isGrokOAuthAccount.value ||
+    grokMediaEligibilityMode.value === grokMediaEligibilityInitialMode.value ||
+    typeof adminAPI.accounts.updateGrokMediaEligibility !== 'function'
+  ) {
+    return updatedAccount
+  }
+
+  try {
+    const state = await adminAPI.accounts.updateGrokMediaEligibility(accountID, grokMediaEligibilityMode.value)
+    grokMediaEligibilityState.value = state
+    grokMediaEligibilityInitialMode.value = state.mode
+    const nextExtra = { ...((updatedAccount.extra as Record<string, unknown> | undefined) || {}) }
+    if (state.mode === 'auto') {
+      delete nextExtra.grok_media_eligible
+    } else {
+      nextExtra.grok_media_eligible = state.mode === 'enabled'
+    }
+    updatedAccount.extra = nextExtra
+  } catch (error: any) {
+    appStore.showError(t('admin.accounts.grokMediaEligibility.partialSave'))
+    try {
+      const state = await loadGrokMediaEligibility(accountID)
+      if (state) {
+        const nextExtra = { ...((updatedAccount.extra as Record<string, unknown> | undefined) || {}) }
+        if (state.mode === 'auto') delete nextExtra.grok_media_eligible
+        else nextExtra.grok_media_eligible = state.mode === 'enabled'
+        updatedAccount.extra = nextExtra
+      }
+    } catch {
+      // The original save result remains useful even when the refresh fails.
+    }
+  }
+  return updatedAccount
+}
+
 const submitUpdateAccount = async (accountID: number, updatePayload: Record<string, unknown>) => {
   submitting.value = true
   try {
-    const updatedAccount = await adminAPI.accounts.update(accountID, withAntigravityConfirmFlag(updatePayload))
+    let updatedAccount = await adminAPI.accounts.update(accountID, withAntigravityConfirmFlag(updatePayload))
+    updatedAccount = await persistGrokMediaEligibility(accountID, updatedAccount)
     appStore.showSuccess(t('admin.accounts.accountUpdated'))
     emit('updated', updatedAccount)
     handleClose()
@@ -5126,10 +5575,10 @@ const handleSubmit = async () => {
 
       // 国产供应商：模式与协议写入凭据（决定额度/余额探测与转发端点/格式）。
       if (isCNApiKeyAccount.value) {
-        newCredentials.account_mode = editAccountMode.value
+        newCredentials.account_mode = currentOpenCodeOrCNMode()
         newCredentials.api_protocol = editApiProtocol.value
         if (editApiProtocol.value === 'adaptive') {
-          const defaults = defaultCNAdaptiveBaseUrls(cnPresetPlatform.value, editAccountMode.value)
+          const defaults = defaultCNAdaptiveBaseUrls(adaptivePresetPlatform.value, currentOpenCodeOrCNMode())
           const protocolBaseUrls: Record<string, string> = {}
           for (const item of editAdaptiveProtocolOptions.value) {
             protocolBaseUrls[item.value] = (editAdaptiveBaseUrls.value[item.value] || defaults[item.value]).trim()
@@ -5138,6 +5587,9 @@ const handleSubmit = async () => {
           newCredentials.base_url = protocolBaseUrls.chat_completions
         } else {
           delete newCredentials.api_base_urls
+        }
+        if (props.account.platform === 'opencode_go') {
+          applyOpenCodeGoProtocolRules(newCredentials, editOpenCodeGoProtocolRules.value, 'edit')
         }
         // 智谱团队版 Coding Plan：组织/项目 ID 写入凭据（非空才写，清空即移除回落个人版路径）
         if (props.account.platform === 'zhipu') {
@@ -5523,6 +5975,15 @@ const handleSubmit = async () => {
       updatePayload.credentials = newCredentials
     }
 
+    // OpenAI: 手动覆盖订阅档位 plan_type（Plus / Pro 20x / Pro 5x / Business Standard / Business Premium / Free）。
+    // 仅 OAuth 非影子账号：
+    // 影子账号凭据由母账号管理(且后端会 sanitize),setup-token 无订阅调度语义。
+    if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isSparkShadow.value) {
+      const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
+        ((props.account.credentials as Record<string, unknown>) || {})
+      updatePayload.credentials = applyPlanType({ ...currentCredentials }, editPlanType.value)
+    }
+
     // Antigravity: persist model mapping to credentials (applies to all antigravity types)
     // Antigravity 只支持映射模式
     if (props.account.platform === 'antigravity') {
@@ -5805,6 +6266,11 @@ const handleSubmit = async () => {
         } else {
           newExtra.openai_responses_mode = openAIResponsesMode.value
         }
+        if (openAIImagesUrlToB64JsonEnabled.value) {
+          newExtra.images_url_to_b64_json = true
+        } else {
+          delete newExtra.images_url_to_b64_json
+        }
       }
 
       delete newExtra.codex_image_generation_bridge_enabled
@@ -5966,6 +6432,19 @@ const handleSubmit = async () => {
       delete newExtra.upstream_billing_probe_enabled
       delete newExtra.upstream_billing_rate_sync_enabled
       delete newExtra.upstream_billing_probe
+      updatePayload.extra = newExtra
+    }
+
+    // 上游ID头名只在改动时写回 extra，避免用弹窗打开时的快照覆盖运行态键。
+    const nextUpstreamRequestIdHeader = upstreamRequestIdHeader.value.trim()
+    if (nextUpstreamRequestIdHeader !== readUpstreamRequestIdHeader(props.account.extra)) {
+      const currentExtra = (updatePayload.extra as Record<string, unknown>) || (props.account.extra as Record<string, unknown>) || {}
+      const newExtra: Record<string, unknown> = { ...currentExtra }
+      if (nextUpstreamRequestIdHeader) {
+        newExtra.upstream_request_id_header = nextUpstreamRequestIdHeader
+      } else {
+        delete newExtra.upstream_request_id_header
+      }
       updatePayload.extra = newExtra
     }
 

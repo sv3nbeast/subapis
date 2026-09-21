@@ -490,6 +490,14 @@ func TestGetFallbackPricing_FamilyMatching(t *testing.T) {
 			expectedCacheRead: floatPtr(3e-9),
 		},
 		{
+			// deepseek-flash（= V4.1-Flash 新名）经前缀兜底同样命中 flash 价卡。
+			name:              "deepseek flash v41 name maps to flash",
+			model:             "deepseek-flash",
+			expectedInput:     1.5e-7,
+			expectedOutput:    floatPtr(6e-7),
+			expectedCacheRead: floatPtr(3e-9),
+		},
+		{
 			name:              "deepseek v4 flash vision exp",
 			model:             "deepseek-v4-flash-vision-exp",
 			expectedInput:     1.5e-7,
@@ -520,6 +528,20 @@ func TestGetFallbackPricing_FamilyMatching(t *testing.T) {
 		},
 
 		// ---- 智谱 GLM（z.ai USD 口径）----
+		{
+			name:              "glm 5.3 flagship",
+			model:             "glm-5.3",
+			expectedInput:     1.4e-6,
+			expectedOutput:    floatPtr(4.4e-6),
+			expectedCacheRead: floatPtr(0.26e-6),
+		},
+		{
+			name:              "glm 5.3 flash",
+			model:             "glm-5.3-flash",
+			expectedInput:     0.15e-6,
+			expectedOutput:    floatPtr(0.5e-6),
+			expectedCacheRead: floatPtr(0.03e-6),
+		},
 		{
 			name:              "glm 5.2 flagship",
 			model:             "glm-5.2",
@@ -610,7 +632,21 @@ func TestGetFallbackPricing_FamilyMatching(t *testing.T) {
 			expectedInput:  0.1e-6,
 			expectedOutput: floatPtr(0.1e-6),
 		},
-		// 关键：5.1 / 5.2 必须先于 5 匹配（避免被 glm-5 抢走）
+		// 关键：5.1 / 5.2 / 5.3 必须先于 5 匹配（避免被 glm-5 抢走）
+		{
+			name:              "glm 5.3-flash vs glm 5.3 ordering (verbatim 5.3-flash)",
+			model:             "glm-5.3-flash",
+			expectedInput:     0.15e-6, // = glm-5.3-flash 价格（不是 glm-5.3 的 1.4e-6，更不是 glm-5 的 1e-6）
+			expectedOutput:    floatPtr(0.5e-6),
+			expectedCacheRead: floatPtr(0.03e-6),
+		},
+		{
+			name:              "glm 5.3 vs glm 5 ordering (verbatim 5.3)",
+			model:             "glm-5.3",
+			expectedInput:     1.4e-6, // = glm-5.3 价格（不是 glm-5 的 1e-6）
+			expectedOutput:    floatPtr(4.4e-6),
+			expectedCacheRead: floatPtr(0.26e-6),
+		},
 		{
 			name:              "glm 5.1 vs glm 5 ordering (verbatim 5.1)",
 			model:             "glm-5.1",
@@ -1402,6 +1438,7 @@ func TestCalculateCost_LargeTokenCount(t *testing.T) {
 func TestServiceTierCostMultiplier(t *testing.T) {
 	require.InDelta(t, 2.0, serviceTierCostMultiplier("priority"), 1e-12)
 	require.InDelta(t, 2.0, serviceTierCostMultiplier(" Priority "), 1e-12)
+	require.InDelta(t, 2.0, serviceTierCostMultiplier("ultrafast"), 1e-12)
 	require.InDelta(t, 0.5, serviceTierCostMultiplier("flex"), 1e-12)
 	require.InDelta(t, 1.0, serviceTierCostMultiplier(""), 1e-12)
 	require.InDelta(t, 1.0, serviceTierCostMultiplier("default"), 1e-12)
@@ -1853,4 +1890,15 @@ func TestComputeTokenBreakdown_NonExplicitZeroImagePrice_FallsBackToOutput(t *te
 	require.InDelta(t, 50*15e-6, bd.ImageOutputCost, 1e-12)
 	// textOutputTokens = 200 - 50 = 150
 	require.InDelta(t, 150*15e-6, bd.OutputCost, 1e-12)
+}
+
+// 官方 8249ab37d：Fable 5.1 默认携带 max 推理强度 3 倍额度倍率（本地 Fable 5.1 价卡沿用自有单价）。
+func TestGetModelPricing_ClaudeFable51DoesNotAutoApplyMaxReasoningEffortMultiplier(t *testing.T) {
+	svc := NewBillingService(&config.Config{}, nil)
+	pricing, err := svc.GetModelPricing("claude-fable-5-1")
+	require.NoError(t, err)
+	require.NotNil(t, pricing)
+	// 本地自有价卡（$15/$75）已含溢价，生产从未存在推理强度倍率：默认不注入官方 3.0，
+	// 否则 effort=max 会静默变成 3 倍计费。见 applyDefaultMaxReasoningEffortMultiplier。
+	require.Nil(t, pricing.MaxReasoningEffortMultiplier)
 }

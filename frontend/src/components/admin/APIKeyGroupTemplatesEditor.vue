@@ -221,8 +221,8 @@ function modelEntries(models: string[]): Record<string, { name: string }> {
 
 function defaultModels(groupID: number): Record<string, unknown> {
   const group = props.groups.find((item) => item.id === groupID);
-  const configuredModels = group?.models_list_config?.enabled
-    ? group.models_list_config.models.filter(Boolean)
+  const configuredModels = group?.model_allowlist?.enabled
+    ? group.model_allowlist.models.filter(Boolean)
     : [];
   if (configuredModels.length) return modelEntries(configuredModels);
 

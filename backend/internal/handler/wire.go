@@ -174,6 +174,7 @@ func ProvideAdminSettingHandler(settingService *service.SettingService, emailSer
 
 // ProvideAdminAccountHandler wires provider-specific account refresh support.
 func ProvideAdminAccountHandler(
+	cfg *config.Config,
 	adminService service.AdminService,
 	oauthService *service.OAuthService,
 	openaiOAuthService *service.OpenAIOAuthService,
@@ -194,6 +195,7 @@ func ProvideAdminAccountHandler(
 	gatewayService *service.GatewayService,
 ) *admin.AccountHandler {
 	h := admin.ProvideAccountHandler(
+		cfg,
 		adminService,
 		oauthService,
 		openaiOAuthService,
@@ -239,6 +241,7 @@ func ProvideHandlers(
 	statusHandler *StatusHandler,
 	availableChannelHandler *AvailableChannelHandler,
 	modelPlazaHandler *ModelPlazaHandler,
+	asyncImageHandler *AsyncImageHandler,
 	batchImageHandler *BatchImageHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
@@ -267,6 +270,7 @@ func ProvideHandlers(
 		AvailableChannel:     availableChannelHandler,
 		ModelPlaza:           modelPlazaHandler,
 		Status:               statusHandler,
+		AsyncImage:           asyncImageHandler,
 		BatchImage:           batchImageHandler,
 	}
 }
@@ -294,12 +298,13 @@ var ProviderSet = wire.NewSet(
 	ProvideSettingHandler,
 	NewAvailableChannelHandler,
 	NewModelPlazaHandler,
+	NewAsyncImageHandler,
 	NewBatchImageHandler,
 
 	// Admin handlers
 	admin.NewDashboardHandler,
 	admin.NewUserHandler,
-	admin.NewGroupHandler,
+	admin.NewGroupHandlerWithConfig,
 	ProvideAdminAccountHandler,
 	admin.NewAnnouncementHandler,
 	admin.NewDataManagementHandler,

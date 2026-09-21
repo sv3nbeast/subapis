@@ -33,3 +33,16 @@ func TestUserPlatformQuotasCNProvidersMigration(t *testing.T) {
 func TestUserPlatformQuotasAllPlatformsRepairMigration(t *testing.T) {
 	requireAllUserPlatformQuotaPlatforms(t, "234_user_platform_quotas_all_platforms.sql")
 }
+
+// TestUserPlatformQuotasUnionPlatformsMigration 校验 244 号迁移把 CHECK 收敛为
+// 本地（kiro/droid/cursor）+ 官方（minimax/opencode_go）全集：官方 237/238 与本地 239
+// 按文件名交错执行，任一路径的最终约束都可能缺少另一方平台，必须最后再收敛一次。
+func TestUserPlatformQuotasUnionPlatformsMigration(t *testing.T) {
+	content, err := FS.ReadFile("244_user_platform_quotas_union_platforms.sql")
+	require.NoError(t, err)
+
+	sql := strings.Join(strings.Fields(string(content)), " ")
+	require.Contains(t, sql, "DROP CONSTRAINT IF EXISTS user_platform_quotas_platform_check")
+	require.Contains(t, sql,
+		"CHECK (platform IN ('anthropic', 'openai', 'gemini', 'antigravity', 'kiro', 'droid', 'grok', 'cursor', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go'))")
+}

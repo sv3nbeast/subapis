@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
 
+	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 )
 
@@ -27,6 +28,57 @@ type sqlExecutor interface {
 type groupRepository struct {
 	client *dbent.Client
 	sql    sqlExecutor
+}
+
+// lockLiveGroups makes account-group inserts participate in the same row-lock
+// protocol as guarded group deletion. FOR SHARE conflicts with the deleter's
+// FOR UPDATE lock, and READ COMMITTED rechecks deleted_at after any wait.
+func lockLiveGroups(ctx context.Context, exec sqlExecutor, groupIDs []int64) error {
+	if len(groupIDs) == 0 {
+		return nil
+	}
+	unique := make(map[int64]struct{}, len(groupIDs))
+	for _, id := range groupIDs {
+		unique[id] = struct{}{}
+	}
+	// 本地：SQLite（单元测试）没有行级共享锁，也不支持 = ANY($1)；仅校验分组存活。
+	// 与 lockAnthropicStableCanary* 的方言分流保持一致。
+	if client, ok := exec.(*dbent.Client); ok && client.Driver().Dialect() == dialect.SQLite {
+		ids := make([]int64, 0, len(unique))
+		for id := range unique {
+			ids = append(ids, id)
+		}
+		live, err := client.Group.Query().
+			Where(group.IDIn(ids...), group.DeletedAtIsNil()).
+			Count(ctx)
+		if err != nil {
+			return err
+		}
+		if live != len(unique) {
+			return service.ErrGroupNotFound
+		}
+		return nil
+	}
+	rows, err := exec.QueryContext(ctx, `/* account_group_live_group_lock */
+		SELECT id FROM groups
+		WHERE id = ANY($1) AND deleted_at IS NULL
+		ORDER BY id
+		FOR SHARE`, pq.Array(groupIDs))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	locked := 0
+	for rows.Next() {
+		locked++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if locked != len(unique) {
+		return service.ErrGroupNotFound
+	}
+	return nil
 }
 
 func NewGroupRepository(client *dbent.Client, sqlDB *sql.DB) service.GroupRepository {
@@ -107,7 +159,8 @@ func createGroupRecord(ctx context.Context, client *dbent.Client, groupIn *servi
 		SetRequirePrivacySet(groupIn.RequirePrivacySet).
 		SetDefaultMappedModel(groupIn.DefaultMappedModel).
 		SetMessagesDispatchModelConfig(groupIn.MessagesDispatchModelConfig).
-		SetModelsListConfig(groupIn.ModelsListConfig).
+		SetModelAllowlist(service.DomainGroupModelAllowlist(groupIn.ModelAllowlist)).
+		SetCodexModelsManifestConfig(groupIn.CodexModelsManifestConfig).
 		SetGrokChatUpstreamMode(groupIn.GrokChatUpstreamMode).
 		SetGrokChatResponsesGrayPercent(groupIn.GrokChatResponsesGrayPercent).
 		SetKiroCacheEmulationEnabled(groupIn.KiroCacheEmulationEnabled).
@@ -296,7 +349,8 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetRequirePrivacySet(groupIn.RequirePrivacySet).
 		SetDefaultMappedModel(groupIn.DefaultMappedModel).
 		SetMessagesDispatchModelConfig(groupIn.MessagesDispatchModelConfig).
-		SetModelsListConfig(groupIn.ModelsListConfig).
+		SetModelAllowlist(service.DomainGroupModelAllowlist(groupIn.ModelAllowlist)).
+		SetCodexModelsManifestConfig(groupIn.CodexModelsManifestConfig).
 		SetGrokChatUpstreamMode(groupIn.GrokChatUpstreamMode).
 		SetGrokChatResponsesGrayPercent(groupIn.GrokChatResponsesGrayPercent).
 		SetKiroCacheEmulationEnabled(groupIn.KiroCacheEmulationEnabled).
@@ -439,6 +493,15 @@ func (r *groupRepository) List(ctx context.Context, params pagination.Pagination
 
 func (r *groupRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, status, search string, isExclusive *bool) ([]service.Group, *pagination.PaginationResult, error) {
 	q := r.client.Group.Query()
+	return r.listWithFiltersQuery(ctx, q, params, platform, status, search, isExclusive)
+}
+
+func (r *groupRepository) ListBindableWithFilters(ctx context.Context, params pagination.PaginationParams, platform, status, search string, isExclusive *bool) ([]service.Group, *pagination.PaginationResult, error) {
+	q := r.client.Group.Query().Where(group.PlatformNEQ(service.PlatformComposite))
+	return r.listWithFiltersQuery(ctx, q, params, platform, status, search, isExclusive)
+}
+
+func (r *groupRepository) listWithFiltersQuery(ctx context.Context, q *dbent.GroupQuery, params pagination.PaginationParams, platform, status, search string, isExclusive *bool) ([]service.Group, *pagination.PaginationResult, error) {
 
 	if platform != "" {
 		q = q.Where(group.PlatformEQ(platform))
@@ -837,12 +900,14 @@ func (r *groupRepository) DeleteAccountGroupsByGroupID(ctx context.Context, grou
 }
 
 func (r *groupRepository) DeleteCascade(ctx context.Context, id int64) ([]int64, error) {
-	g, err := r.client.Group.Query().Where(group.IDEQ(id)).Only(ctx)
-	if err != nil {
-		return nil, translatePersistenceError(err, service.ErrGroupNotFound, nil)
-	}
-	groupSvc := groupEntityToService(g)
+	return r.deleteCascade(ctx, id, false)
+}
 
+func (r *groupRepository) DeleteCascadeIfEmpty(ctx context.Context, id int64) ([]int64, error) {
+	return r.deleteCascade(ctx, id, true)
+}
+
+func (r *groupRepository) deleteCascade(ctx context.Context, id int64, requireEmpty bool) ([]int64, error) {
 	// 使用 ent 事务统一包裹：避免手工基于 *sql.Tx 构造 ent client 带来的驱动断言问题，
 	// 同时保证级联删除的原子性。
 	tx, err := r.client.Tx(ctx)
@@ -858,12 +923,41 @@ func (r *groupRepository) DeleteCascade(ctx context.Context, id int64) ([]int64,
 	}
 	// err 为 dbent.ErrTxStarted 时，复用当前 client 参与同一事务。
 
+	// 本地：稳定金丝雀分组互斥锁（FOR UPDATE + 金丝雀成员校验），先于官方行锁执行。
 	if err := lockAnthropicStableCanaryGroupMutation(ctx, txClient, id); err != nil {
 		return nil, err
 	}
+	// Lock the group row to avoid concurrent writes while we cascade.
+	// 官方用裸 SQL FOR UPDATE；本地改走 ent 同一事务加锁，SQLite（单元测试）无行锁时跳过，
+	// 同时保留"未找到"与其他错误的区分。
+	lockQuery := txClient.Group.Query().Where(group.IDEQ(id), group.DeletedAtIsNil())
+	if txClient.Driver().Dialect() != dialect.SQLite {
+		lockQuery = lockQuery.ForUpdate()
+	}
+	lockedGroup, err := lockQuery.Only(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil, service.ErrGroupNotFound
+		}
+		return nil, err
+	}
+	subscriptionType := lockedGroup.SubscriptionType
+	if requireEmpty {
+		var hasAccount bool
+		if err := scanSingleRow(ctx, exec, `SELECT EXISTS (
+			SELECT 1 FROM account_groups ag
+			JOIN accounts a ON a.id = ag.account_id
+			WHERE ag.group_id = $1 AND a.deleted_at IS NULL
+		)`, []any{id}, &hasAccount); err != nil {
+			return nil, err
+		}
+		if hasAccount {
+			return nil, service.ErrGroupNotEmpty
+		}
+	}
 
 	var affectedUserIDs []int64
-	if groupSvc.IsSubscriptionType() {
+	if subscriptionType == service.SubscriptionTypeSubscription {
 		// 只查询未软删除的订阅，避免通知已取消订阅的用户
 		rows, err := exec.QueryContext(ctx, "SELECT user_id FROM user_subscriptions WHERE group_id = $1 AND deleted_at IS NULL", id)
 		if err != nil {
@@ -1057,6 +1151,11 @@ func (r *groupRepository) BindAccountsToGroup(ctx context.Context, groupID int64
 			return err
 		}
 	}
+	// 官方 4a4fd35e0：与分组删除（FOR UPDATE）互斥，拒绝绑定到已删除/正在删除的分组。
+	// 放在金丝雀 FOR UPDATE 之后，避免两事务同时持 FOR SHARE 再升级 FOR UPDATE 互相死锁。
+	if err := lockLiveGroups(ctx, client, []int64{groupID}); err != nil {
+		return err
+	}
 	// 使用 INSERT ... ON CONFLICT DO NOTHING 忽略已存在的绑定
 	_, err = client.ExecContext(
 		ctx,
@@ -1068,6 +1167,11 @@ func (r *groupRepository) BindAccountsToGroup(ctx context.Context, groupID int64
 	)
 	if err != nil {
 		return err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 	}
 
 	// 发送调度器事件

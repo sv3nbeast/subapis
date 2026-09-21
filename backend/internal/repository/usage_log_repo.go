@@ -93,6 +93,7 @@ var usageLogInsertColumns = [...]string{
 	"billing_tier",
 	"billing_mode",
 	"account_stats_cost",
+	"upstream_request_id",
 	"kiro_credits",
 	"session_id",
 	"native_compaction_v2",
@@ -162,6 +163,7 @@ var usageLogInsertArgTypes = [...]string{
 	"text",        // billing_tier
 	"text",        // billing_mode
 	"numeric",     // account_stats_cost
+	"text",        // upstream_request_id
 	"numeric",     // kiro_credits
 	"text",        // session_id
 	"boolean",     // native_compaction_v2
@@ -1053,6 +1055,7 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 	modelMappingChain := nullString(log.ModelMappingChain)
 	billingTier := nullString(log.BillingTier)
 	billingMode := nullString(log.BillingMode)
+	upstreamRequestID := nullString(log.UpstreamRequestID)
 	requestedModel := strings.TrimSpace(log.RequestedModel)
 	if requestedModel == "" {
 		requestedModel = strings.TrimSpace(log.Model)
@@ -1130,6 +1133,7 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 			billingTier,
 			billingMode,
 			log.AccountStatsCost,
+			upstreamRequestID, // upstream_request_id
 			log.KiroCredits,
 			nullString(log.SessionID),
 			log.NativeCompactionV2,
@@ -4103,6 +4107,7 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		billingTier           sql.NullString
 		billingMode           sql.NullString
 		accountStatsCost      sql.NullFloat64
+		upstreamRequestID     sql.NullString
 		kiroCredits           sql.NullFloat64
 		sessionID             sql.NullString
 		nativeCompactionV2    bool
@@ -4169,6 +4174,7 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		&billingTier,
 		&billingMode,
 		&accountStatsCost,
+		&upstreamRequestID,
 		&kiroCredits,
 		&sessionID,
 		&nativeCompactionV2,
@@ -4307,6 +4313,9 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 	}
 	if accountStatsCost.Valid {
 		log.AccountStatsCost = &accountStatsCost.Float64
+	}
+	if upstreamRequestID.Valid {
+		log.UpstreamRequestID = &upstreamRequestID.String
 	}
 	if kiroCredits.Valid {
 		log.KiroCredits = &kiroCredits.Float64

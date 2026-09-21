@@ -31,6 +31,10 @@ func TestPlatformSchedulingThresholds_RoundTrip_DefaultsAndStoredValues(t *testi
 		PlatformGrok:      100,
 		PlatformKimi:      100,
 		PlatformZhipu:     100,
+		// 官方 19382f275 / 242907854 新增平台；本地 kiro/droid/cursor 走独立调度器，
+		// 有意不在 AllowedSchedulingThresholdPlatforms 内（下方 NotContains "kiro" 断言）。
+		PlatformMiniMax:    100,
+		PlatformOpenCodeGo: 100,
 	}, got.AccountSchedulingThresholds)
 
 	got = svc.parseSettings(map[string]string{
@@ -54,7 +58,7 @@ func TestBuildSystemSettingsUpdates_PersistsAccountSchedulingThresholds(t *testi
 		},
 	})
 	require.NoError(t, err)
-	require.JSONEq(t, `{"openai":91,"anthropic":88,"grok":77,"kimi":100,"zhipu":100}`, updates[SettingKeyAccountSchedulingThresholds])
+	require.JSONEq(t, `{"openai":91,"anthropic":88,"grok":77,"kimi":100,"zhipu":100,"minimax":100,"opencode_go":100}`, updates[SettingKeyAccountSchedulingThresholds])
 }
 
 func TestValidateAndNormalizeAccountSchedulingThresholds_FillsMissingPlatforms(t *testing.T) {
@@ -166,10 +170,12 @@ func TestGetAccountSchedulingThresholds_NilRepoReturnsDefaults(t *testing.T) {
 	svc := &SettingService{}
 	got := svc.GetAccountSchedulingThresholds(context.Background())
 	require.Equal(t, map[string]int{
-		PlatformOpenAI:    100,
-		PlatformAnthropic: 100,
-		PlatformGrok:      100,
-		PlatformKimi:      100,
-		PlatformZhipu:     100,
+		PlatformOpenAI:     100,
+		PlatformAnthropic:  100,
+		PlatformGrok:       100,
+		PlatformKimi:       100,
+		PlatformZhipu:      100,
+		PlatformMiniMax:    100,
+		PlatformOpenCodeGo: 100,
 	}, got)
 }

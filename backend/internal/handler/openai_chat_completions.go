@@ -123,6 +123,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			return
 		}
 	}
+	forwardModel := openAIChannelForwardModel(channelMapping, reqModel)
 
 	if h.errorPassthroughService != nil {
 		service.BindErrorPassthroughService(c, h.errorPassthroughService)
@@ -182,8 +183,10 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		if kiroBridgeRequested {
 			kiroFailoverState.SwitchCount = switchCount
 			selectionCtx := kiroFailoverState.SelectionContext(c.Request.Context(), apiKey.GroupID, false)
+			// 原生候选按渠道映射后的模型调度（官方 5e4958c88），Kiro 候选仍由
+			// kiroBridgeModel 单独判定。
 			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForKiroBridge(
-				selectionCtx, apiKey.GroupID, sessionHash, reqModel, kiroBridgeModel, failedAccountIDs,
+				selectionCtx, apiKey.GroupID, sessionHash, forwardModel, kiroBridgeModel, failedAccountIDs,
 			)
 		} else {
 			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForCapability(
@@ -191,7 +194,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				apiKey.GroupID,
 				"",
 				sessionHash,
-				reqModel,
+				forwardModel,
 				failedAccountIDs,
 				service.OpenAIUpstreamTransportAny,
 				service.OpenAIEndpointCapabilityChatCompletions,

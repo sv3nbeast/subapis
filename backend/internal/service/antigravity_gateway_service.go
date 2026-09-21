@@ -2504,6 +2504,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 
 	return &ForwardResult{
 		RequestID:        requestID,
+		UpstreamHeaders:  resp.Header,
 		Usage:            *usage,
 		Model:            originalModel,
 		UpstreamModel:    billingModel,
@@ -2877,7 +2878,14 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		return nil, s.writeGoogleError(c, http.StatusNotFound, "Unsupported action: "+action)
 	}
 
-	mappedModel := s.getMappedModel(account, originalModel)
+	// 裸模型名（gemini-3.8-flash）+ thinkingConfig → 账号映射表里对应的 -low/-medium/-high 变体；
+	// 裸名有显式映射时保持原行为。
+	mappedModel, variantResolved := resolveGeminiThinkingVariant(account, originalModel, body)
+	if !variantResolved {
+		mappedModel = s.getMappedModel(account, originalModel)
+	} else {
+		logger.LegacyPrintf("service.antigravity_gateway", "%s resolved bare Gemini model %s to thinking variant %s", prefix, originalModel, mappedModel)
+	}
 	if mappedModel == "" {
 		return nil, s.writeGoogleError(c, http.StatusForbidden, fmt.Sprintf("model %s not in whitelist", originalModel))
 	}
@@ -2925,6 +2933,11 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		logger.LegacyPrintf("service.antigravity_gateway", "[Antigravity] Cleaned request schema in forwarded request for account %s", account.Name)
 	} else {
 		logger.LegacyPrintf("service.antigravity_gateway", "[Antigravity] Failed to clean schema: %v", err)
+	}
+
+	// Antigravity v1internal rejects built-in + functionDeclarations mixes (#6464).
+	if reconciled, err := enableMixedGeminiToolInvocations(injectedBody); err == nil {
+		injectedBody = reconciled
 	}
 
 	// 包装请求
@@ -3240,6 +3253,7 @@ handleSuccess:
 
 	return &ForwardResult{
 		RequestID:                     requestID,
+		UpstreamHeaders:               resp.Header,
 		Usage:                         *usage,
 		Model:                         originalModel,
 		UpstreamModel:                 billingModel,
@@ -4035,6 +4049,11 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.StreamKeepaliveInterval > 0 {
 		keepaliveInterval = time.Duration(s.settingService.cfg.Gateway.StreamKeepaliveInterval) * time.Second
 	}
+	// go-genai / python-genai 不会忽略 SSE 注释行，收到 ":\n\n" 会直接把整个流判成
+	// invalid stream chunk 而中断（Antigravity CLI 在用 go-genai）。对这类客户端宁可不发心跳。
+	if keepaliveInterval > 0 && downstreamRejectsSSEComments(c) {
+		keepaliveInterval = 0
+	}
 	var keepaliveTicker *time.Ticker
 	if keepaliveInterval > 0 {
 		keepaliveTicker = time.NewTicker(keepaliveInterval)
@@ -4125,6 +4144,14 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 				}
 
 				cw.Fprintf("data: %s\n\n", payload)
+				continue
+			}
+
+			// 上游每个 data 事件后面跟一个空行作为事件分隔。上面已经把 data 行写成
+			// "data: ...\n\n"，若再把这个空行透传出去，事件之间就会变成 "\n\n\n"。
+			// google-genai 的 Go SDK（Antigravity CLI 在用）按 "\n\n" 切事件，多出的
+			// "\n" 会粘到下一个事件开头，前缀变成 "\ndata" 而被判成 invalid stream chunk。
+			if trimmed == "" {
 				continue
 			}
 
@@ -5304,6 +5331,7 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 		Duration:         duration,
 		FirstTokenMs:     firstTokenMs,
 		ClientDisconnect: clientDisconnect,
+		UpstreamHeaders:  resp.Header,
 		Usage: ClaudeUsage{
 			InputTokens:              usage.InputTokens,
 			OutputTokens:             usage.OutputTokens,

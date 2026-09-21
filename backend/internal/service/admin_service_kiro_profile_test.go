@@ -27,7 +27,7 @@ func TestAdminServiceEnsureKiroProfileArnResolvesAndPersists(t *testing.T) {
 			newKiroProfileJSONResponse(http.StatusOK, `{"profiles":[{"arn":"arn:aws:codewhisperer:us-east-1:123456789012:profile/ADMIN"}]}`),
 		},
 	}
-	svc := NewAdminService(nil, nil, repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := NewAdminService(nil, nil, nil, repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	impl, ok := svc.(*adminServiceImpl)
 	require.True(t, ok)
 	impl.SetKiroProfileResolverDeps(upstream, &TLSFingerprintProfileService{})
@@ -53,7 +53,7 @@ func TestAdminServiceEnsureKiroProfileArnSkipsExistingRealArn(t *testing.T) {
 	}
 	repo := &kiroProfileRepo{account: account}
 	upstream := &kiroProfileHTTPUpstream{}
-	svc := NewAdminService(nil, nil, repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := NewAdminService(nil, nil, nil, repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	impl, ok := svc.(*adminServiceImpl)
 	require.True(t, ok)
 	impl.SetKiroProfileResolverDeps(upstream, &TLSFingerprintProfileService{})

@@ -32,7 +32,9 @@ func newSessionIDUsageLog(sessionID *string) *service.UsageLog {
 // arg slice / arg-type table so the five INSERT column lists stay in sync. session_id
 // is immediately before native_compaction_v2; created_at is always last.
 func TestPrepareUsageLogInsert_SessionIDArgWiring(t *testing.T) {
-	require.Len(t, usageLogInsertArgTypes, 62, "arg-type table includes requested effort and effort policy as well as session_id")
+	// 官方 62 列 + 本地 kiro_credits = 63 列。
+	require.Len(t, usageLogInsertArgTypes, 63, "arg-type table includes requested effort, effort policy, upstream_request_id, kiro_credits and session_id")
+	require.Len(t, usageLogInsertColumns, len(usageLogInsertArgTypes), "column list and arg-type table must stay the same length")
 
 	sessionID := "sess-persisted-123"
 	prepared := prepareUsageLogInsert(newSessionIDUsageLog(&sessionID))

@@ -6,6 +6,9 @@ import (
 )
 
 func (s *adminServiceImpl) ListCompositeRoutes(ctx context.Context, groupID int64) ([]CompositeModelRoute, error) {
+	if err := s.ValidateSimpleModeGroupOperation(AdminGroupOperationCompositeRoute); err != nil {
+		return nil, err
+	}
 	if err := s.requireCompositeGroup(ctx, groupID); err != nil {
 		return nil, err
 	}
@@ -16,6 +19,9 @@ func (s *adminServiceImpl) ListCompositeRoutes(ctx context.Context, groupID int6
 }
 
 func (s *adminServiceImpl) CreateCompositeRoute(ctx context.Context, groupID int64, input CompositeRouteInput) (*CompositeModelRoute, error) {
+	if err := s.ValidateSimpleModeGroupOperation(AdminGroupOperationCompositeRoute); err != nil {
+		return nil, err
+	}
 	if err := s.requireCompositeGroup(ctx, groupID); err != nil {
 		return nil, err
 	}
@@ -33,6 +39,9 @@ func (s *adminServiceImpl) CreateCompositeRoute(ctx context.Context, groupID int
 }
 
 func (s *adminServiceImpl) UpdateCompositeRoute(ctx context.Context, groupID, routeID int64, input CompositeRouteInput) (*CompositeModelRoute, error) {
+	if err := s.ValidateSimpleModeGroupOperation(AdminGroupOperationCompositeRoute); err != nil {
+		return nil, err
+	}
 	if err := s.requireCompositeGroup(ctx, groupID); err != nil {
 		return nil, err
 	}
@@ -56,6 +65,9 @@ func (s *adminServiceImpl) UpdateCompositeRoute(ctx context.Context, groupID, ro
 }
 
 func (s *adminServiceImpl) DeleteCompositeRoute(ctx context.Context, groupID, routeID int64) error {
+	if err := s.ValidateSimpleModeGroupOperation(AdminGroupOperationCompositeRoute); err != nil {
+		return err
+	}
 	if err := s.requireCompositeGroup(ctx, groupID); err != nil {
 		return err
 	}
@@ -71,6 +83,9 @@ func (s *adminServiceImpl) DeleteCompositeRoute(ctx context.Context, groupID, ro
 }
 
 func (s *adminServiceImpl) PreviewCompositeRoute(ctx context.Context, groupID int64, input CompositeRoutePreviewRequest) (*CompositeRouteDecision, error) {
+	if err := s.ValidateSimpleModeGroupOperation(AdminGroupOperationCompositeRoute); err != nil {
+		return nil, err
+	}
 	if err := s.requireCompositeGroup(ctx, groupID); err != nil {
 		return nil, err
 	}

@@ -14,8 +14,10 @@ func ContextPricingIntervalsFromTiers(tiers []ContextPricingTier) []PricingInter
 			InputPrice:      t.Input,
 			OutputPrice:     t.Output,
 			CacheWritePrice: t.CacheWrite,
-			CacheReadPrice:  t.CacheRead,
-			SortOrder:       i,
+			// 官方 ff758f37d：1h 缓存写价逐档透传（模型广场 / 可用分组共用本口径）。
+			CacheWrite1hPrice: t.CacheWrite1h,
+			CacheReadPrice:    t.CacheRead,
+			SortOrder:         i,
 		})
 	}
 	return intervals

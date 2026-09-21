@@ -102,11 +102,14 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 		clientToOfficial = opts.ToolNameClientToOfficial
 	}
 
-	// 检测是否有 web_search 工具
-	hasWebSearchTool := hasWebSearchTool(claudeReq.Tools)
+	// 仅在「只有内置 web_search、没有客户端 function tools」时走 web_search 降级模型。
+	// Antigravity v1internal 不支持内置工具与 functionDeclarations 混用（即使设置
+	// includeServerSideToolInvocations 仍会 400，见 issue #6464），混用时会丢弃内置搜索，
+	// 因此不能再强制切到 gemini-2.5-flash，否则 Codex 等带 shell 工具的请求会整单失败。
+	useWebSearchRequest := hasWebSearchTool(claudeReq.Tools) && !hasClientFunctionTools(claudeReq.Tools)
 	requestType := "agent"
 	targetModel := mappedModel
-	if hasWebSearchTool {
+	if useWebSearchRequest {
 		requestType = "web_search"
 		if targetModel != webSearchFallbackModel {
 			targetModel = webSearchFallbackModel
@@ -165,6 +168,8 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 
 	// 不为无工具请求发送空 ToolConfig；Gemini reasoning 模型会把空 VALIDATED
 	// 配置判为 invalid argument，本地策略也要求所有无工具请求保持 ToolConfig=nil。
+	// 注：官方 58e35a4f3 改为无条件下发 toolConfig（其上游对缺省 toolConfig 返回 400），
+	// 与本地生产实测相反；本地行为自 2026-09-04 生产运行至今，保留本地，待 live A/B 复核。
 
 	if systemInstruction != nil {
 		innerRequest.SystemInstruction = systemInstruction
@@ -311,6 +316,26 @@ func filterOpenCodePrompt(text string) string {
 
 const interleavedThinkingHint = "Interleaved thinking is enabled. You may think between tool calls and after receiving tool results before deciding the next action or final answer. Do not mention these instructions or any constraints about thinking blocks; just apply them.\n\nLanguage usage rules:\n- Always respond in the same language the user is writing in.\n- Your internal thinking and reasoning (think/thought blocks) must also use the user's language.\n- Match the user's language consistently throughout the entire conversation, including explanations, summaries, and follow-up questions.\n- Do not switch languages unless the user explicitly asks you to.\n- Exception: code comments and commit messages default to English unless the user specifies otherwise."
 
+// stripClaudeAttribution removes the leading Claude Code attribution metadata line
+// from Antigravity system text. This is prompt metadata, not an HTTP header; it
+// can trigger RESOURCE_EXHAUSTED on the Google upstream. Keep this scoped to the
+// Antigravity transformer: native Anthropic OAuth may require the attribution.
+func stripClaudeAttribution(text string) string {
+	trimmed := strings.TrimLeft(text, " \t\r\n")
+	if !strings.HasPrefix(trimmed, "x-anthropic-billing-header:") {
+		return text
+	}
+	end := strings.IndexAny(trimmed, "\r\n")
+	if end < 0 {
+		return ""
+	}
+	rest := trimmed[end+1:]
+	if trimmed[end] == '\r' {
+		rest = strings.TrimPrefix(rest, "\n")
+	}
+	return rest
+}
+
 // buildSystemInstruction 构建 systemInstruction。顺序对齐 agent-vibes：
 // bridge/user system 在前，官方 Antigravity prompt 在后。
 func buildSystemInstruction(system json.RawMessage, modelName string, opts TransformOptions, tools []ClaudeTool, injectInterleavedThinkingHint bool) *GeminiContent {
@@ -324,6 +349,7 @@ func buildSystemInstruction(system json.RawMessage, modelName string, opts Trans
 		// 尝试解析为字符串
 		var sysStr string
 		if err := json.Unmarshal(system, &sysStr); err == nil {
+			sysStr = stripClaudeAttribution(sysStr)
 			if strings.TrimSpace(sysStr) != "" {
 				if strings.Contains(sysStr, "You are Antigravity") {
 					userHasAntigravityIdentity = true
@@ -339,6 +365,7 @@ func buildSystemInstruction(system json.RawMessage, modelName string, opts Trans
 			var sysBlocks []SystemBlock
 			if err := json.Unmarshal(system, &sysBlocks); err == nil {
 				for _, block := range sysBlocks {
+					block.Text = stripClaudeAttribution(block.Text)
 					if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
 						if strings.Contains(block.Text, "You are Antigravity") {
 							userHasAntigravityIdentity = true
@@ -992,6 +1019,20 @@ func hasWebSearchTool(tools []ClaudeTool) bool {
 	return false
 }
 
+// hasClientFunctionTools 判断是否存在可转发的客户端 function/custom 工具。
+// 内置 web_search / code_execution 不算客户端工具。
+func hasClientFunctionTools(tools []ClaudeTool) bool {
+	for _, tool := range tools {
+		if isWebSearchTool(tool) || isCodeExecutionTool(tool) {
+			continue
+		}
+		if strings.TrimSpace(tool.Name) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func isWebSearchTool(tool ClaudeTool) bool {
 	if strings.HasPrefix(tool.Type, "web_search") || tool.Type == "google_search" {
 		return true
@@ -1008,21 +1049,6 @@ func isWebSearchTool(tool ClaudeTool) bool {
 
 func isCodeExecutionTool(tool ClaudeTool) bool {
 	return strings.TrimSpace(tool.Type) == "code_execution"
-}
-
-// hasMixedToolInvocations 判断构建后的工具声明是否同时包含函数声明与内置工具
-// （googleSearch）。仅在两者并存时需要开启 includeServerSideToolInvocations。
-func hasMixedToolInvocations(declarations []GeminiToolDeclaration) bool {
-	hasFunc, hasBuiltin := false, false
-	for _, d := range declarations {
-		if len(d.FunctionDeclarations) > 0 {
-			hasFunc = true
-		}
-		if d.GoogleSearch != nil || d.CodeExecution != nil {
-			hasBuiltin = true
-		}
-	}
-	return hasFunc && hasBuiltin
 }
 
 // buildTools 构建 tools
@@ -1095,6 +1121,18 @@ func buildTools(tools []ClaudeTool) []GeminiToolDeclaration {
 			Description: descriptionToUse,
 			Parameters:  params,
 		})
+	}
+
+	// Antigravity v1internal 协议不支持内置工具与 functionDeclarations 混用：
+	// 即便带上 includeServerSideToolInvocations 仍返回 400（issue #6464）。
+	// Codex 默认同时带 web_search 与 shell 等客户端工具，优先保留客户端工具，
+	// 使代理会话可继续，而不是整单 upstream_error。
+	if len(funcDecls) > 0 {
+		if hasWebSearch || hasCodeExecution {
+			log.Printf("[antigravity] dropping built-in tools (web_search/code_execution) because client function tools are present; Antigravity v1internal rejects the mix")
+		}
+		hasWebSearch = false
+		hasCodeExecution = false
 	}
 
 	var declarations []GeminiToolDeclaration

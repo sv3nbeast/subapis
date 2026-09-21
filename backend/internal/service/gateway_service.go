@@ -772,8 +772,10 @@ type AudioUsage struct {
 }
 
 type ForwardResult struct {
-	RequestID       string
-	ResponseID      string
+	RequestID  string
+	ResponseID string
+	// UpstreamHeaders 是直接上游的响应头，用于按账户配置解析上游请求标识。
+	UpstreamHeaders http.Header
 	Usage           ClaudeUsage
 	Model           string
 	ResponsesOutput []apicompat.ResponsesOutput
@@ -1773,7 +1775,6 @@ func (s *GatewayService) replaceModelInBody(body []byte, newModel string) []byte
 type claudeOAuthNormalizeOptions struct {
 	injectMetadata              bool
 	metadataUserID              string
-	stripSystemCacheControl     bool
 	preserveBillingHeaderBlocks bool
 }
 
@@ -1878,7 +1879,14 @@ func deleteJSONPathBytes(body []byte, path string) ([]byte, bool) {
 	return next, true
 }
 
-func normalizeClaudeOAuthSystemBody(body []byte, opts claudeOAuthNormalizeOptions) ([]byte, bool) {
+// normalizeClaudeOAuthSystemBody 只做 system 文本的规范化，**不动 cache_control**。
+//
+// 这里曾经按 opts 剥离客户端打在 system 上的断点。那个动作是「system 必然被整个
+// 重写」时代的配套：内容都搬进 messages 了，残留断点指着空气。system 注入变成
+// 可配置之后前提就没了——注入开启时留在 system 上的断点是我们自己拼的稳定锚点，
+// 注入关闭时它是客户端的缓存意图，两种情形都没有删它的理由。
+// 4 块上限属于上游硬约束，由 enforceCacheControlLimit 在各条出口兜底。
+func normalizeClaudeOAuthSystemBody(body []byte) ([]byte, bool) {
 	sys := gjson.GetBytes(body, "system")
 	if !sys.Exists() {
 		return body, false
@@ -1910,13 +1918,6 @@ func normalizeClaudeOAuthSystemBody(body []byte, opts claudeOAuthNormalizeOption
 							modified = true
 						}
 					}
-				}
-			}
-
-			if opts.stripSystemCacheControl && item.Get("cache_control").Exists() {
-				if next, ok := deleteJSONPathBytes(out, fmt.Sprintf("system.%d.cache_control", index)); ok {
-					out = next
-					modified = true
 				}
 			}
 
@@ -1970,7 +1971,7 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 		modified = !bytes.Equal(out, body)
 	}
 
-	if next, changed := normalizeClaudeOAuthSystemBody(out, opts); changed {
+	if next, changed := normalizeClaudeOAuthSystemBody(out); changed {
 		out = next
 		modified = true
 	}
@@ -2556,7 +2557,6 @@ func (s *GatewayService) applyClaudeCodeOAuthMimicryToBody(
 	}
 
 	normalizeOpts := claudeOAuthNormalizeOptions{
-		stripSystemCacheControl:     !systemRewritten,
 		preserveBillingHeaderBlocks: systemRewritten,
 	}
 
@@ -2904,7 +2904,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	}
 
 	preferOAuth := platform == PlatformGemini
-	if s.debugModelRoutingEnabled() && platform == PlatformAnthropic && requestedModel != "" {
+	if s.debugModelRoutingEnabled() && requestedModel != "" && modelRoutingAppliesToTargetPlatform(platform) {
 		logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] load-aware enabled: group_id=%v model=%s session=%s platform=%s", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), platform)
 	}
 
@@ -3012,9 +3012,32 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		}
 	}
 
-	// 获取模型路由配置（仅 anthropic 平台）
+	// upstream 计费基准的渠道模型限制以账号映射后的上游模型为准，只能逐账号判定；
+	// 负载感知各层的候选过滤与粘性 gate 共用这一判定。
+	needsUpstreamCheck := s.needsUpstreamChannelRestrictionCheck(ctx, groupID)
+	isChannelRestricted := func(account *Account) bool {
+		return needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, requestedModel)
+	}
+	channelRestrictedCount := 0
+	dropChannelRestricted := func(list []*Account) []*Account {
+		if !needsUpstreamCheck {
+			return list
+		}
+		kept := make([]*Account, 0, len(list))
+		for _, acc := range list {
+			if isChannelRestricted(acc) {
+				channelRestrictedCount++
+				continue
+			}
+			kept = append(kept, acc)
+		}
+		return kept
+	}
+
+	// 获取模型路由配置（anthropic / openai 目标平台；composite 分组按目标平台判断）
 	var routingAccountIDs []int64
-	if group != nil && requestedModel != "" && group.Platform == PlatformAnthropic {
+	if group != nil && requestedModel != "" &&
+		modelRoutingAppliesToPlatform(platform, group.Platform) {
 		routingAccountIDs = group.GetRoutingAccountIDs(requestedModel)
 		if s.debugModelRoutingEnabled() {
 			logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] context group routing: group_id=%d model=%s enabled=%v rules=%d matched_ids=%v session=%s sticky_account=%d",
@@ -3038,7 +3061,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	if len(routingAccountIDs) > 0 && s.concurrencyService != nil {
 		// 1. 过滤出路由列表中可调度的账号
 		var routingCandidates []*Account
-		var filteredExcluded, filteredMissing, filteredUnsched, filteredPlatform, filteredModelScope, filteredModelMapping, filteredWindowCost int
+		var filteredExcluded, filteredMissing, filteredUnsched, filteredPlatform, filteredModelScope, filteredModelMapping, filteredChannelRestricted, filteredWindowCost int
 		var modelScopeSkippedIDs []int64 // 记录因模型限流被跳过的账号 ID
 		for _, routingAccountID := range routingAccountIDs {
 			if isExcluded(routingAccountID) {
@@ -3070,6 +3093,10 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 				filteredModelMapping++
 				continue
 			}
+			if isChannelRestricted(account) {
+				filteredChannelRestricted++
+				continue
+			}
 			if !s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) {
 				filteredModelScope++
 				modelScopeSkippedIDs = append(modelScopeSkippedIDs, account.ID)
@@ -3092,9 +3119,9 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		}
 
 		if s.debugModelRoutingEnabled() {
-			logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] routed candidates: group_id=%v model=%s routed=%d candidates=%d filtered(excluded=%d missing=%d unsched=%d platform=%d model_scope=%d model_mapping=%d window_cost=%d)",
+			logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] routed candidates: group_id=%v model=%s routed=%d candidates=%d filtered(excluded=%d missing=%d unsched=%d platform=%d model_scope=%d model_mapping=%d channel_restricted=%d window_cost=%d)",
 				derefGroupID(groupID), requestedModel, len(routingAccountIDs), len(routingCandidates),
-				filteredExcluded, filteredMissing, filteredUnsched, filteredPlatform, filteredModelScope, filteredModelMapping, filteredWindowCost)
+				filteredExcluded, filteredMissing, filteredUnsched, filteredPlatform, filteredModelScope, filteredModelMapping, filteredChannelRestricted, filteredWindowCost)
 			if len(modelScopeSkippedIDs) > 0 {
 				logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] model_rate_limited accounts skipped: group_id=%v model=%s account_ids=%v",
 					derefGroupID(groupID), requestedModel, modelScopeSkippedIDs)
@@ -3121,6 +3148,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 							s.isAccountAllowedForPlatform(stickyAccount, platform, useMixed) &&
 							kiroCooldownStateFromContext(ctx, stickyAccount) == nil &&
 							(requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, stickyAccount, requestedModel)) &&
+							!isChannelRestricted(stickyAccount) &&
 							s.isAccountSchedulableForModelSelection(ctx, stickyAccount, requestedModel) &&
 							s.isAccountSchedulableForQuota(stickyAccount) &&
 							s.isAccountSchedulableForWindowCost(ctx, stickyAccount, true)
@@ -3319,6 +3347,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 				// 反序列化后 AccountGroups 字段为空，导致 isAccountInGroup 永远返回 false。
 				platformOK := s.isAccountAllowedForPlatform(account, platform, useMixed)
 				modelSupported := requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)
+				channelOK := !isChannelRestricted(account)
 				modelSchedulable := s.isAccountSchedulableForModelSelection(ctx, account, requestedModel)
 				quotaOK := s.isAccountSchedulableForQuota(account)
 				windowCostOK := s.isAccountSchedulableForWindowCost(ctx, account, true)
@@ -3333,6 +3362,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					"schedulable", schedulable,
 					"platform_ok", platformOK,
 					"model_supported", modelSupported,
+					"channel_ok", channelOK,
 					"model_schedulable", modelSchedulable,
 					"quota_ok", quotaOK,
 					"window_cost_ok", windowCostOK,
@@ -3340,7 +3370,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					"profit_ok", profitOK,
 				)
 
-				if !clearSticky && platformOK && modelSupported && modelSchedulable && quotaOK && windowCostOK && rpmOK && schedulable && profitOK {
+				if !clearSticky && platformOK && modelSupported && channelOK && modelSchedulable && quotaOK && windowCostOK && rpmOK && schedulable && profitOK {
 					result, err := s.tryAcquireAccountSlot(ctx, accountID, account.Concurrency)
 					if err == nil && result.Acquired {
 						// 会话数量限制检查
@@ -3431,7 +3461,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		"reason", "sticky_not_used_falling_back_to_load_balance",
 		"total_accounts", len(accounts),
 	)
-	candidates := s.filterSelectableAccounts(ctx, accounts, platform, useMixed, requestedModel, excludedIDs, false)
+	candidates := dropChannelRestricted(s.filterSelectableAccounts(ctx, accounts, platform, useMixed, requestedModel, excludedIDs, false))
 
 	if len(candidates) == 0 {
 		if freshAccounts, freshUseMixed, ok := s.fallbackToDirectSchedulableAccounts(ctx, groupID, platform, hasForcePlatform, requestedModel, len(accounts)); ok {
@@ -3441,7 +3471,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			ctx = s.withModelCapacityCooldownPrefetch(ctx, accounts, requestedModel)
 			ctx = s.withWindowCostPrefetch(ctx, accounts)
 			ctx = s.withRPMPrefetch(ctx, accounts)
-			candidates = s.filterSelectableAccounts(ctx, accounts, platform, useMixed, requestedModel, excludedIDs, false)
+			candidates = dropChannelRestricted(s.filterSelectableAccounts(ctx, accounts, platform, useMixed, requestedModel, excludedIDs, false))
 		}
 		if len(candidates) == 0 {
 			if wait := s.shortRetryWaitForRateLimitedAccounts(ctx, groupID, platform, useMixed, requestedModel, excludedIDs); wait > 0 {
@@ -3463,11 +3493,19 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					ctx = s.withModelCapacityCooldownPrefetch(ctx, accounts, requestedModel)
 					ctx = s.withWindowCostPrefetch(ctx, accounts)
 					ctx = s.withRPMPrefetch(ctx, accounts)
-					candidates = s.filterSelectableAccounts(ctx, accounts, platform, useMixed, requestedModel, excludedIDs, false)
+					candidates = dropChannelRestricted(s.filterSelectableAccounts(ctx, accounts, platform, useMixed, requestedModel, excludedIDs, false))
 				}
 			}
 		}
 		if len(candidates) == 0 {
+			if channelRestrictedCount > 0 {
+				slog.Warn("channel pricing restriction blocked request",
+					"group_id", derefGroupID(groupID),
+					"model", requestedModel,
+					"restricted_accounts", channelRestrictedCount,
+					"total_accounts", len(accounts))
+				return nil, fmt.Errorf("%w supporting model: %s (channel pricing restriction)", ErrNoAvailableAccounts, requestedModel)
+			}
 			return nil, s.noAvailableSelectionErrorForModel(ctx, groupID, sessionHash, requestedModel, platform, accounts, excludedIDs, useMixed)
 		}
 	}
@@ -4159,8 +4197,35 @@ func (s *GatewayService) ResolveGroupByID(ctx context.Context, groupID int64) (*
 	return s.resolveGroupByID(ctx, groupID)
 }
 
+// modelRoutingAppliesToPlatform 判定模型路由规则是否适用于本次请求。
+//
+// 路由规则的存储与查表（Group.ModelRouting / GetRoutingAccountIDs）本身与平台无关，
+// 早期只有 Anthropic 目标平台会读取它。OpenAI 分组同样存在“同一个公开别名由不同账号
+// 映射到不同上游模型”的故障转移写法，需要显式路由来指定谁是主、谁是备，因此这里把
+// Anthropic 与 OpenAI 一并放行。
+//
+// targetPlatform 是请求解析后的目标平台；groupPlatform 是分组自身的平台。composite
+// 分组不限定自身平台，只要目标平台落在放行集合内即可复用其规则。
+func modelRoutingAppliesToPlatform(targetPlatform, groupPlatform string) bool {
+	if !modelRoutingAppliesToTargetPlatform(targetPlatform) {
+		return false
+	}
+	return groupPlatform == targetPlatform || groupPlatform == PlatformComposite
+}
+
+// modelRoutingAppliesToTargetPlatform 是放行平台集合的唯一定义处：新增平台只改这里。
+// 在只知道目标平台、还没取到分组的位置（调试日志、取分组前的短路）单独判定用。
+func modelRoutingAppliesToTargetPlatform(targetPlatform string) bool {
+	switch targetPlatform {
+	case PlatformAnthropic, PlatformOpenAI:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *GatewayService) routingAccountIDsForRequest(ctx context.Context, groupID *int64, requestedModel string, platform string) []int64 {
-	if groupID == nil || requestedModel == "" || platform != PlatformAnthropic {
+	if groupID == nil || requestedModel == "" || !modelRoutingAppliesToTargetPlatform(platform) {
 		return nil
 	}
 	group, err := s.resolveGroupByID(ctx, *groupID)
@@ -4170,10 +4235,11 @@ func (s *GatewayService) routingAccountIDsForRequest(ctx context.Context, groupI
 		}
 		return nil
 	}
-	// Preserve existing behavior: model routing only applies to anthropic groups.
-	if group.Platform != PlatformAnthropic {
+	// 路由规则适用于解析到 Anthropic 或 OpenAI 的请求；composite 分组在其模型解析到
+	// 上述平台后同样可以复用这些规则。
+	if !modelRoutingAppliesToPlatform(platform, group.Platform) {
 		if s.debugModelRoutingEnabled() {
-			logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] skip: non-anthropic group platform: group_id=%d group_platform=%s model=%s", group.ID, group.Platform, requestedModel)
+			logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] skip: group platform not eligible: group_id=%d group_platform=%s target_platform=%s model=%s", group.ID, group.Platform, platform, requestedModel)
 		}
 		return nil
 	}
@@ -4859,6 +4925,28 @@ func (s *GatewayService) checkAndRegisterSession(ctx context.Context, account *A
 		return true
 	}
 	return allowed
+}
+
+// ReleaseAccountSession 立即释放会话槽（不等待空闲超时）
+// 供 handler 在请求最终失败（选号成功但转发失败/客户端中断）时调用：
+// 上游从未真正服务该会话，若继续占槽，max_sessions 受限的账号会被失败请求的
+// session hash 卡满整个空闲窗口，后续新会话全部被拒。
+// 适用条件与 checkAndRegisterSession 对齐；不适用账号为 no-op，幂等可安全重复调用。
+func (s *GatewayService) ReleaseAccountSession(ctx context.Context, account *Account, sessionID string) {
+	if s == nil || s.sessionLimitCache == nil || account == nil || sessionID == "" {
+		return
+	}
+	if !account.IsAnthropicOAuthOrSetupToken() {
+		return
+	}
+	if account.GetMaxSessions() <= 0 {
+		return
+	}
+	if err := s.sessionLimitCache.UnregisterSession(ctx, account.ID, sessionID); err != nil {
+		slog.Debug("session_limit.release_failed",
+			"account_id", account.ID,
+			"error", err)
+	}
 }
 
 func (s *GatewayService) getSchedulableAccount(ctx context.Context, accountID int64) (*Account, error) {
@@ -6412,14 +6500,14 @@ func expandClaudeOAuthSystemPromptTextTemplate(body []byte, text string, expansi
 		return "", nil
 	}
 	expansionPrompt = defaultClaudeOAuthExpansionPrompt(expansionPrompt)
-	billingText, err := buildBillingAttributionText(body, claude.CLICurrentVersion)
+	billingText, err := buildBillingAttributionText(body, claude.CLIVersion())
 	if err != nil {
 		return "", err
 	}
-	fp := computeClaudeCodeFingerprint(body, claude.CLICurrentVersion)
+	fp := computeClaudeCodeFingerprint(body, claude.CLIVersion())
 	replacer := strings.NewReplacer(
 		"{billing_header}", billingText,
-		"{cc_version}", claude.CLICurrentVersion,
+		"{cc_version}", claude.CLIVersion(),
 		"{fp}", fp,
 		"{claude_code_system_prompt}", claudeCodeSystemPrompt,
 		"{claude_code_expansion_prompt}", expansionPrompt,
@@ -7407,11 +7495,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			}
 		}
 
-		// system 被重写时保留 CC prompt 的 cache_control: ephemeral（匹配真实 Claude Code 行为）；
-		// 未重写时（haiku / 注入开关关闭）剥离客户端 cache_control，与原有行为一致。
-		// 两种情况下 enforceCacheControlLimit 都会兜底处理上限。
+		// system 上的 cache_control 一律保留：重写时是我们拼进去的稳定锚点，
+		// 未重写时（haiku / 注入开关关闭）是客户端的缓存意图；上限由 enforceCacheControlLimit 兜底。
 		normalizeOpts := claudeOAuthNormalizeOptions{
-			stripSystemCacheControl:     !systemRewritten,
 			preserveBillingHeaderBlocks: systemRewritten,
 		}
 		if s.identityService != nil {
@@ -8133,6 +8219,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 	result = &ForwardResult{
 		RequestID:        resp.Header.Get("x-request-id"),
+		UpstreamHeaders:  resp.Header,
 		Usage:            *usage,
 		Model:            originalModel, // 使用原始模型用于计费和日志
 		UpstreamModel:    mappedModel,
@@ -8413,6 +8500,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 
 	return &ForwardResult{
 		RequestID:        resp.Header.Get("x-request-id"),
+		UpstreamHeaders:  resp.Header,
 		Usage:            *usage,
 		Model:            input.OriginalModel,
 		UpstreamModel:    input.RequestModel,
@@ -8441,6 +8529,10 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 		targetURL = validatedURL + "/v1/messages?beta=true"
 	}
 
+	// Ollama Cloud DeepSeek 出站 max_tokens clamp：判定与上方 targetURL 的
+	// base 取值同源（GetBaseURL），trailing '/' 由 helper 内部归一化，详见 helper 注释。
+	body = clampOllamaCloudAnthropicMessagesMaxTokens(account, account.GetBaseURL(), body)
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, nil, err
@@ -8464,7 +8556,9 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	req.Header.Del("x-api-key")
 	req.Header.Del("x-goog-api-key")
 	req.Header.Del("cookie")
-	setAnthropicAPIKeyAuthHeader(req.Header, account, token)
+	// Ollama Cloud Anthropic 兼容端点按实际 base_url 强制 Bearer（同上方
+	// targetURL 的 base 取值），其余保持 extra/default 行为。
+	setAnthropicAPIKeyAuthHeader(req.Header, account, token, account.GetBaseURL())
 
 	if getHeaderRaw(req.Header, "content-type") == "" {
 		setHeaderRaw(req.Header, "content-type", "application/json")
@@ -9369,6 +9463,7 @@ func (s *GatewayService) forwardBedrock(
 
 	return &ForwardResult{
 		RequestID:        resp.Header.Get("x-amzn-requestid"),
+		UpstreamHeaders:  resp.Header,
 		Usage:            *usage,
 		Model:            reqModel,
 		UpstreamModel:    mappedModel,
@@ -9698,10 +9793,16 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		body = normalizeClaudeCodeMimicryUpstreamBody(body)
 	}
 
-	// 同步 billing header cc_version 与实际发送的 User-Agent 版本
-	if fingerprint != nil {
-		body = syncBillingHeaderVersion(body, fingerprint.UserAgent)
+	// billing cc_version 与真实出站 User-Agent 同源（本地 canonical 语义，见 billingUserAgentForWire）。
+	if billingUA := s.billingUserAgentForWire(ctx, tokenType, mimicClaudeCode, fingerprint); billingUA != "" {
+		body = syncBillingHeaderVersion(body, billingUA)
 	}
+
+	// Ollama Cloud DeepSeek 出站 max_tokens clamp：判定与上方 targetURL 的
+	// base 取值同源（GetBaseURL），仅实际上游为 ollama.com 且映射后出站模型
+	// 为 DeepSeek 系时压到 cap，详见 helper 注释。
+	body = clampOllamaCloudAnthropicMessagesMaxTokens(account, account.GetBaseURL(), body)
+
 	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, nil, err
@@ -9711,7 +9812,9 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	if tokenType == "oauth" {
 		setHeaderRaw(req.Header, "authorization", "Bearer "+token)
 	} else {
-		setAnthropicAPIKeyAuthHeader(req.Header, account, token)
+		// Ollama Cloud Anthropic 兼容端点按实际 base_url 强制 Bearer（同上方
+		// targetURL 的 base 取值），其余保持 extra/default 行为。
+		setAnthropicAPIKeyAuthHeader(req.Header, account, token, account.GetBaseURL())
 	}
 
 	// 白名单透传 headers
@@ -10599,6 +10702,12 @@ func ExtractUpstreamErrorMessage(body []byte) string {
 	return extractUpstreamErrorMessage(body)
 }
 
+// SanitizeUpstreamErrorMessage redacts sensitive query parameter values before
+// an upstream error message is recorded or returned to a client.
+func SanitizeUpstreamErrorMessage(message string) string {
+	return sanitizeUpstreamErrorMessage(message)
+}
+
 func extractUpstreamErrorMessage(body []byte) string {
 	// Claude 风格：{"type":"error","error":{"type":"...","message":"..."}}
 	if m := gjson.GetBytes(body, "error.message").String(); strings.TrimSpace(m) != "" {
@@ -10986,6 +11095,7 @@ func partialStreamUsageResult(resp *http.Response, streamResult *streamingResult
 	}
 	return &ForwardResult{
 		RequestID:        resp.Header.Get("x-request-id"),
+		UpstreamHeaders:  resp.Header,
 		Usage:            *streamResult.usage,
 		Model:            model,
 		UpstreamModel:    upstreamModel,
@@ -12891,6 +13001,8 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 				}
 				return ""
 			}(),
+			pricingAt,
+			optionalStringValue(usageLog.ReasoningEffort),
 		)
 	}
 
@@ -13137,17 +13249,18 @@ func (s *GatewayService) calculateTokenCost(
 	if resolved := s.resolveChannelPricing(ctx, billingModel, apiKey); resolved != nil {
 		gid := apiKey.Group.ID
 		cost, err = s.billingService.CalculateCostUnified(CostInput{
-			Group:          apiKey.Group,
-			ServiceTier:    optionalStringValue(result.ServiceTier),
-			Ctx:            ctx,
-			Model:          billingModel,
-			GroupID:        &gid,
-			Tokens:         tokens,
-			RequestCount:   1,
-			RateMultiplier: multiplier,
-			PricingAt:      opts.PricingAt,
-			Resolver:       s.resolver,
-			Resolved:       resolved,
+			Group:           apiKey.Group,
+			ServiceTier:     optionalStringValue(result.ServiceTier),
+			ReasoningEffort: optionalStringValue(result.ReasoningEffort),
+			Ctx:             ctx,
+			Model:           billingModel,
+			GroupID:         &gid,
+			Tokens:          tokens,
+			RequestCount:    1,
+			RateMultiplier:  multiplier,
+			PricingAt:       opts.PricingAt,
+			Resolver:        s.resolver,
+			Resolved:        resolved,
 		})
 	} else if opts.LongContextThreshold > 0 {
 		// 长上下文双倍计费（如 Gemini 200K 阈值）
@@ -13156,7 +13269,8 @@ func (s *GatewayService) calculateTokenCost(
 		cost, err = s.billingService.CalculateCostUnified(CostInput{
 			Ctx: ctx, Model: billingModel, Group: apiKey.Group, GroupID: apiKey.GroupID,
 			Tokens: tokens, RequestCount: 1, RateMultiplier: multiplier, PricingAt: opts.PricingAt,
-			ServiceTier: optionalStringValue(result.ServiceTier), Resolver: s.resolver,
+			ServiceTier: optionalStringValue(result.ServiceTier), ReasoningEffort: optionalStringValue(result.ReasoningEffort),
+			Resolver: s.resolver,
 		})
 	} else {
 		cost, err = s.billingService.CalculateCostWithServiceTier(billingModel, tokens, multiplier, optionalStringValue(result.ServiceTier))
@@ -13202,6 +13316,7 @@ func (s *GatewayService) buildRecordUsageLog(
 		APIKeyID:                 apiKey.ID,
 		AccountID:                account.ID,
 		RequestID:                requestID,
+		UpstreamRequestID:        usageUpstreamRequestIDPtr(account, result.UpstreamHeaders, false),
 		Model:                    result.Model,
 		RequestedModel:           requestedModel,
 		UpstreamModel:            optionalTrimmedStringPtr(result.UpstreamModel),
@@ -13474,9 +13589,8 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	shouldMimicClaudeCode := s.shouldMimicClaudeCodeForAccount(account, isClaudeCodeCT)
 
 	if shouldMimicClaudeCode {
-		normalizeOpts := claudeOAuthNormalizeOptions{stripSystemCacheControl: true}
 		var normalizedBody []byte
-		normalizedBody, reqModel = normalizeClaudeOAuthRequestBody(body, reqModel, normalizeOpts)
+		normalizedBody, reqModel = normalizeClaudeOAuthRequestBody(body, reqModel, claudeOAuthNormalizeOptions{})
 		if err := replaceBody(normalizedBody); err != nil {
 			return err
 		}
@@ -13492,6 +13606,13 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 			if err := replaceBody(applyToolsLastCacheBreakpointWithTTL(body, cacheTTLTarget1h)); err != nil {
 				return err
 			}
+		}
+
+		// 4 块上限的兜底：其余出口都在自己的转发路径上调过一次，只有这里没有。
+		// 不再剥离客户端 system 断点之后，「客户端 system + 客户端 messages +
+		// 上面刚注入的 tools[-1]」可以直接顶到 5 块，而上游对超限是 400。
+		if err := replaceBody(enforceCacheControlLimit(body)); err != nil {
+			return err
 		}
 	} else if s.shouldInjectBreakpointsForBridge(ctx, account, body) {
 		// 与 Forward 主路径同款：bridge 客户端接管 messages 断点（strip 漂移断点 +
@@ -13855,7 +13976,9 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 	req.Header.Del("x-api-key")
 	req.Header.Del("x-goog-api-key")
 	req.Header.Del("cookie")
-	setAnthropicAPIKeyAuthHeader(req.Header, account, token)
+	// Ollama Cloud Anthropic 兼容端点按实际 base_url 强制 Bearer（同上方
+	// targetURL 的 base 取值），其余保持 extra/default 行为。
+	setAnthropicAPIKeyAuthHeader(req.Header, account, token, account.GetBaseURL())
 
 	if req.Header.Get("content-type") == "" {
 		req.Header.Set("content-type", "application/json")
@@ -13925,9 +14048,14 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		}
 	}
 
-	// 同步 billing header cc_version 与实际发送的 User-Agent 版本
-	if ctFingerprint != nil && ctEnableFP {
-		body = syncBillingHeaderVersion(body, ctFingerprint.UserAgent)
+	// Disabled fingerprint unification does not disable forced mimicry headers.
+	var billingFingerprint *Fingerprint
+	if ctEnableFP {
+		billingFingerprint = ctFingerprint
+	}
+	// billing cc_version 与真实出站 User-Agent 同源（本地 canonical 语义，见 billingUserAgentForWire）。
+	if billingUA := s.billingUserAgentForWire(ctx, tokenType, mimicClaudeCode, billingFingerprint); billingUA != "" {
+		body = syncBillingHeaderVersion(body, billingUA)
 	}
 	if mimicClaudeCode {
 		body = normalizeClaudeCodeMimicryUpstreamBody(body)
@@ -13943,7 +14071,9 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	if tokenType == "oauth" {
 		setHeaderRaw(req.Header, "authorization", "Bearer "+token)
 	} else {
-		setAnthropicAPIKeyAuthHeader(req.Header, account, token)
+		// Ollama Cloud Anthropic 兼容端点按实际 base_url 强制 Bearer（同上方
+		// targetURL 的 base 取值），其余保持 extra/default 行为。
+		setAnthropicAPIKeyAuthHeader(req.Header, account, token, account.GetBaseURL())
 	}
 
 	// 白名单透传 headers（恢复真实 wire casing）
@@ -14093,6 +14223,11 @@ func (s *GatewayService) validateUpstreamBaseURL(raw string) (string, error) {
 // It prefers the group's channel-supported model list, then falls back to legacy
 // schedulable account model_mapping keys for groups without channel model config.
 func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64, platform string) []string {
+	// 模型清单端点（/antigravity/models、/v1beta/models 等）在没有动态清单时会回落到
+	// 静态目录，调用方只看 len()==0。nil 服务应走同一条回落路径而不是打挂整个进程。
+	if s == nil {
+		return nil
+	}
 	cacheKey := modelsListCacheKey(groupID, platform)
 	if s.modelsListCache != nil {
 		if cached, found := s.modelsListCache.Get(cacheKey); found {
@@ -14190,6 +14325,10 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		models = append(models, model)
 	}
 	sort.Strings(models)
+
+	if platform == PlatformOpenAI {
+		models = supplementUnmappedOpenAIModels(accounts, models)
+	}
 
 	if s.modelsListCache != nil {
 		s.modelsListCache.Set(cacheKey, cloneStringSlice(models), s.modelsListCacheTTL)

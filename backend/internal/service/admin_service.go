@@ -21,6 +21,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
 	"github.com/Wei-Shaw/sub2api/ent/authidentitychannel"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/cursor"
@@ -70,6 +71,7 @@ type AdminService interface {
 	RecoverDuplicateGroup(ctx context.Context, id int64, actorScope, operationKey string) (*Group, error)
 	UpdateGroup(ctx context.Context, id int64, input *UpdateGroupInput) (*Group, error)
 	DeleteGroup(ctx context.Context, id int64) error
+	DeleteGroupIfEmpty(ctx context.Context, id int64) error
 	GetGroupAPIKeys(ctx context.Context, groupID int64, page, pageSize int) ([]APIKey, int64, error)
 	GetGroupRateMultipliers(ctx context.Context, groupID int64) ([]UserGroupRateEntry, error)
 	ClearGroupRateMultipliers(ctx context.Context, groupID int64) error
@@ -97,6 +99,9 @@ type AdminService interface {
 	GetAccount(ctx context.Context, id int64) (*Account, error)
 	GetAccountsByIDs(ctx context.Context, ids []int64) ([]*Account, error)
 	CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error)
+	ValidateAccountGroupBindings(ctx context.Context, groupIDs []int64) error
+	// DuplicateAccount creates an independent account from an existing account's configuration.
+	// First-class runtime columns are intentionally reset by the normal account creation path.
 	DuplicateAccount(ctx context.Context, id int64, actorScope, operationKey string) (*Account, error)
 	RecoverDuplicateAccount(ctx context.Context, id int64, actorScope, operationKey string) (*Account, error)
 	UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error)
@@ -150,6 +155,24 @@ type AdminService interface {
 	BatchDeleteRedeemCodes(ctx context.Context, ids []int64) (int64, error)
 	ExpireRedeemCode(ctx context.Context, id int64) (*RedeemCode, error)
 	ResetAccountQuota(ctx context.Context, id int64) error
+}
+
+type AdminGroupOperation string
+
+const (
+	AdminGroupOperationBasic          AdminGroupOperation = "basic"
+	AdminGroupOperationDuplicate      AdminGroupOperation = "duplicate"
+	AdminGroupOperationCompositeRoute AdminGroupOperation = "composite_route"
+	AdminGroupOperationMultiplier     AdminGroupOperation = "multiplier"
+	AdminGroupOperationRPMOverride    AdminGroupOperation = "rpm_override"
+	AdminGroupOperationSort           AdminGroupOperation = "sort"
+)
+
+func ValidateSimpleModeGroupOperation(cfg *config.Config, operation AdminGroupOperation) error {
+	if cfg != nil && cfg.RunMode == config.RunModeSimple && operation != AdminGroupOperationBasic {
+		return infraerrors.New(http.StatusForbidden, "SIMPLE_MODE_OPERATION_UNSUPPORTED", "This operation is not supported in simple mode")
+	}
+	return nil
 }
 
 // CreateUserInput represents input for creating a new user via admin operations.
@@ -280,23 +303,28 @@ type CreateGroupInput struct {
 	// 支持的模型系列（仅 antigravity 平台使用）
 	SupportedModelScopes []string
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
-	AllowMessagesDispatch        bool
-	AllowNonStreamMessages       bool
-	AllowLive                    bool
-	ForceOpenAIFast              bool
-	FreeOpenAIFast               bool
-	DefaultMappedModel           string
-	RequireOAuthOnly             bool
-	RequirePrivacySet            bool
-	MessagesDispatchModelConfig  OpenAIMessagesDispatchModelConfig
-	ModelsListConfig             GroupModelsListConfig
+	AllowMessagesDispatch       bool
+	AllowNonStreamMessages      bool
+	AllowLive                   bool
+	ForceOpenAIFast             bool
+	FreeOpenAIFast              bool
+	DefaultMappedModel          string
+	RequireOAuthOnly            bool
+	RequirePrivacySet           bool
+	MessagesDispatchModelConfig OpenAIMessagesDispatchModelConfig
+	ModelAllowlist              GroupModelAllowlist
+	// CodexModelsManifestConfig 固定账号 manifest 配置；创建路径禁止开启，仅编辑可配置。
+	CodexModelsManifestConfig    GroupCodexModelsManifestConfig
 	GrokChatUpstreamMode         string
 	GrokChatResponsesGrayPercent int
 	// RPMLimit 分组 RPM 上限（0 = 不限制）
-	RPMLimit                    int
-	MaxReasoningEffort          string
+	RPMLimit int
+	// MaxReasoningEffort Anthropic/OpenAI 请求的推理强度上限，空字符串表示不限制。
+	MaxReasoningEffort string
+	// MaxReasoningEffortOverLimit 超过上限时的访问控制：downgrade（默认）或 deny。
 	MaxReasoningEffortOverLimit string
-	ReasoningEffortMappings     []ReasoningEffortMapping
+	// ReasoningEffortMappings Anthropic/OpenAI 推理强度映射，可按模型精确名、前缀或后缀限定。
+	ReasoningEffortMappings []ReasoningEffortMapping
 	// Kiro 模拟缓存配置（仅 Kiro 平台生效）
 	KiroCacheEmulationEnabled                        bool
 	KiroAutoStickyEnabled                            *bool
@@ -368,16 +396,18 @@ type UpdateGroupInput struct {
 	// 支持的模型系列（仅 antigravity 平台使用）
 	SupportedModelScopes *[]string
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
-	AllowMessagesDispatch        *bool
-	AllowNonStreamMessages       *bool
-	AllowLive                    *bool
-	ForceOpenAIFast              *bool
-	FreeOpenAIFast               *bool
-	DefaultMappedModel           *string
-	RequireOAuthOnly             *bool
-	RequirePrivacySet            *bool
-	MessagesDispatchModelConfig  *OpenAIMessagesDispatchModelConfig
-	ModelsListConfig             *GroupModelsListConfig
+	AllowMessagesDispatch       *bool
+	AllowNonStreamMessages      *bool
+	AllowLive                   *bool
+	ForceOpenAIFast             *bool
+	FreeOpenAIFast              *bool
+	DefaultMappedModel          *string
+	RequireOAuthOnly            *bool
+	RequirePrivacySet           *bool
+	MessagesDispatchModelConfig *OpenAIMessagesDispatchModelConfig
+	ModelAllowlist              *GroupModelAllowlist
+	// CodexModelsManifestConfig nil 表示不修改；非 openai 平台会被归一化为关闭。
+	CodexModelsManifestConfig    *GroupCodexModelsManifestConfig
 	GrokChatUpstreamMode         *string
 	GrokChatResponsesGrayPercent *int
 	// RPMLimit 分组 RPM 上限（0 = 不限制），nil 表示未提供不改动。
@@ -547,18 +577,22 @@ type CreateProxyInput struct {
 	ExpiryWarnDays int
 }
 
+// UpdateProxyInput preserves omitted expiry/backup values; Clear flags explicitly
+// remove them. A nil ExpiryWarnDays preserves the current warning period.
 type UpdateProxyInput struct {
 	Name           string
 	Protocol       string
 	Host           string
 	Port           int
-	Username       string
-	Password       string
+	Username       *string
+	Password       *string
 	Status         string
 	ExpiresAt      *time.Time
+	ClearExpiresAt bool
 	FallbackMode   string
 	BackupProxyID  *int64
-	ExpiryWarnDays int
+	ClearBackupID  bool
+	ExpiryWarnDays *int
 }
 
 type GenerateRedeemCodesInput struct {
@@ -692,9 +726,11 @@ var ErrRPMStatusUnavailable = infraerrors.New(http.StatusNotImplemented, "RPM_ST
 
 // adminServiceImpl implements AdminService
 type adminServiceImpl struct {
+	cfg                            *config.Config
 	userRepo                       UserRepository
 	groupRepo                      GroupRepository
 	groupDuplicateRepo             GroupDuplicateRepository
+	emptyGroupDeleteRepo           EmptyGroupDeleteRepository
 	accountRepo                    AccountRepository
 	accountDuplicateRepo           AccountDuplicateRepository
 	accountBillingRepo             AccountBillingSettingsRepository
@@ -731,6 +767,7 @@ type userGroupRateBatchReader interface {
 
 // NewAdminService creates a new AdminService
 func NewAdminService(
+	cfg *config.Config,
 	userRepo UserRepository,
 	groupRepo GroupRepository,
 	accountRepo AccountRepository,
@@ -750,12 +787,15 @@ func NewAdminService(
 	privacyClientFactory PrivacyClientFactory,
 ) AdminService {
 	groupDuplicateRepo, _ := groupRepo.(GroupDuplicateRepository)
+	emptyGroupDeleteRepo, _ := groupRepo.(EmptyGroupDeleteRepository)
 	accountDuplicateRepo, _ := accountRepo.(AccountDuplicateRepository)
 	accountBillingRepo, _ := accountRepo.(AccountBillingSettingsRepository)
 	return &adminServiceImpl{
+		cfg:                  cfg,
 		userRepo:             userRepo,
 		groupRepo:            groupRepo,
 		groupDuplicateRepo:   groupDuplicateRepo,
+		emptyGroupDeleteRepo: emptyGroupDeleteRepo,
 		accountRepo:          accountRepo,
 		accountDuplicateRepo: accountDuplicateRepo,
 		accountBillingRepo:   accountBillingRepo,
@@ -2145,9 +2185,27 @@ func cloneAdminAuthIdentityMetadata(input map[string]any) map[string]any {
 }
 
 // Group management implementations
+// Group management implementations
+func (s *adminServiceImpl) ValidateSimpleModeGroupOperation(operation AdminGroupOperation) error {
+	return ValidateSimpleModeGroupOperation(s.cfg, operation)
+}
+
 func (s *adminServiceImpl) ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, sortBy, sortOrder string) ([]Group, int64, error) {
 	params := pagination.PaginationParams{Page: page, PageSize: pageSize, SortBy: sortBy, SortOrder: sortOrder}
-	groups, result, err := s.groupRepo.ListWithFilters(ctx, params, platform, status, search, isExclusive)
+	var groups []Group
+	var result *pagination.PaginationResult
+	var err error
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+		repo, ok := s.groupRepo.(interface {
+			ListBindableWithFilters(context.Context, pagination.PaginationParams, string, string, string, *bool) ([]Group, *pagination.PaginationResult, error)
+		})
+		if !ok {
+			return nil, 0, errors.New("group repository does not support simple-mode filtering")
+		}
+		groups, result, err = repo.ListBindableWithFilters(ctx, params, platform, status, search, isExclusive)
+	} else {
+		groups, result, err = s.groupRepo.ListWithFilters(ctx, params, platform, status, search, isExclusive)
+	}
 	if err != nil {
 		return nil, 0, err
 	}
@@ -2170,7 +2228,21 @@ func (s *adminServiceImpl) GetAllGroupsIncludingInactive(ctx context.Context) ([
 }
 
 func (s *adminServiceImpl) GetGroup(ctx context.Context, id int64) (*Group, error) {
-	return s.groupRepo.GetByID(ctx, id)
+	group, err := s.groupRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validateSimpleModeGroupAccess(group); err != nil {
+		return nil, err
+	}
+	return group, nil
+}
+
+func (s *adminServiceImpl) validateSimpleModeGroupAccess(group *Group) error {
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple && !IsGroupBindableInSimpleMode(group) {
+		return infraerrors.BadRequest("SIMPLE_MODE_GROUP_NOT_BINDABLE", "composite groups are not supported in simple mode")
+	}
+	return nil
 }
 
 func (s *adminServiceImpl) GetGroupModelsListCandidates(ctx context.Context, id int64, platform string) ([]string, error) {
@@ -2249,7 +2321,7 @@ func (s *adminServiceImpl) GetGroupModelsListCandidates(ctx context.Context, id 
 func defaultModelsListCandidateIDs(platform string) []string {
 	switch platform {
 	case PlatformComposite:
-		platforms := []string{PlatformOpenAI, PlatformGemini, PlatformAntigravity, PlatformDroid, PlatformGrok, PlatformAnthropic}
+		platforms := []string{PlatformOpenAI, PlatformGemini, PlatformAntigravity, PlatformDroid, PlatformGrok, PlatformAnthropic, PlatformMiniMax, PlatformOpenCodeGo}
 		seen := make(map[string]struct{})
 		var ids []string
 		for _, concrete := range platforms {
@@ -2283,7 +2355,9 @@ func defaultModelsListCandidateIDs(platform string) []string {
 		return cursor.DefaultModelIDs()
 	case PlatformGrok:
 		return xai.DefaultModelIDs()
-	case PlatformKimi, PlatformZhipu, PlatformDeepseek:
+	case PlatformOpenCodeGo:
+		return DefaultOpenCodeGoModelIDs()
+	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax:
 		// CN catalogs depend on the account/plan. Bound account mappings are
 		// added by GetGroupModelsListCandidates; never offer Claude defaults.
 		return []string{}
@@ -2331,13 +2405,46 @@ func validateKiroCacheEmulationRatioInputs(ratio, creationRatio, readRatio *floa
 	return nil
 }
 
+func normalizeCreateGroupInputForSimpleMode(input *CreateGroupInput) {
+	if input == nil {
+		return
+	}
+	*input = CreateGroupInput{
+		Name: input.Name, Description: input.Description, Platform: input.Platform,
+		RateMultiplier: 1, SubscriptionType: SubscriptionTypeStandard,
+	}
+}
+
+func normalizeUpdateGroupInputForSimpleMode(input *UpdateGroupInput) {
+	if input == nil {
+		return
+	}
+	*input = UpdateGroupInput{Name: input.Name, Description: input.Description}
+}
+
 func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupInput) (*Group, error) {
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple && NormalizeGroupPlatform(input.Platform) == PlatformComposite {
+		return nil, infraerrors.BadRequest("SIMPLE_MODE_GROUP_NOT_BINDABLE", "composite groups are not supported in simple mode")
+	}
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+		normalizeCreateGroupInputForSimpleMode(input)
+	}
 	modelPricing, err := normalizeGroupModelPricing(NormalizeGroupPlatform(input.Platform), input.ModelPricing)
 	if err != nil {
 		return nil, err
 	}
 	if input.RateMultiplier <= 0 {
 		return nil, errors.New("rate_multiplier must be > 0")
+	}
+	// 固定账号 manifest 配置：账号绑定发生在创建之后，创建时无法校验成员关系，
+	// 拒绝开启并在创建后的编辑里配置。
+	if normalizeCodexModelsManifestConfig(NormalizeGroupPlatform(input.Platform), input.CodexModelsManifestConfig).Enabled {
+		return nil, infraerrors.New(http.StatusBadRequest, "INVALID_CODEX_MODELS_MANIFEST_CONFIG", "codex models manifest config cannot be enabled at group creation; configure it after creation in the group editor")
+	}
+	// 白名单在创建路径同样收口：开启但为空、通配位置非法都会 400。
+	modelAllowlist, err := normalizeGroupModelAllowlist(input.ModelAllowlist)
+	if err != nil {
+		return nil, err
 	}
 
 	platform := input.Platform
@@ -2416,7 +2523,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	// 先归一化（非订阅分组清空高峰配置、清洗停用状态下的脏字段）再校验，与 UpdateGroup 同一收口。
 	peakRateEnabled, peakStart, peakEnd, peakRateMultiplier := NormalizePeakRateConfig(subscriptionType, input.PeakRateEnabled, input.PeakStart, input.PeakEnd, peakRateMultiplier)
 	if err := ValidatePeakRateConfig(subscriptionType, peakRateEnabled, peakStart, peakEnd, peakRateMultiplier); err != nil {
-		return nil, err
+		return nil, infraerrors.BadRequest("INVALID_PEAK_RATE_CONFIG", err.Error())
 	}
 
 	// 校验降级分组
@@ -2553,22 +2660,25 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		RequirePrivacySet:               input.RequirePrivacySet,
 		DefaultMappedModel:              input.DefaultMappedModel,
 		MessagesDispatchModelConfig:     normalizeOpenAIMessagesDispatchModelConfig(input.MessagesDispatchModelConfig),
-		ModelsListConfig:                normalizeGroupModelsListConfig(input.ModelsListConfig),
-		GrokChatUpstreamMode:            input.GrokChatUpstreamMode,
-		GrokChatResponsesGrayPercent:    input.GrokChatResponsesGrayPercent,
-		RPMLimit:                        input.RPMLimit,
-		MaxReasoningEffort:              input.MaxReasoningEffort,
-		MaxReasoningEffortOverLimit:     input.MaxReasoningEffortOverLimit,
-		ReasoningEffortMappings:         input.ReasoningEffortMappings,
-		KiroCacheEmulationEnabled:       input.KiroCacheEmulationEnabled,
-		KiroAutoStickyEnabled:           kiroAutoStickyEnabled,
-		KiroStickySessionTTLSeconds:     kiroStickySessionTTLSeconds,
-		KiroCacheEmulationRatio:         kiroCacheEmulationRatio,
-		KiroCacheEmulationMode:          kiroCacheEmulationMode,
-		KiroCacheCreationEmulationRatio: kiroCacheCreationEmulationRatio,
-		KiroCacheReadEmulationRatio:     kiroCacheReadEmulationRatio,
-		KiroEndpointMode:                kiroEndpointMode,
-		KiroAnthropicFallbackEnabled:    input.KiroAnthropicFallbackEnabled,
+		ModelAllowlist:                  modelAllowlist,
+		// 固定账号 manifest 配置：账号绑定发生在分组创建之后，创建路径禁止开启，
+		// 成员关系无从校验（前端创建对话框也不展示）。
+		CodexModelsManifestConfig:                        normalizeCodexModelsManifestConfig(platform, input.CodexModelsManifestConfig),
+		GrokChatUpstreamMode:                             input.GrokChatUpstreamMode,
+		GrokChatResponsesGrayPercent:                     input.GrokChatResponsesGrayPercent,
+		RPMLimit:                                         input.RPMLimit,
+		MaxReasoningEffort:                               input.MaxReasoningEffort,
+		MaxReasoningEffortOverLimit:                      input.MaxReasoningEffortOverLimit,
+		ReasoningEffortMappings:                          input.ReasoningEffortMappings,
+		KiroCacheEmulationEnabled:                        input.KiroCacheEmulationEnabled,
+		KiroAutoStickyEnabled:                            kiroAutoStickyEnabled,
+		KiroStickySessionTTLSeconds:                      kiroStickySessionTTLSeconds,
+		KiroCacheEmulationRatio:                          kiroCacheEmulationRatio,
+		KiroCacheEmulationMode:                           kiroCacheEmulationMode,
+		KiroCacheCreationEmulationRatio:                  kiroCacheCreationEmulationRatio,
+		KiroCacheReadEmulationRatio:                      kiroCacheReadEmulationRatio,
+		KiroEndpointMode:                                 kiroEndpointMode,
+		KiroAnthropicFallbackEnabled:                     input.KiroAnthropicFallbackEnabled,
 		KiroAnthropicFallbackFirstSemanticTimeoutSeconds: input.KiroAnthropicFallbackFirstSemanticTimeoutSeconds,
 		KiroAnthropicFallbackMaxAnthropicAttempts:        input.KiroAnthropicFallbackMaxAnthropicAttempts,
 	}
@@ -2712,6 +2822,15 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if err != nil {
 		return nil, err
 	}
+	if err := s.validateSimpleModeGroupAccess(group); err != nil {
+		return nil, err
+	}
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple && input.Platform == PlatformComposite {
+		return nil, infraerrors.BadRequest("SIMPLE_MODE_GROUP_NOT_BINDABLE", "composite groups are not supported in simple mode")
+	}
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+		normalizeUpdateGroupInputForSimpleMode(input)
+	}
 	previousPlatform := group.Platform
 
 	if input.Name != "" {
@@ -2827,7 +2946,7 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	// 防止单独修改 start/end 导致最终 start>=end 等非法配置入库。与 CreateGroup 同一收口。
 	group.PeakRateEnabled, group.PeakStart, group.PeakEnd, group.PeakRateMultiplier = NormalizePeakRateConfig(group.SubscriptionType, group.PeakRateEnabled, group.PeakStart, group.PeakEnd, group.PeakRateMultiplier)
 	if err := ValidatePeakRateConfig(group.SubscriptionType, group.PeakRateEnabled, group.PeakStart, group.PeakEnd, group.PeakRateMultiplier); err != nil {
-		return nil, err
+		return nil, infraerrors.BadRequest("INVALID_PEAK_RATE_CONFIG", err.Error())
 	}
 	if input.ImagePrice1K != nil {
 		group.ImagePrice1K = normalizePrice(input.ImagePrice1K)
@@ -2923,8 +3042,15 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.MessagesDispatchModelConfig != nil {
 		group.MessagesDispatchModelConfig = normalizeOpenAIMessagesDispatchModelConfig(*input.MessagesDispatchModelConfig)
 	}
-	if input.ModelsListConfig != nil {
-		group.ModelsListConfig = normalizeGroupModelsListConfig(*input.ModelsListConfig)
+	if input.ModelAllowlist != nil {
+		modelAllowlist, err := normalizeGroupModelAllowlist(*input.ModelAllowlist)
+		if err != nil {
+			return nil, err
+		}
+		group.ModelAllowlist = modelAllowlist
+	}
+	if input.CodexModelsManifestConfig != nil {
+		group.CodexModelsManifestConfig = *input.CodexModelsManifestConfig
 	}
 	if input.GrokChatUpstreamMode != nil {
 		group.GrokChatUpstreamMode = *input.GrokChatUpstreamMode
@@ -3002,6 +3128,16 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.LongContextPricingEnabled != nil {
 		group.LongContextPricingEnabled = *input.LongContextPricingEnabled
 	}
+	// 固定账号 manifest 配置：按最终平台归一化（切出 openai 平台时静默归零，
+	// 与 ForceOpenAIFast 同一收口）；校验仅在本次显式携带配置时进行，
+	// 避免脏 ID 阻塞无关字段更新。
+	group.CodexModelsManifestConfig = normalizeCodexModelsManifestConfig(group.Platform, group.CodexModelsManifestConfig)
+	if input.CodexModelsManifestConfig != nil {
+		if err := s.validateCodexModelsManifestConfig(ctx, id, group.CodexModelsManifestConfig); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := s.groupRepo.Update(ctx, group); err != nil {
 		return nil, err
 	}
@@ -3085,6 +3221,27 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 }
 
 func (s *adminServiceImpl) DeleteGroup(ctx context.Context, id int64) error {
+	return s.deleteGroup(ctx, id, false)
+}
+
+func (s *adminServiceImpl) DeleteGroupIfEmpty(ctx context.Context, id int64) error {
+	return s.deleteGroup(ctx, id, true)
+}
+
+func (s *adminServiceImpl) deleteGroup(ctx context.Context, id int64, requireEmpty bool) error {
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+		group, err := s.groupRepo.GetByIDLite(ctx, id)
+		if err != nil {
+			return err
+		}
+		if err := s.validateSimpleModeGroupAccess(group); err != nil {
+			return err
+		}
+	}
+	if requireEmpty && s.emptyGroupDeleteRepo == nil {
+		return fmt.Errorf("guarded group deletion is unavailable")
+	}
+
 	var groupKeys []string
 	if s.authCacheInvalidator != nil {
 		keys, err := s.apiKeyRepo.ListKeysByGroupID(ctx, id)
@@ -3093,7 +3250,13 @@ func (s *adminServiceImpl) DeleteGroup(ctx context.Context, id int64) error {
 		}
 	}
 
-	affectedUserIDs, err := s.groupRepo.DeleteCascade(ctx, id)
+	var affectedUserIDs []int64
+	var err error
+	if requireEmpty {
+		affectedUserIDs, err = s.emptyGroupDeleteRepo.DeleteCascadeIfEmpty(ctx, id)
+	} else {
+		affectedUserIDs, err = s.groupRepo.DeleteCascade(ctx, id)
+	}
 	if err != nil {
 		return err
 	}
@@ -3131,6 +3294,9 @@ func (s *adminServiceImpl) GetGroupAPIKeys(ctx context.Context, groupID int64, p
 }
 
 func (s *adminServiceImpl) GetGroupRateMultipliers(ctx context.Context, groupID int64) ([]UserGroupRateEntry, error) {
+	if err := s.ValidateSimpleModeGroupOperation(AdminGroupOperationMultiplier); err != nil {
+		return nil, err
+	}
 	if s.userGroupRateRepo == nil {
 		return nil, nil
 	}
@@ -3138,6 +3304,9 @@ func (s *adminServiceImpl) GetGroupRateMultipliers(ctx context.Context, groupID 
 }
 
 func (s *adminServiceImpl) ClearGroupRateMultipliers(ctx context.Context, groupID int64) error {
+	if err := s.ValidateSimpleModeGroupOperation(AdminGroupOperationMultiplier); err != nil {
+		return err
+	}
 	if s.userGroupRateRepo == nil {
 		return nil
 	}
@@ -3145,6 +3314,9 @@ func (s *adminServiceImpl) ClearGroupRateMultipliers(ctx context.Context, groupI
 }
 
 func (s *adminServiceImpl) BatchSetGroupRateMultipliers(ctx context.Context, groupID int64, entries []GroupRateMultiplierInput) error {
+	if err := s.ValidateSimpleModeGroupOperation(AdminGroupOperationMultiplier); err != nil {
+		return err
+	}
 	if s.userGroupRateRepo == nil {
 		return nil
 	}
@@ -3157,6 +3329,9 @@ func (s *adminServiceImpl) BatchSetGroupRateMultipliers(ctx context.Context, gro
 }
 
 func (s *adminServiceImpl) ClearGroupRPMOverrides(ctx context.Context, groupID int64) error {
+	if err := s.ValidateSimpleModeGroupOperation(AdminGroupOperationRPMOverride); err != nil {
+		return err
+	}
 	if s.userGroupRateRepo == nil {
 		return nil
 	}
@@ -3171,6 +3346,9 @@ func (s *adminServiceImpl) ClearGroupRPMOverrides(ctx context.Context, groupID i
 }
 
 func (s *adminServiceImpl) BatchSetGroupRPMOverrides(ctx context.Context, groupID int64, entries []GroupRPMOverrideInput) error {
+	if err := s.ValidateSimpleModeGroupOperation(AdminGroupOperationRPMOverride); err != nil {
+		return err
+	}
 	if s.userGroupRateRepo == nil {
 		return nil
 	}
@@ -3190,6 +3368,9 @@ func (s *adminServiceImpl) BatchSetGroupRPMOverrides(ctx context.Context, groupI
 }
 
 func (s *adminServiceImpl) UpdateGroupSortOrders(ctx context.Context, updates []GroupSortOrderUpdate) error {
+	if err := s.ValidateSimpleModeGroupOperation(AdminGroupOperationSort); err != nil {
+		return err
+	}
 	return s.groupRepo.UpdateSortOrders(ctx, updates)
 }
 
@@ -3389,6 +3570,11 @@ func (s *adminServiceImpl) ReplaceUserGroup(ctx context.Context, userID, oldGrou
 
 // Account management implementations
 func (s *adminServiceImpl) ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search, model string, groupID int64, privacyMode string, sortBy, sortOrder string) ([]Account, int64, error) {
+	if groupID > 0 {
+		if err := s.ValidateAccountGroupBindings(ctx, []int64{groupID}); err != nil {
+			return nil, 0, err
+		}
+	}
 	params := pagination.PaginationParams{Page: page, PageSize: pageSize, SortBy: sortBy, SortOrder: sortOrder}
 	accounts, result, err := s.accountRepo.ListWithFilters(ctx, params, platform, accountType, status, search, model, groupID, privacyMode)
 	if err != nil {
@@ -3456,6 +3642,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
+	if err := ValidateUpstreamRequestIDHeaderExtra(accountExtra); err != nil {
+		return nil, err
+	}
 	if input.Platform == PlatformGrok && input.Type == AccountTypeOAuth {
 		input.Extra = accountExtra
 		input.Credentials = EnrichGrokOAuthCredentials(input.Credentials)
@@ -3498,8 +3687,14 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err := NormalizeHeaderOverrideCredentials(input.Credentials); err != nil {
 		return nil, err
 	}
+	if err := NormalizeOpenCodeGoProtocolRulesCredentials(input.Credentials); err != nil {
+		return nil, err
+	}
 	account, err := buildAccountForCreate(input, accountExtra)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.ValidateAccountGroupBindings(ctx, groupIDs); err != nil {
 		return nil, err
 	}
 	if input.AnthropicStableIdentity {
@@ -3663,6 +3858,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		if err != nil {
 			return nil, err
 		}
+		if err := ValidateUpstreamRequestIDHeaderExtra(normalizedExtra); err != nil {
+			return nil, err
+		}
 	}
 	previousProbeIdentity := upstreamBillingProbeIdentity(account)
 	previousOllamaUsageIdentity := ollamaCloudUsageIdentity(account)
@@ -3711,6 +3909,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		// 全对象 PUT 编辑时不会再带回 token，避免覆盖时清空已有凭证。
 		account.Credentials = MergePreservingSensitiveCreds(account.Credentials, input.Credentials)
 		if err := NormalizeHeaderOverrideCredentials(account.Credentials); err != nil {
+			return nil, err
+		}
+		if err := NormalizeOpenCodeGoProtocolRulesCredentials(account.Credentials); err != nil {
 			return nil, err
 		}
 	}
@@ -3885,6 +4086,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	// 先验证分组是否存在（在任何写操作之前）
 	if input.GroupIDs != nil {
 		if err := s.validateGroupIDsExist(ctx, *input.GroupIDs); err != nil {
+			return nil, err
+		}
+		if err := s.ValidateAccountGroupBindings(ctx, *input.GroupIDs); err != nil {
 			return nil, err
 		}
 
@@ -4085,6 +4289,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		if err := s.validateGroupIDsExist(ctx, *input.GroupIDs); err != nil {
 			return nil, err
 		}
+		if err := s.ValidateAccountGroupBindings(ctx, *input.GroupIDs); err != nil {
+			return nil, err
+		}
 	}
 
 	needMixedChannelCheck := input.GroupIDs != nil && !input.SkipMixedChannelCheck
@@ -4175,6 +4382,10 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	// 影子账号绝不持有凭据:批量更新携带凭据时,目标中不得含影子(外审 G5,与单账号
 	// UpdateAccount 守卫对齐)。覆盖显式 IDs 与 filter 解析出的 IDs(此处 AccountIDs 已解析完成)。
 	if len(input.Credentials) > 0 {
+		// 官方 242907854：OpenCode Go 协议规则凭证归一化（与 Create/Update 同一收口）。
+		if err := NormalizeOpenCodeGoProtocolRulesCredentials(input.Credentials); err != nil {
+			return nil, err
+		}
 		for _, acc := range cachedTargets {
 			if acc != nil && acc.IsCredentialShadow() {
 				return nil, infraerrors.Newf(http.StatusBadRequest, "SPARK_SHADOW_NO_CREDENTIALS",
@@ -4566,6 +4777,10 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 		}
 	}
 
+	if err := s.ValidateAccountGroupBindings(ctx, groupIDs); err != nil {
+		return nil, err
+	}
+
 	// 4. 构造影子账号（安全不变量：Credentials 恒不含 auth token，仅含 model_mapping）。
 	// name 为空时默认 "<母账号名> (Spark)"——否则空 name 会在 ent(name NotEmpty)处变成裸 500
 	// (外审 E/P2);并 rune 安全截断到 ent MaxLen(100)。
@@ -4699,6 +4914,9 @@ func (s *adminServiceImpl) GetProxiesByIDs(ctx context.Context, ids []int64) ([]
 }
 
 func (s *adminServiceImpl) CreateProxy(ctx context.Context, input *CreateProxyInput) (*Proxy, error) {
+	if !isJSONTimeInRange(input.ExpiresAt) {
+		return nil, infraerrors.BadRequest("PROXY_EXPIRY_INVALID", "proxy expiry year must be between 0 and 9999")
+	}
 	// 规范化 fallback_mode
 	mode := input.FallbackMode
 	if mode == "" {
@@ -4740,28 +4958,34 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	anthropicStableIdentityAdminMu.Lock()
 	defer anthropicStableIdentityAdminMu.Unlock()
 
+	if !isJSONTimeInRange(input.ExpiresAt) {
+		return nil, infraerrors.BadRequest("PROXY_EXPIRY_INVALID", "proxy expiry year must be between 0 and 9999")
+	}
 	// 校验：backup_proxy_id 不能是自身
 	if input.BackupProxyID != nil && *input.BackupProxyID == id {
 		return nil, infraerrors.BadRequest("PROXY_BACKUP_SELF", "backup proxy cannot be itself")
 	}
-	// 规范化 fallback_mode
-	mode := input.FallbackMode
-	if mode == "" {
-		mode = FallbackModeNone
-	}
-	// 校验：mode=proxy 必须有 backup
-	if mode == FallbackModeProxy && input.BackupProxyID == nil {
-		return nil, infraerrors.BadRequest("PROXY_BACKUP_REQUIRED", "backup proxy required when fallback_mode=proxy")
-	}
-	if input.ExpiryWarnDays < 0 {
-		return nil, infraerrors.BadRequest("PROXY_WARN_DAYS_INVALID", "expiry_warn_days must be >= 0")
-	}
-
 	proxy, err := s.proxyRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	originalProxy := *proxy
+
+	// Merge only supplied fields, then validate the resulting fallback configuration.
+	mode := proxy.FallbackMode
+	if input.FallbackMode != "" {
+		mode = input.FallbackMode
+	}
+	backupID := proxy.BackupProxyID
+	if input.BackupProxyID != nil || input.ClearBackupID {
+		backupID = input.BackupProxyID
+	}
+	if mode == FallbackModeProxy && backupID == nil {
+		return nil, infraerrors.BadRequest("PROXY_BACKUP_REQUIRED", "backup proxy required when fallback_mode=proxy")
+	}
+	if input.ExpiryWarnDays != nil && *input.ExpiryWarnDays < 0 {
+		return nil, infraerrors.BadRequest("PROXY_WARN_DAYS_INVALID", "expiry_warn_days must be >= 0")
+	}
 
 	if input.Name != "" {
 		proxy.Name = input.Name
@@ -4775,20 +4999,23 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	if input.Port != 0 {
 		proxy.Port = input.Port
 	}
-	if input.Username != "" {
-		proxy.Username = input.Username
+	if input.Username != nil {
+		proxy.Username = *input.Username
 	}
-	if input.Password != "" {
-		proxy.Password = input.Password
+	if input.Password != nil {
+		proxy.Password = *input.Password
 	}
 	if input.Status != "" {
 		proxy.Status = input.Status
 	}
-	// 透传有效期与回退字段
-	proxy.ExpiresAt = input.ExpiresAt
+	if input.ExpiresAt != nil || input.ClearExpiresAt {
+		proxy.ExpiresAt = input.ExpiresAt
+	}
 	proxy.FallbackMode = mode
-	proxy.BackupProxyID = input.BackupProxyID
-	proxy.ExpiryWarnDays = input.ExpiryWarnDays
+	proxy.BackupProxyID = backupID
+	if input.ExpiryWarnDays != nil {
+		proxy.ExpiryWarnDays = *input.ExpiryWarnDays
+	}
 
 	if err := s.ensureAnthropicStableIdentityProxyUpdateAllowed(ctx, &originalProxy, proxy); err != nil {
 		return nil, err
@@ -5352,6 +5579,35 @@ func (s *adminServiceImpl) validateGroupIDsExist(ctx context.Context, groupIDs [
 	for _, groupID := range groupIDs {
 		if _, err := s.groupRepo.GetByID(ctx, groupID); err != nil {
 			return fmt.Errorf("get group: %w", err)
+		}
+	}
+	return nil
+}
+
+// ValidateAccountGroupBindings is the shared fail-closed policy boundary for
+// every account path that accepts explicit group bindings.
+func (s *adminServiceImpl) ValidateAccountGroupBindings(ctx context.Context, groupIDs []int64) error {
+	if len(groupIDs) == 0 || s.cfg == nil || s.cfg.RunMode != config.RunModeSimple {
+		return nil
+	}
+	if s.groupRepo == nil {
+		return errors.New("group repository not configured")
+	}
+	seen := make(map[int64]struct{}, len(groupIDs))
+	for _, groupID := range groupIDs {
+		if groupID <= 0 {
+			return fmt.Errorf("get group: %w", ErrGroupNotFound)
+		}
+		if _, ok := seen[groupID]; ok {
+			continue
+		}
+		seen[groupID] = struct{}{}
+		group, err := s.groupRepo.GetByIDLite(ctx, groupID)
+		if err != nil {
+			return fmt.Errorf("get group: %w", err)
+		}
+		if !IsGroupBindableInSimpleMode(group) {
+			return infraerrors.BadRequest("SIMPLE_MODE_GROUP_NOT_BINDABLE", "composite groups cannot be bound in simple mode")
 		}
 	}
 	return nil

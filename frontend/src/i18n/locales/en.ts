@@ -659,6 +659,7 @@ const baseMessages = {
   // Common
   common: {
     previous: 'Previous',
+    login: 'Login',
     loading: 'Loading...',
     submitting: 'Submitting...',
     justNow: 'just now',
@@ -875,7 +876,8 @@ const baseMessages = {
     docs: 'Docs',
     sora: 'Sora Studio',
     serviceStatus: 'Service Status',
-    riskControl: 'Risk Control'
+    riskControl: 'Risk Control',
+    payment: 'Payment'
   },
 
   // Auth
@@ -921,6 +923,8 @@ const baseMessages = {
     captchaVerified: 'Verified',
     captchaVerifying: 'Verifying...',
     verifyYourEmail: 'Verify Your Email',
+    emailVerifyPageTitle: 'Verify Email',
+    dingtalkEmailCompletionPageTitle: 'DingTalk Email Completion',
     sessionExpired: 'Session expired',
     sessionExpiredDesc: 'Please go back to the registration page and start again.',
     verificationCode: 'Verification Code',
@@ -959,6 +963,7 @@ const baseMessages = {
     invitationCodeInvalidCannotRegister: 'Invalid invitation code. Please check and try again',
     oauthOrContinue: 'or continue with email',
     linuxdo: {
+      linuxdoCallbackPageTitle: 'Linux.do Sign-In Callback',
       signIn: 'Continue with Linux.do',
       orContinue: 'or continue with email',
       callbackTitle: 'Signing you in',
@@ -973,10 +978,15 @@ const baseMessages = {
       completing: 'Completing registration…',
       completeRegistrationFailed: 'Registration failed. Please check your invitation code and try again.'
     },
+    wechat: {
+      callbackTitle: 'WeChat Sign-In Callback',
+      wechatCallbackPageTitle: 'WeChat Sign-In Callback'
+    },
     emailOAuth: {
       signIn: 'Continue with {providerName}'
     },
     oidc: {
+      oidcCallbackPageTitle: 'OIDC Sign-In Callback',
       signIn: 'Continue with {providerName}',
       callbackTitle: 'Signing you in with {providerName}',
       callbackProcessing: 'Completing login with {providerName}, please wait...',
@@ -993,6 +1003,7 @@ const baseMessages = {
     dingtalkProviderName: 'DingTalk',
     oauth: {
       callbackTitle: 'OAuth Callback',
+      oauthCallbackPageTitle: 'OAuth Callback',
       callbackHint: 'Copy the code and state back to the admin authorization flow when needed.',
       invalidCallbackTitle: 'Invalid sign-in callback',
       invalidCallbackHint:
@@ -1032,6 +1043,7 @@ const baseMessages = {
     },
     wechatPayment: {
       callbackTitle: 'Completing WeChat payment',
+      wechatPaymentCallbackPageTitle: 'WeChat Payment Callback',
       callbackProcessing: 'Confirming payment result, please wait...',
       callbackMissingResumeToken:
         'Missing payment callback information. Please return to the payment page and try again.',
@@ -3266,6 +3278,14 @@ const baseMessages = {
         enabled: 'Enabled',
         disabled: 'Disabled',
         disabledHint: 'Routing rules will only take effect when enabled',
+      claudeMaxSimulation: {
+        title: 'Claude Max usage simulation',
+        tooltip:
+          'When enabled, for Claude models whose upstream usage has no cache-write tokens, the system deterministically maps tokens into a small input portion plus 1h cache creation while keeping the total token count unchanged.',
+        enabled: 'Enabled (simulates 1h cache)',
+        disabled: 'Disabled',
+        hint: 'Only adjusts token categories in usage billing logs. Per-request mapping state is not persisted.'
+      },
         addRule: 'Add Routing Rule',
         modelPattern: 'Model Pattern',
         modelPatternPlaceholder: 'claude-opus-*',
@@ -4158,6 +4178,9 @@ const baseMessages = {
       crsBack: 'Back',
       editAccount: 'Edit Account',
       deleteAccount: 'Delete Account',
+      deleteConfirmMessage: "Are you sure you want to delete account '{name}'?",
+      refreshCookie: 'Refresh Cookie',
+      testAccount: 'Test Account',
       searchAccounts: 'Search accounts...',
       notes: 'Notes',
       notesPlaceholder: 'Enter notes',
@@ -4187,6 +4210,8 @@ const baseMessages = {
 
       },
       types: {
+        api_key: 'API Key',
+        cookie: 'Cookie',
         oauth: 'OAuth',
         chatgptOauth: 'ChatGPT OAuth',
         responsesApi: 'Responses API',
@@ -4457,6 +4482,39 @@ const baseMessages = {
       createSparkShadowConfirm: 'Create a spark shadow account linked to "{name}"? It shares the parent\'s credentials and serves only spark models.',
       createSparkShadowSuccess: 'Spark shadow account created',
       createSparkShadowFailed: 'Failed to create spark shadow account',
+      form: {
+        nameLabel: 'Account Name',
+        namePlaceholder: 'Enter account name',
+        platformLabel: 'Platform',
+        selectPlatform: 'Select platform',
+        typeLabel: 'Type',
+        selectType: 'Select type',
+        credentialsLabel: 'Credentials',
+        credentialsPlaceholder: 'Enter Cookie or API Key',
+        priorityLabel: 'Priority',
+        priorityHint: 'Lower values have higher priority',
+        weightLabel: 'Weight',
+        weightHint: 'Weight value used for load balancing',
+        statusLabel: 'Status'
+      },
+      filters: {
+        platform: 'Platform',
+        allPlatforms: 'All Platforms',
+        type: 'Type',
+        allTypes: 'All Types',
+        status: 'Status',
+        allStatuses: 'All Statuses'
+      },
+      saving: 'Saving...',
+      refreshing: 'Refreshing...',
+      noAccounts: 'No accounts',
+      noAccountsDescription: 'Add AI platform accounts to start using the API gateway.',
+      accountCreatedSuccess: 'Account added successfully',
+      accountUpdatedSuccess: 'Account updated successfully',
+      accountDeletedSuccess: 'Account deleted successfully',
+      cookieRefreshedSuccess: 'Cookie refreshed successfully',
+      testSuccess: 'Account test passed',
+      failedToSave: 'Failed to save account',
       resetStatus: 'Reset Status',
       statusReset: 'Account status reset successfully',
       failedToResetStatus: 'Failed to reset account status',

@@ -417,5 +417,3 @@ func generateUUIDFromSeed(seed string) string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x",
 		bytes[0:4], bytes[4:6], bytes[6:8], bytes[8:10], bytes[10:16])
 }
-
-

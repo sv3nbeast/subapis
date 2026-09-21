@@ -377,7 +377,7 @@ func (h *GatewayHandler) handleResponsesFailoverExhausted(c *gin.Context, lastEr
 		}
 		status, code, message := h.resolveFailoverExhaustedError(c, lastErr, service.PlatformAnthropic)
 		service.MarkOpsStreamError(c, code, message, status)
-		writeResponsesFailedSSE(c, code, sanitizeClientErrorMessage(status, message))
+		writeResponsesFailedSSE(c, code, "", sanitizeClientErrorMessage(status, message))
 		return
 	}
 	status, code, message := h.resolveFailoverExhaustedError(c, lastErr, service.PlatformAnthropic)

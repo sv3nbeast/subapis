@@ -876,7 +876,7 @@ func TestAPIContracts(t *testing.T) {
 					"force_email_on_third_party_signup": false,
 					"default_concurrency": 5,
 					"default_balance": 1.25,
-					"default_platform_quotas": {"anthropic":{"daily":null,"weekly":null,"monthly":null},"antigravity":{"daily":null,"weekly":null,"monthly":null},"deepseek":{"daily":null,"weekly":null,"monthly":null},"droid":{"daily":null,"weekly":null,"monthly":null},"gemini":{"daily":null,"weekly":null,"monthly":null},"grok":{"daily":null,"weekly":null,"monthly":null},"kimi":{"daily":null,"weekly":null,"monthly":null},"kiro":{"daily":null,"weekly":null,"monthly":null},"openai":{"daily":null,"weekly":null,"monthly":null},"zhipu":{"daily":null,"weekly":null,"monthly":null}},
+					"default_platform_quotas": {"anthropic":{"daily":null,"weekly":null,"monthly":null},"antigravity":{"daily":null,"weekly":null,"monthly":null},"cursor":{"daily":null,"weekly":null,"monthly":null},"deepseek":{"daily":null,"weekly":null,"monthly":null},"droid":{"daily":null,"weekly":null,"monthly":null},"gemini":{"daily":null,"weekly":null,"monthly":null},"grok":{"daily":null,"weekly":null,"monthly":null},"kimi":{"daily":null,"weekly":null,"monthly":null},"kiro":{"daily":null,"weekly":null,"monthly":null},"minimax":{"daily":null,"weekly":null,"monthly":null},"openai":{"daily":null,"weekly":null,"monthly":null},"opencode_go":{"daily":null,"weekly":null,"monthly":null},"zhipu":{"daily":null,"weekly":null,"monthly":null}},
 					"auth_source_default_email_platform_quotas": null,
 					"auth_source_default_github_platform_quotas": null,
 					"auth_source_default_google_platform_quotas": null,
@@ -974,8 +974,10 @@ func TestAPIContracts(t *testing.T) {
 					"channel_monitor_mode": "v1",
 					"channel_monitor_hide_throughput": true,
 					"channel_monitor_show_quota": false,
+					"channel_monitor_hide_user_ranking": false,
 					"channel_monitor_default_interval_seconds": 60,
 					"available_channels_enabled": false,
+					"subscription_enabled": true,
 					"model_plaza_enabled": false,
 					"model_plaza_require_auth": false,
 					"model_plaza_description": "",
@@ -1156,7 +1158,7 @@ func TestAPIContracts(t *testing.T) {
 					"purchase_subscription_url": "",
 					"table_default_page_size": 20,
 					"table_page_size_options": [10, 20, 50],
-					"default_platform_quotas": {"anthropic":{"daily":null,"weekly":null,"monthly":null},"antigravity":{"daily":null,"weekly":null,"monthly":null},"deepseek":{"daily":null,"weekly":null,"monthly":null},"droid":{"daily":null,"weekly":null,"monthly":null},"gemini":{"daily":null,"weekly":null,"monthly":null},"grok":{"daily":null,"weekly":null,"monthly":null},"kimi":{"daily":null,"weekly":null,"monthly":null},"kiro":{"daily":null,"weekly":null,"monthly":null},"openai":{"daily":null,"weekly":null,"monthly":null},"zhipu":{"daily":null,"weekly":null,"monthly":null}},
+					"default_platform_quotas": {"anthropic":{"daily":null,"weekly":null,"monthly":null},"antigravity":{"daily":null,"weekly":null,"monthly":null},"cursor":{"daily":null,"weekly":null,"monthly":null},"deepseek":{"daily":null,"weekly":null,"monthly":null},"droid":{"daily":null,"weekly":null,"monthly":null},"gemini":{"daily":null,"weekly":null,"monthly":null},"grok":{"daily":null,"weekly":null,"monthly":null},"kimi":{"daily":null,"weekly":null,"monthly":null},"kiro":{"daily":null,"weekly":null,"monthly":null},"minimax":{"daily":null,"weekly":null,"monthly":null},"openai":{"daily":null,"weekly":null,"monthly":null},"opencode_go":{"daily":null,"weekly":null,"monthly":null},"zhipu":{"daily":null,"weekly":null,"monthly":null}},
 					"auth_source_default_email_platform_quotas": null,
 					"auth_source_default_github_platform_quotas": null,
 					"auth_source_default_google_platform_quotas": null,
@@ -1250,8 +1252,10 @@ func TestAPIContracts(t *testing.T) {
 					"channel_monitor_mode": "v1",
 					"channel_monitor_hide_throughput": true,
 					"channel_monitor_show_quota": false,
+					"channel_monitor_hide_user_ranking": false,
 					"channel_monitor_default_interval_seconds": 60,
 					"available_channels_enabled": false,
+					"subscription_enabled": true,
 					"model_plaza_enabled": false,
 					"model_plaza_require_auth": false,
 					"model_plaza_description": "",
@@ -1382,10 +1386,14 @@ func currentSystemSettingsContractJSON(t *testing.T, base string) string {
 		"kimi":        emptyQuota(),
 		"zhipu":       emptyQuota(),
 		"deepseek":    emptyQuota(),
+		"minimax":     emptyQuota(),
+		"opencode_go": emptyQuota(),
 	}
 
 	for key, value := range map[string]any{
-		"account_scheduling_thresholds":                                map[string]any{"openai": 100, "anthropic": 100, "grok": 100, "kimi": 100, "zhipu": 100},
+		"account_scheduling_thresholds":                                map[string]any{"openai": 100, "anthropic": 100, "grok": 100, "kimi": 100, "zhipu": 100, "minimax": 100, "opencode_go": 100},
+		"enable_kiro_operator_instructions":                            true,
+		"kiro_operator_instructions":                                   "",
 		"openai_ttft_mode":                                             "semantic",
 		"affiliate_admin_recharge_enabled":                             false,
 		"audit_log_retention_days":                                     float64(180),
@@ -1517,7 +1525,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	settingRepo := newStubSettingRepo()
 	settingService := service.NewSettingService(settingRepo, cfg)
 
-	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	adminService := service.NewAdminService(nil, userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil, redeemService, nil, nil)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	usageHandler := handler.NewUsageHandler(usageService, apiKeyService, nil, nil)
@@ -1810,6 +1818,14 @@ func (stubGroupRepo) Create(ctx context.Context, group *service.Group) error {
 	return errors.New("not implemented")
 }
 
+func (stubGroupRepo) FindByDuplicateOperationID(ctx context.Context, operationID string) (*service.Group, error) {
+	return nil, nil
+}
+
+func (stubGroupRepo) CreateFromSource(ctx context.Context, group *service.Group, sourceGroupID int64) error {
+	return errors.New("not implemented")
+}
+
 func (stubGroupRepo) GetByID(ctx context.Context, id int64) (*service.Group, error) {
 	return nil, service.ErrGroupNotFound
 }
@@ -1827,6 +1843,10 @@ func (stubGroupRepo) Delete(ctx context.Context, id int64) error {
 }
 
 func (stubGroupRepo) DeleteCascade(ctx context.Context, id int64) ([]int64, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (stubGroupRepo) DeleteCascadeIfEmpty(ctx context.Context, id int64) ([]int64, error) {
 	return nil, errors.New("not implemented")
 }
 
@@ -2984,7 +3004,7 @@ var (
 	_ service.UserRepository             = (*stubUserRepo)(nil)
 	_ service.APIKeyRepository           = (*stubApiKeyRepo)(nil)
 	_ service.APIKeyCache                = (*stubApiKeyCache)(nil)
-	_ service.GroupRepository            = (*stubGroupRepo)(nil)
+	_ service.AdminGroupRepository       = (*stubGroupRepo)(nil)
 	_ service.UserSubscriptionRepository = (*stubUserSubscriptionRepo)(nil)
 	_ service.UsageLogRepository         = (*stubUsageLogRepo)(nil)
 	_ service.SettingRepository          = (*stubSettingRepo)(nil)

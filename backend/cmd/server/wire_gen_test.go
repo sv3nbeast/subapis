@@ -96,6 +96,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // statusProbeService
 		nil, // channelMonitorRunner
 		nil, // webChatDocuments
+		nil, // webChat
 		nil, // quotaFlusher
 		nil, // upstreamBillingProbe
 		nil, // ollamaCloudUsage

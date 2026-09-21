@@ -39,3 +39,18 @@ func canonicalUpstreamUserAgentForForm(form UAForm) string {
 	}
 	return claude.PlainCLICanonicalUserAgent
 }
+
+// billingUserAgentForWire 返回 x-anthropic-billing-header 的 cc_version 应对齐的 User-Agent。
+//
+// 官方 effectiveBillingUserAgent 的语义是"passthrough 沿用缓存指纹 UA"；本地出站 UA
+// 由 applyClaudeUpstreamUserAgent 在 builder 末尾统一覆写为 claudeUpstreamUserAgent(ctx)
+// （canonical 模板或后台覆写值），缓存指纹 UA 也已被 applyCanonicalToFingerprint 拉回
+// canonical。因此 OAuth 路径下唯一的真相就是 wire UA：直接与之同源，指纹统一关闭
+// （fingerprint == nil）或后台覆写 UA 时 cc_version 也不会与真实 User-Agent 脱节。
+// 非 OAuth 路径沿用官方语义（无指纹则不改写 billing）。
+func (s *GatewayService) billingUserAgentForWire(ctx context.Context, tokenType string, mimicClaudeCode bool, fingerprint *Fingerprint) string {
+	if tokenType == "oauth" {
+		return s.claudeUpstreamUserAgent(ctx)
+	}
+	return effectiveBillingUserAgent(tokenType, mimicClaudeCode, fingerprint)
+}

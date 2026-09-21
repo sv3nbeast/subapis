@@ -67,6 +67,9 @@ func TestGrokMediaGenerationEligibility(t *testing.T) {
 	}
 }
 
+// 本地 Grok 媒体资格对 billing_inconclusive 保持 fail-closed（de94a8d3d：付费凭证
+// 才放行，不确定仍拒），官方 a77423066 改为放行未采纳；对应官方用例
+// “inconclusive successful billing remains eligible” 与本用例官方版断言不适用。
 func TestGrokMediaCapabilityKeepsOnlyUnobservedOAuthAsProbeCandidate(t *testing.T) {
 	unobserved := &Account{Platform: PlatformGrok, Type: AccountTypeOAuth}
 	eligible, reason := unobserved.GrokMediaGenerationEligibility()

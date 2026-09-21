@@ -1,6 +1,10 @@
 package service
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+)
 
 func lastOpenAIModelSegment(model string) string {
 	model = strings.TrimSpace(model)
@@ -15,38 +19,7 @@ func lastOpenAIModelSegment(model string) string {
 }
 
 func canonicalizeOpenAIModelAliasSpelling(model string) string {
-	model = strings.ToLower(lastOpenAIModelSegment(model))
-	if model == "" {
-		return ""
-	}
-
-	normalized := strings.ReplaceAll(model, "_", "-")
-	normalized = strings.Join(strings.Fields(normalized), "-")
-	for strings.Contains(normalized, "--") {
-		normalized = strings.ReplaceAll(normalized, "--", "-")
-	}
-
-	if strings.HasPrefix(normalized, "gpt5") {
-		normalized = "gpt-5" + strings.TrimPrefix(normalized, "gpt5")
-	}
-	if !strings.HasPrefix(normalized, "gpt-") && !strings.Contains(normalized, "codex") {
-		return ""
-	}
-
-	replacements := []struct {
-		from string
-		to   string
-	}{
-		{"gpt-5.4mini", "gpt-5.4-mini"},
-		{"gpt-5.4nano", "gpt-5.4-nano"},
-		{"gpt-5.3-codexspark", "gpt-5.3-codex-spark"},
-		{"gpt-5.3codexspark", "gpt-5.3-codex-spark"},
-		{"gpt-5.3codex", "gpt-5.3-codex"},
-	}
-	for _, replacement := range replacements {
-		normalized = strings.ReplaceAll(normalized, replacement.from, replacement.to)
-	}
-	return normalized
+	return openai.CanonicalizeOpenAIModelAliasSpelling(model)
 }
 
 func normalizeKnownOpenAICodexModel(model string) string {
@@ -65,6 +38,8 @@ func normalizeKnownOpenAICodexModel(model string) string {
 	}
 
 	switch {
+	case normalized == "gpt-6" || normalized == "gpt-6-astra":
+		return "gpt-6-astra"
 	case strings.Contains(normalized, "gpt-5.6-sol"):
 		return "gpt-5.6-sol"
 	case strings.Contains(normalized, "gpt-5.6-terra"):
@@ -122,6 +97,17 @@ func isOpenAIGPT56Model(model string) bool {
 		}
 	}
 	return false
+}
+
+// isOpenAIGPT6AstraModel reports the canonical GPT-6 Astra model (provider
+// prefixes are stripped by the shared spelling normalization) and the official
+// public "gpt-6" alias. Astra has one model ID: reasoning effort belongs in the
+// request parameters, never in a synthetic model suffix, and future
+// "gpt-6-astra-*" variants (effort/pro/ultra/dated) must not be silently mapped
+// to Astra's upstream model or price (local 7fd084688 + migration 236).
+func isOpenAIGPT6AstraModel(model string) bool {
+	normalized := canonicalizeOpenAIModelAliasSpelling(model)
+	return normalized == "gpt-6" || normalized == "gpt-6-astra"
 }
 
 func appendUsageBillingModelCandidate(candidates []string, seen map[string]struct{}, model string) []string {

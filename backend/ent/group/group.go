@@ -136,8 +136,10 @@ const (
 	FieldDefaultMappedModel = "default_mapped_model"
 	// FieldMessagesDispatchModelConfig holds the string denoting the messages_dispatch_model_config field in the database.
 	FieldMessagesDispatchModelConfig = "messages_dispatch_model_config"
-	// FieldModelsListConfig holds the string denoting the models_list_config field in the database.
-	FieldModelsListConfig = "models_list_config"
+	// FieldModelAllowlist holds the string denoting the model_allowlist field in the database.
+	FieldModelAllowlist = "model_allowlist"
+	// FieldCodexModelsManifestConfig holds the string denoting the codex_models_manifest_config field in the database.
+	FieldCodexModelsManifestConfig = "codex_models_manifest_config"
 	// FieldGrokChatUpstreamMode holds the string denoting the grok_chat_upstream_mode field in the database.
 	FieldGrokChatUpstreamMode = "grok_chat_upstream_mode"
 	// FieldGrokChatResponsesGrayPercent holds the string denoting the grok_chat_responses_gray_percent field in the database.
@@ -313,7 +315,8 @@ var Columns = []string{
 	FieldRequirePrivacySet,
 	FieldDefaultMappedModel,
 	FieldMessagesDispatchModelConfig,
-	FieldModelsListConfig,
+	FieldModelAllowlist,
+	FieldCodexModelsManifestConfig,
 	FieldGrokChatUpstreamMode,
 	FieldGrokChatResponsesGrayPercent,
 	FieldRpmLimit,
@@ -463,8 +466,10 @@ var (
 	DefaultMappedModelValidator func(string) error
 	// DefaultMessagesDispatchModelConfig holds the default value on creation for the "messages_dispatch_model_config" field.
 	DefaultMessagesDispatchModelConfig domain.OpenAIMessagesDispatchModelConfig
-	// DefaultModelsListConfig holds the default value on creation for the "models_list_config" field.
-	DefaultModelsListConfig domain.GroupModelsListConfig
+	// DefaultModelAllowlist holds the default value on creation for the "model_allowlist" field.
+	DefaultModelAllowlist domain.GroupModelAllowlist
+	// DefaultCodexModelsManifestConfig holds the default value on creation for the "codex_models_manifest_config" field.
+	DefaultCodexModelsManifestConfig domain.GroupCodexModelsManifestConfig
 	// DefaultGrokChatUpstreamMode holds the default value on creation for the "grok_chat_upstream_mode" field.
 	DefaultGrokChatUpstreamMode string
 	// GrokChatUpstreamModeValidator is a validator for the "grok_chat_upstream_mode" field. It is called by the builders before save.

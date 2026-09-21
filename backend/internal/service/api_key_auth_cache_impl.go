@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 23 // v23: include shared subscription model quota groups
+const apiKeyAuthSnapshotVersion = 25 // v25: local v23 shared subscription model quota groups + official v24 group model_allowlist/codex_models_manifest_config (renamed from models_list_config)
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -424,7 +424,8 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			AllowNonStreamMessages:          groupForSnapshot.AllowNonStreamMessages,
 			DefaultMappedModel:              groupForSnapshot.DefaultMappedModel,
 			MessagesDispatchModelConfig:     groupForSnapshot.MessagesDispatchModelConfig,
-			ModelsListConfig:                groupForSnapshot.ModelsListConfig,
+			ModelAllowlist:                  groupForSnapshot.ModelAllowlist,
+			CodexModelsManifestConfig:       groupForSnapshot.CodexModelsManifestConfig,
 			KiroCacheEmulationEnabled:       groupForSnapshot.KiroCacheEmulationEnabled,
 			KiroAutoStickyEnabled:           groupForSnapshot.EffectiveKiroAutoStickyEnabled(),
 			KiroStickySessionTTLSeconds:     groupForSnapshot.EffectiveKiroStickySessionTTLSeconds(),
@@ -541,7 +542,8 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			AllowNonStreamMessages:          snapshot.Group.AllowNonStreamMessages,
 			DefaultMappedModel:              snapshot.Group.DefaultMappedModel,
 			MessagesDispatchModelConfig:     snapshot.Group.MessagesDispatchModelConfig,
-			ModelsListConfig:                snapshot.Group.ModelsListConfig,
+			ModelAllowlist:                  snapshot.Group.ModelAllowlist,
+			CodexModelsManifestConfig:       snapshot.Group.CodexModelsManifestConfig,
 			KiroCacheEmulationEnabled:       snapshot.Group.KiroCacheEmulationEnabled,
 			KiroAutoStickyEnabled:           snapshot.Group.KiroAutoStickyEnabled,
 			KiroStickySessionTTLSeconds:     snapshot.Group.KiroStickySessionTTLSeconds,
