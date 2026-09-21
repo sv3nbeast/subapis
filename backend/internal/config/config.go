@@ -1597,6 +1597,14 @@ type GatewayKiroResilienceConfig struct {
 	UnresponsiveCooldownMaxSecs  int     `mapstructure:"unresponsive_cooldown_max_seconds"`
 	UnresponsiveFailureThreshold int     `mapstructure:"unresponsive_failure_threshold"`
 	UnresponsiveFailureWindowSec int     `mapstructure:"unresponsive_failure_window_seconds"`
+	// Cooldown429Seconds 控制 Kiro 上游 429（USER_REQUEST_RATE_EXCEEDED 等短时
+	// per-user 限速）是否让账号进入临时冷却（Redis fail_count 递增 + DB
+	// rate_limit_reset_at 同步，会把账号从调度快照摘除）。
+	//   0（默认）= 429 不做任何账号级冷却标记，交给请求内退避与 failover 处理；
+	//   >0      = 恢复冷却标记，作为首次冷却时长（秒），仍按 fail_count 指数递增。
+	// 背景（2026-09-21）：共享 Kiro 池只剩少量活跃账号时，60s 冷却会让全员同时
+	// 缺席，混合池被掏空。月度配额（402）与 suspended（403）标记不受本开关影响。
+	Cooldown429Seconds int `mapstructure:"cooldown_429_seconds"`
 }
 
 func (s *ServerConfig) Address() string {
@@ -2470,6 +2478,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.kiro_resilience.unresponsive_cooldown_max_seconds", 120)
 	viper.SetDefault("gateway.kiro_resilience.unresponsive_failure_threshold", 2)
 	viper.SetDefault("gateway.kiro_resilience.unresponsive_failure_window_seconds", 120)
+	viper.SetDefault("gateway.kiro_resilience.cooldown_429_seconds", 0)
 	// New installations and upgrades use the pinned nianzs implementation for
 	// every Kiro request. Operators can atomically roll back with
 	// GATEWAY_KIRO_ENGINE=legacy (and an empty canary allowlist).

@@ -478,6 +478,15 @@ gateway:
     # A single ambiguous timeout is soft evidence; repeated failures in this window open the credential circuit.
     unresponsive_failure_threshold: 2
     unresponsive_failure_window_seconds: 120
+    # Upstream 429 (per-user short rate limit) account-level cooldown.
+    # 0 (default) = never pause the account on 429; the request just fails over
+    # to another account. Set > 0 to restore the exponential cooldown, using
+    # this value as the first step in seconds.
+    # Kiro 上游 429（短时 per-user 限速）的账号级冷却开关。
+    # 0（默认）= 429 不冷却账号，只在本次请求内切号；共享池账号少时可避免全员
+    # 同时缺席。设为 >0 可恢复指数退避冷却，该值为首次冷却秒数。
+    # 402 月度配额与 403 suspended 的标记不受本开关影响。
+    cooldown_429_seconds: 0
   # Scheduling configuration
   # 调度配置
   scheduling:

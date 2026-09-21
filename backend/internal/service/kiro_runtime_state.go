@@ -200,9 +200,25 @@ func (s *GatewayService) markKiroSuccessPreservingCooldown(ctx context.Context, 
 	return s.kiroCooldownStore.MarkSuccess(ctx, tokenKey)
 }
 
+// kiro429CooldownBase 返回 429 账号级冷却的首次时长与是否启用。
+// gateway.kiro_resilience.cooldown_429_seconds = 0（默认）表示禁用。
+func (s *GatewayService) kiro429CooldownBase() (time.Duration, bool) {
+	if s == nil || s.cfg == nil {
+		return 0, false
+	}
+	secs := s.cfg.Gateway.KiroResilience.Cooldown429Seconds
+	if secs <= 0 {
+		return 0, false
+	}
+	return time.Duration(secs) * time.Second, true
+}
+
 func (s *GatewayService) markKiro429(ctx context.Context, tokenKey string) (time.Duration, error) {
 	if s == nil || s.kiroCooldownStore == nil {
 		return 0, errKiroCooldownStoreUnavailable
+	}
+	if _, enabled := s.kiro429CooldownBase(); !enabled {
+		return 0, nil
 	}
 	return s.kiroCooldownStore.Mark429(ctx, tokenKey)
 }
@@ -210,6 +226,9 @@ func (s *GatewayService) markKiro429(ctx context.Context, tokenKey string) (time
 func (s *GatewayService) markKiro429WithRetryAfter(ctx context.Context, tokenKey string, retryAfter time.Duration) (time.Duration, error) {
 	if s == nil || s.kiroCooldownStore == nil {
 		return 0, errKiroCooldownStoreUnavailable
+	}
+	if _, enabled := s.kiro429CooldownBase(); !enabled {
+		return 0, nil
 	}
 	if extended, ok := s.kiroCooldownStore.(kiroCooldownRetryAfterStore); ok {
 		return extended.Mark429WithRetryAfter(ctx, tokenKey, retryAfter)
@@ -373,6 +392,22 @@ func (s *GatewayService) markKiroAccount429(ctx context.Context, account *Accoun
 		return 0
 	}
 	retryAfter := kiroRetryAfterDuration(headers, time.Now())
+	if _, enabled := s.kiro429CooldownBase(); !enabled {
+		// 与 markKiroAccountUnresponsive 同策略：只给本次请求一个 retry-after 提示，
+		// 不写账号级冷却（Redis fail_count / rate_limit_reset_at），由 failover 换号。
+		if retryAfter <= 0 {
+			retryAfter = defaultKiro429SoftPause
+		}
+		slog.Info("kiro_429_account_pause_skipped",
+			"request_id", resolveUsageBillingRequestID(ctx, ""),
+			"group_id", derefGroupID(groupID),
+			"account_id", account.ID,
+			"retry_after_ms", retryAfter.Milliseconds(),
+			"confirmed_exhaustion", confirmedExhaustion,
+			"policy", "request_failover_only",
+		)
+		return retryAfter
+	}
 	mode := s.kiroResilienceMode(groupID)
 	if !s.kiroResilienceEnforced(groupID) {
 		if mode != "off" {

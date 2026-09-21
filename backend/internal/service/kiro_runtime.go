@@ -3019,7 +3019,14 @@ func (s *GatewayService) handleKiroHTTPError(ctx context.Context, resp *http.Res
 			Kind:               "failover",
 			Message:            upstreamMsg,
 		})
-		if s.rateLimitService != nil {
+		// 429 关闭账号级冷却时（cooldown_429_seconds=0，默认），不能再走通用
+		// handle429 → apply429FallbackRateLimit：那会把 DB rate_limit_reset_at
+		// 写成 5s，账号照样被踢出调度快照。
+		skip429RateLimit := resp.StatusCode == http.StatusTooManyRequests
+		if _, enabled := s.kiro429CooldownBase(); enabled {
+			skip429RateLimit = false
+		}
+		if s.rateLimitService != nil && !skip429RateLimit {
 			s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
 		}
 		statusCode := resp.StatusCode

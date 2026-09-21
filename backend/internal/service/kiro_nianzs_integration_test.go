@@ -2758,6 +2758,9 @@ func TestNianzsRuntime429UsesIsolatedCooldownWithoutSameAccountLoop(t *testing.T
 	svc := &GatewayService{
 		cfg: &config.Config{Gateway: config.GatewayConfig{
 			KiroEngine: config.KiroEngineNianzs,
+			// 本用例覆盖「429 冷却开启时」的 keyspace 隔离；生产默认关闭，
+			// 见 TestNianzsRuntime429WithCooldownDisabledWritesNoState。
+			KiroResilience: config.GatewayKiroResilienceConfig{Cooldown429Seconds: 60},
 		}},
 		httpUpstream:            upstream,
 		kiroCooldownStore:       dualStore,
@@ -2786,6 +2789,52 @@ func TestNianzsRuntime429UsesIsolatedCooldownWithoutSameAccountLoop(t *testing.T
 	require.NotNil(t, nianzsState)
 	require.True(t, nianzsState.Active)
 	require.Equal(t, nianzscooldown.CooldownReason429, nianzsState.Reason)
+	legacyState, err := dualStore.legacy.GetState(context.Background(), key)
+	require.NoError(t, err)
+	require.Nil(t, legacyState)
+}
+
+// 生产默认（cooldown_429_seconds=0）：429 仍然把响应交还给账号 failover，
+// 但两个 keyspace 都不留冷却状态，账号继续留在调度快照里。
+func TestNianzsRuntime429WithCooldownDisabledWritesNoState(t *testing.T) {
+	redisServer := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	t.Cleanup(func() { require.NoError(t, redisClient.Close()) })
+	dualStore := newDualKiroCooldownStore(redisClient)
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"message":"slow down"}`)),
+	}}
+	svc := &GatewayService{
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			KiroEngine: config.KiroEngineNianzs,
+		}},
+		httpUpstream:            upstream,
+		kiroCooldownStore:       dualStore,
+		nianzsKiroCooldownStore: dualStore.nianzs,
+		tlsFPProfileService:     &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID: 1804, Name: "nianzs-429-nocooldown", Platform: PlatformKiro,
+		Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+	}
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`)
+
+	resp, _, err := svc.executeKiroUpstreamWithParsedNianzs(
+		context.Background(), account, nil, body, "claude-sonnet-4-6", "claude-sonnet-4-6", "oauth-token", nil,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	require.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
+	require.Len(t, upstream.requests, 1)
+	key := nianzsBuildKiroAccountKey(account)
+	nianzsState, err := dualStore.nianzs.GetState(context.Background(), key)
+	require.NoError(t, err)
+	require.Nil(t, nianzsState, "429 关冷却时不得写入 nianzs keyspace")
 	legacyState, err := dualStore.legacy.GetState(context.Background(), key)
 	require.NoError(t, err)
 	require.Nil(t, legacyState)

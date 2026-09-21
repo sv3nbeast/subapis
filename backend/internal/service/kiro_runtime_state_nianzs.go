@@ -27,6 +27,13 @@ type NianzsKiroCooldownStore interface {
 	ClearEarliestTransientCooldown(ctx context.Context, tokenKeys []string) (bool, error)
 }
 
+// nianzsKiroCooldownBaseStore 是 NianzsKiroCooldownStore 的可选能力：允许调用方
+// 指定首次冷却时长（对应 gateway.kiro_resilience.cooldown_429_seconds）。未实现
+// 该能力的实现回退到 Mark429 的内置 ShortCooldown。
+type nianzsKiroCooldownBaseStore interface {
+	Mark429WithBase(ctx context.Context, tokenKey string, base time.Duration) (time.Duration, error)
+}
+
 func nianzsAsKiroCooldownFailoverError(err error) *UpstreamFailoverError {
 	if err == nil {
 		return nil
@@ -82,7 +89,22 @@ func (s *GatewayService) markKiro429Nianzs(ctx context.Context, accountID int64,
 	if s == nil || s.nianzsKiroCooldownStore == nil {
 		return 0, nianzsErrKiroCooldownStoreUnavailable
 	}
-	cooldown, err := s.nianzsKiroCooldownStore.Mark429(ctx, tokenKey)
+	base, enabled := s.kiro429CooldownBase()
+	if !enabled {
+		// 运维决策（2026-09-21）：短时 429 不做账号级冷却——共享 Kiro 池只剩少量
+		// 活跃账号时，逐个 60s 冷却会让全员同时缺席、混合池被掏空。重试与切号
+		// 由请求内退避 + failover 承担；月度 402 与 suspended 403 不走本函数。
+		return 0, nil
+	}
+	var (
+		cooldown time.Duration
+		err      error
+	)
+	if extended, ok := s.nianzsKiroCooldownStore.(nianzsKiroCooldownBaseStore); ok {
+		cooldown, err = extended.Mark429WithBase(ctx, tokenKey, base)
+	} else {
+		cooldown, err = s.nianzsKiroCooldownStore.Mark429(ctx, tokenKey)
+	}
 	if err != nil {
 		return 0, err
 	}

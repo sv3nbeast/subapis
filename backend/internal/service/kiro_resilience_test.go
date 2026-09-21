@@ -277,6 +277,10 @@ func enforcedKiroResilienceTestService() *GatewayService {
 			CleanupGraceSeconds:          3,
 			UnresponsiveCooldownSeconds:  30,
 			UnresponsiveCooldownMaxSecs:  120,
+			// 这些用例专门覆盖 429 账号级冷却机制，必须显式打开开关：
+			// 生产默认 Cooldown429Seconds=0（关闭），由
+			// TestKiro429DefaultConfigNeverPausesAccount 等用例覆盖。
+			Cooldown429Seconds: 60,
 		},
 	}}}
 }

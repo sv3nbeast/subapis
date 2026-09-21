@@ -78,6 +78,10 @@ func (s *nianzsKiroCooldownKeyspaceStore) Mark429(ctx context.Context, tokenKey 
 	return s.inner.Mark429(ctx, nianzsKiroCooldownKey(tokenKey))
 }
 
+func (s *nianzsKiroCooldownKeyspaceStore) Mark429WithBase(ctx context.Context, tokenKey string, base time.Duration) (time.Duration, error) {
+	return s.inner.Mark429WithBase(ctx, nianzsKiroCooldownKey(tokenKey), base)
+}
+
 func (s *nianzsKiroCooldownKeyspaceStore) MarkSuspended(ctx context.Context, tokenKey string) (time.Duration, error) {
 	return s.inner.MarkSuspended(ctx, nianzsKiroCooldownKey(tokenKey))
 }

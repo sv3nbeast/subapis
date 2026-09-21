@@ -196,8 +196,17 @@ func (s *Store) MarkSuccess(ctx context.Context, tokenKey string) error {
 }
 
 func (s *Store) Mark429(ctx context.Context, tokenKey string) (time.Duration, error) {
+	return s.Mark429WithBase(ctx, tokenKey, ShortCooldown)
+}
+
+// Mark429WithBase 以调用方指定的首次冷却时长记录一次 429（仍按 fail_count 指数
+// 递增、MaxCooldown 封顶）。base <= 0 时回退默认 ShortCooldown。
+func (s *Store) Mark429WithBase(ctx context.Context, tokenKey string, base time.Duration) (time.Duration, error) {
 	if err := s.validate(); err != nil {
 		return 0, err
+	}
+	if base <= 0 {
+		base = ShortCooldown
 	}
 	cacheCtx, cancel := withRedisTimeout(ctx)
 	defer cancel()
@@ -205,7 +214,7 @@ func (s *Store) Mark429(ctx context.Context, tokenKey string) (time.Duration, er
 		cacheCtx,
 		s.client,
 		[]string{RedisKey(tokenKey)},
-		ShortCooldown.Milliseconds(),
+		base.Milliseconds(),
 		MaxCooldown.Milliseconds(),
 		stateTTL.Milliseconds(),
 		CooldownReason429,
