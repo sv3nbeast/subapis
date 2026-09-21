@@ -5823,7 +5823,11 @@ func (s *GatewayService) countHiddenRateLimitedSupporters(
 		if acc.TempUnschedulableUntil != nil && now.Before(*acc.TempUnschedulableUntil) {
 			continue
 		}
-		if !s.isAccountAllowedForPlatform(acc, platform, allowMixedScheduling) {
+		// anthropic/gemini 的单平台选号往往是 Kiro→Anthropic 强制回退等派生路径，
+		// 回退的根因正是混合池账号全员冷却；对这两个原生平台始终按混合口径
+		// 统计隐藏账号，否则回退失败仍会被误报成永久性 400。
+		effectiveMixed := allowMixedScheduling || platform == PlatformAnthropic || platform == PlatformGemini
+		if !s.isAccountAllowedForPlatform(acc, platform, effectiveMixed) {
 			continue
 		}
 		if !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {

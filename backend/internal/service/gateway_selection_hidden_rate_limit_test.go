@@ -76,6 +76,12 @@ func TestSelectionFailureCountsHiddenRateLimitedSupporters(t *testing.T) {
 	summary := summarizeSelectionFailureStats(stats)
 	require.True(t, strings.Contains(summary, "model_rate_limited=1"), summary)
 
+	// Kiro→Anthropic 强制回退走单平台选号（allowMixedScheduling=false），
+	// 隐藏统计对 anthropic 原生平台仍须按混合口径计入冷却中的 Kiro 账号。
+	statsForced := svc.logDetailedSelectionFailure(
+		context.Background(), &groupID, "", "claude-opus-4-8", PlatformAnthropic, visible, nil, false)
+	require.Equal(t, 1, statsForced.ModelRateLimited, "forced-platform fallback must still count cooling supporters")
+
 	// 纯不支持场景不受影响：没有隐藏限流账号时保持 0。
 	statsFable := svc.logDetailedSelectionFailure(
 		context.Background(), &groupID, "", "claude-fable-5-2", PlatformAnthropic, visible, nil, true)
