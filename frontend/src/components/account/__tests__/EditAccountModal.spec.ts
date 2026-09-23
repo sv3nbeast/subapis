@@ -1819,6 +1819,39 @@ describe('EditAccountModal', () => {
     expect(credentials?.provider).toBe('Enterprise')
   })
 
+  it('clears a Kiro OAuth generation API key only after the field is explicitly edited', async () => {
+    const account = buildKiroOAuthAccount()
+    account.credentials_status = { has_kiro_api_key: true }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="kiro-generation-api-key-input"]').setValue('')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
+    expect(credentials?.kiro_api_key).toBeNull()
+  })
+
+  it('does not clear a redacted Kiro OAuth generation API key when the field is untouched', async () => {
+    const account = buildKiroOAuthAccount()
+    account.credentials_status = { has_kiro_api_key: true }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
+    expect(credentials).not.toHaveProperty('kiro_api_key')
+  })
+
   it('clears the Kiro OAuth API region override without changing the IDC region', async () => {
     const account = buildKiroOAuthAccount()
     updateAccountMock.mockReset()

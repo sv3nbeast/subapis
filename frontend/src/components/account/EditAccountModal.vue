@@ -855,6 +855,7 @@
             class="input font-mono"
             placeholder="ksk_..."
             autocomplete="off"
+            @input="editKiroGenerationAPIKeyTouched = true"
             data-testid="kiro-generation-api-key-input"
           />
           <p class="input-hint">{{ t('admin.accounts.kiro.generationApiKeyEditHint') }}</p>
@@ -3503,6 +3504,10 @@ const kiroCacheEmulationRatio = ref(1)
 const editKiroAuthRegion = ref('')
 const editKiroAPIRegion = ref('')
 const editKiroGenerationAPIKey = ref('')
+// The field is intentionally blank because the stored key is redacted. Track
+// an explicit user edit so an untouched field preserves the existing secret,
+// while clearing it can be represented as a deliberate deletion.
+const editKiroGenerationAPIKeyTouched = ref(false)
 const showKiroAuthRegion = computed(() => {
   if (!isKiroOAuthAccount.value) return false
   const credentials = props.account?.credentials as Record<string, unknown> | undefined
@@ -4320,6 +4325,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   editKiroAPIRegion.value =
     isKiroDirect && typeof credentials?.api_region === 'string' ? credentials.api_region.trim() : ''
   editKiroGenerationAPIKey.value = ''
+  editKiroGenerationAPIKeyTouched.value = false
   autoPauseOnExpired.value = newAccount.auto_pause_on_expired === true
   editVertexProjectId.value = ''
   editVertexClientEmail.value = ''
@@ -5858,8 +5864,12 @@ const handleSubmit = async () => {
       }
 
       const generationAPIKey = editKiroGenerationAPIKey.value.trim()
-      if (generationAPIKey) {
+      if (editKiroGenerationAPIKeyTouched.value && generationAPIKey) {
         newCredentials.kiro_api_key = generationAPIKey
+      } else if (editKiroGenerationAPIKeyTouched.value) {
+        // Explicit null distinguishes "clear this secret" from an omitted,
+        // redacted field that must continue preserving the existing secret.
+        newCredentials.kiro_api_key = null
       }
 
       const modelMapping = buildModelMappingObject('mapping', [], modelMappings.value)

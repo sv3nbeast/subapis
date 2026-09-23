@@ -57,3 +57,30 @@ func TestUpdateAccountPreservesSensitiveCredsWhenIncomingOmits(t *testing.T) {
 	require.Equal(t, "ksk-existing", repo.account.Credentials["kiro_api_key"])
 	require.Equal(t, "https://new.example.com", repo.account.Credentials["base_url"])
 }
+
+func TestUpdateAccountExplicitlyClearsKiroAPIKey(t *testing.T) {
+	accountID := int64(203)
+	repo := &updateAccountCredsRegularRepoStub{
+		account: &Account{
+			ID:       accountID,
+			Platform: PlatformKiro,
+			Type:     AccountTypeOAuth,
+			Status:   StatusActive,
+			Credentials: map[string]any{
+				"refresh_token": "rt-existing",
+				"kiro_api_key":  "ksk-existing",
+				"kiroApiKey":    "ksk-legacy-existing",
+			},
+		},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	_, err := svc.UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
+		Credentials: map[string]any{"kiro_api_key": nil},
+	})
+
+	require.NoError(t, err)
+	require.NotContains(t, repo.account.Credentials, "kiro_api_key")
+	require.NotContains(t, repo.account.Credentials, "kiroApiKey")
+	require.Equal(t, "rt-existing", repo.account.Credentials["refresh_token"])
+}

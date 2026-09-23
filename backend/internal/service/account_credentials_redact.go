@@ -27,18 +27,28 @@ func IsSensitiveCredentialKey(key string) bool {
 }
 
 // MergePreservingSensitiveCreds 把 incoming 写入 existing 之上，但敏感子键采用"incoming 没提供就保留 existing"
-// 的语义。返回新的 map，不修改入参。
+// 的语义。敏感子键显式传 null 表示删除。返回新的 map，不修改入参。
 //
 // 用途：前端编辑账号通常采用"全对象 PUT"模式；脱敏后前端 spread 旧 credentials 时不会带上敏感键，
 // 直接覆盖会清空已有 token。此函数保证：
 //   - 非敏感键：完全由 incoming 决定（用户可以编辑、删除非敏感字段）。
-//   - 敏感键：incoming 显式提供则覆盖（用户主动旋转 token），否则保留 existing。
+//   - 敏感键：incoming 显式提供非 null 值则覆盖（用户主动旋转 token），显式 null 则删除，否则保留 existing。
 func MergePreservingSensitiveCreds(existing, incoming map[string]any) map[string]any {
 	out := make(map[string]any, len(incoming)+len(SensitiveCredentialKeys))
+	explicitDeletes := make(map[string]struct{})
 	for k, v := range incoming {
+		if IsSensitiveCredentialKey(k) && v == nil {
+			for _, deleteKey := range sensitiveCredentialDeletionKeys(k) {
+				explicitDeletes[deleteKey] = struct{}{}
+			}
+			continue
+		}
 		out[k] = v
 	}
 	for _, key := range SensitiveCredentialKeys {
+		if _, explicitlyDeleted := explicitDeletes[key]; explicitlyDeleted {
+			continue
+		}
 		if _, hasIncoming := incoming[key]; hasIncoming {
 			continue
 		}
@@ -47,4 +57,15 @@ func MergePreservingSensitiveCreds(existing, incoming map[string]any) map[string
 		}
 	}
 	return out
+}
+
+// sensitiveCredentialDeletionKeys keeps legacy aliases from silently reviving
+// a credential after the canonical field was explicitly cleared.
+func sensitiveCredentialDeletionKeys(key string) []string {
+	switch key {
+	case "kiro_api_key", "kiroApiKey":
+		return []string{"kiro_api_key", "kiroApiKey"}
+	default:
+		return []string{key}
+	}
 }
