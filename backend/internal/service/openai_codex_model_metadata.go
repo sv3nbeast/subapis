@@ -63,7 +63,10 @@ func accountCodexToolCapabilities(account *Account, modelID string) map[string]j
 	parsed, err := url.Parse(baseURL)
 	official := err == nil && (strings.EqualFold(parsed.Hostname(), "api.openai.com") ||
 		(account.IsOpenAIOAuth() && strings.EqualFold(parsed.Hostname(), "chatgpt.com")))
-	if account.IsOpenAI() && isOpenAIGPT6AstraModel(modelID) && official {
+	// 2026-09-23 实测上游 Codex manifest：Astra / Sol / Luna 三者的这组能力值完全一致
+	// （supports_search_tool=true、apply_patch_tool_type=freeform、comp_hash=3000、
+	// OAuth 下 tool_mode=code_mode_only、use_responses_lite=true）。
+	if account.IsOpenAI() && isOpenAIGPT6Model(modelID) && official {
 		defaults := map[string]json.RawMessage{
 			"supports_search_tool":  json.RawMessage("true"),
 			"apply_patch_tool_type": json.RawMessage(`"freeform"`),

@@ -37,6 +37,30 @@ var (
 		SupportsServiceTier: true, SupportsPromptCaching: true,
 		LiteLLMProvider: "openai", Mode: "chat",
 	}
+	// GPT-6 Sol / Luna 官方价（2026-09-22 发布，2026-09-23 取自官方 pricing 页）：
+	// Sol $2 / $0.2 / $2.5 / $10，Luna $0.1 / $0.01 / $0.125 / $0.5（USD per MTok，
+	// 依次为 input / cache read / cache write / output）。>272K 输入时 input 与 cache
+	// 档 ×2、output ×1.5；Fast ×2。
+	openAIGPT6SolFallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken: 2e-6, OutputCostPerToken: 10e-6,
+		CacheCreationInputTokenCost: 2.5e-6, CacheReadInputTokenCost: 0.2e-6,
+		InputCostPerTokenPriority: 4e-6, OutputCostPerTokenPriority: 20e-6,
+		CacheCreationInputTokenCostPriority: 5e-6, CacheReadInputTokenCostPriority: 0.4e-6,
+		LongContextInputTokenThreshold: 272000,
+		LongContextInputCostMultiplier: 2, LongContextOutputCostMultiplier: 1.5,
+		SupportsServiceTier: true, SupportsPromptCaching: true,
+		LiteLLMProvider: "openai", Mode: "chat",
+	}
+	openAIGPT6LunaFallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken: 0.1e-6, OutputCostPerToken: 0.5e-6,
+		CacheCreationInputTokenCost: 0.125e-6, CacheReadInputTokenCost: 0.01e-6,
+		InputCostPerTokenPriority: 0.2e-6, OutputCostPerTokenPriority: 1e-6,
+		CacheCreationInputTokenCostPriority: 0.25e-6, CacheReadInputTokenCostPriority: 0.02e-6,
+		LongContextInputTokenThreshold: 272000,
+		LongContextInputCostMultiplier: 2, LongContextOutputCostMultiplier: 1.5,
+		SupportsServiceTier: true, SupportsPromptCaching: true,
+		LiteLLMProvider: "openai", Mode: "chat",
+	}
 	openAIModelDatePattern     = regexp.MustCompile(`-\d{8}$`)
 	openAIModelBasePattern     = regexp.MustCompile(`^(gpt-\d+(?:\.\d+)?)(?:-|$)`)
 	claudeFamilyVersionPattern = regexp.MustCompile(`^claude-(opus|sonnet|haiku)-(\d+)\.(\d+)(.*)$`)
@@ -1512,6 +1536,16 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 			Info(fmt.Sprintf("[Pricing] OpenAI fallback matched %s -> %s", model, "gpt-6-astra(static)"))
 		return openAIGPT6AstraFallbackPricing
 	}
+	if isOpenAIGPT6SolModel(model) {
+		logger.With(zap.String("component", "service.pricing")).
+			Info(fmt.Sprintf("[Pricing] OpenAI fallback matched %s -> %s", model, "gpt-6-sol(static)"))
+		return openAIGPT6SolFallbackPricing
+	}
+	if isOpenAIGPT6LunaModel(model) {
+		logger.With(zap.String("component", "service.pricing")).
+			Info(fmt.Sprintf("[Pricing] OpenAI fallback matched %s -> %s", model, "gpt-6-luna(static)"))
+		return openAIGPT6LunaFallbackPricing
+	}
 
 	if strings.HasPrefix(model, "gpt-5.6-sol") {
 		logger.With(zap.String("component", "service.pricing")).
@@ -1755,6 +1789,8 @@ func localChannelPricingModelNamesByProvider(provider string) []string {
 	case "openai":
 		return []string{
 			"gpt-6-astra",
+			"gpt-6-sol",
+			"gpt-6-luna",
 			"gpt-5.1",
 			"gpt-5.1-codex",
 			"gpt-5.2",

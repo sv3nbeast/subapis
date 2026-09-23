@@ -40,6 +40,10 @@ func normalizeKnownOpenAICodexModel(model string) string {
 	switch {
 	case normalized == "gpt-6" || normalized == "gpt-6-astra":
 		return "gpt-6-astra"
+	case normalized == "gpt-6-sol":
+		return "gpt-6-sol"
+	case normalized == "gpt-6-luna":
+		return "gpt-6-luna"
 	case strings.Contains(normalized, "gpt-5.6-sol"):
 		return "gpt-5.6-sol"
 	case strings.Contains(normalized, "gpt-5.6-terra"):
@@ -108,6 +112,27 @@ func isOpenAIGPT56Model(model string) bool {
 func isOpenAIGPT6AstraModel(model string) bool {
 	normalized := canonicalizeOpenAIModelAliasSpelling(model)
 	return normalized == "gpt-6" || normalized == "gpt-6-astra"
+}
+
+// isOpenAIGPT6SolModel / isOpenAIGPT6LunaModel follow Astra's rule: each GPT-6
+// model has exactly one official ID (live probe 2026-09-23 rejects every other
+// gpt-6-* spelling, including gpt-6-terra, with HTTP 400). Effort belongs in the
+// request parameters, so no synthetic effort/dated/pro suffix is accepted here.
+func isOpenAIGPT6SolModel(model string) bool {
+	return canonicalizeOpenAIModelAliasSpelling(model) == "gpt-6-sol"
+}
+
+func isOpenAIGPT6LunaModel(model string) bool {
+	return canonicalizeOpenAIModelAliasSpelling(model) == "gpt-6-luna"
+}
+
+// isOpenAIGPT6Model reports any verified GPT-6 family model. Used for the
+// shared GPT-6 wire contract (unsupported sampling parameters, prompt-cache
+// option shape) that the whole generation enforces. Effort handling still
+// differs per model and must not be derived from this helper: Astra rejects
+// "none", while Sol and Luna accept it.
+func isOpenAIGPT6Model(model string) bool {
+	return isOpenAIGPT6AstraModel(model) || isOpenAIGPT6SolModel(model) || isOpenAIGPT6LunaModel(model)
 }
 
 func appendUsageBillingModelCandidate(candidates []string, seen map[string]struct{}, model string) []string {

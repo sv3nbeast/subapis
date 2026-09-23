@@ -53,7 +53,7 @@ func TestAstraIndependentReasoningEffort(t *testing.T) {
 	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	for _, effort := range []string{"low", "medium", "high", "xhigh", "max"} {
 		body := []byte(`{"model":"gpt-6-astra","reasoning":{"effort":"` + effort + `"},"input":"hello","prompt_cache_key":"stable"}`)
-		normalized, changed, err := normalizeOpenAIAstraRequest(account, body)
+		normalized, changed, err := normalizeOpenAIGPT6Request(account, body)
 		require.NoError(t, err)
 		require.False(t, changed)
 		require.Equal(t, body, normalized)
@@ -66,7 +66,7 @@ func TestAstraIndependentReasoningEffort(t *testing.T) {
 func TestAstraWireNormalizationPreservesConversation(t *testing.T) {
 	a := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	body := []byte(`{"model":"gpt-6-astra","temperature":0.7,"top_p":0.9,"top_logprobs":2,"logprobs":true,"reasoning":{"effort":"none"},"prompt_cache_retention":"24h","prompt_cache_key":"stable","include":["message.output_text.logprobs","reasoning.encrypted_content"],"tools":[{"type":"function","name":"echo","async":true}],"input":[{"type":"configuration_update","reasoning":{"effort":"high"}},{"type":"message","role":"user","content":"prefix"}]}`)
-	normalized, changed, err := normalizeOpenAIAstraRequest(a, body)
+	normalized, changed, err := normalizeOpenAIGPT6Request(a, body)
 	require.NoError(t, err)
 	require.True(t, changed)
 	require.Equal(t, "low", gjson.GetBytes(normalized, "reasoning.effort").String())
@@ -77,14 +77,14 @@ func TestAstraWireNormalizationPreservesConversation(t *testing.T) {
 		require.JSONEq(t, gjson.GetBytes(body, f).Raw, gjson.GetBytes(normalized, f).Raw)
 	}
 	require.False(t, gjson.GetBytes(normalized, "prompt_cache_options").Exists())
-	apiBody, _, err := normalizeOpenAIAstraRequest(&Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, body)
+	apiBody, _, err := normalizeOpenAIGPT6Request(&Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, body)
 	require.NoError(t, err)
 	require.Equal(t, "30m", gjson.GetBytes(apiBody, "prompt_cache_options.ttl").String())
-	again, changed, err := normalizeOpenAIAstraRequest(a, normalized)
+	again, changed, err := normalizeOpenAIGPT6Request(a, normalized)
 	require.NoError(t, err)
 	require.False(t, changed)
 	require.Equal(t, normalized, again)
-	other, changed, err := normalizeOpenAIAstraRequest(&Account{Platform: PlatformKiro}, body)
+	other, changed, err := normalizeOpenAIGPT6Request(&Account{Platform: PlatformKiro}, body)
 	require.NoError(t, err)
 	require.False(t, changed)
 	require.Equal(t, body, other)
@@ -255,7 +255,7 @@ func BenchmarkAstraNativeRequestUnchanged(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, changed, err := normalizeOpenAIAstraRequest(a, body); changed || err != nil {
+		if _, changed, err := normalizeOpenAIGPT6Request(a, body); changed || err != nil {
 			b.Fatal(changed, err)
 		}
 	}

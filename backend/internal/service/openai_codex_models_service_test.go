@@ -374,15 +374,15 @@ func TestNewConfiguredCodexModelDescriptorUsesProviderMetadataAndSafeFallback(t 
 	// 本地设计（9f5e9a62c）：对外只广播输入可用余量 922K，而非官方的整窗 1,050,000。
 	// Codex 按 ≈90% 的 max_context_window 触发自动压缩，广播整窗会把压缩点推到
 	// ~945K，让会话长期停留在 >272K 的长上下文计费区间。
-	require.Equal(t, int64(configuredCodexGPT6AstraInputContext), gpt6Astra.ContextWindow)
-	require.Equal(t, int64(configuredCodexGPT6AstraInputContext), gpt6Astra.MaxContextWindow)
+	require.Equal(t, int64(configuredCodexGPT6InputContext), gpt6Astra.ContextWindow)
+	require.Equal(t, int64(configuredCodexGPT6InputContext), gpt6Astra.MaxContextWindow)
 	gpt6 := newConfiguredCodexModelDescriptor("gpt-6")
 	require.Equal(t, "GPT-6 (Astra)", gpt6.DisplayName)
 	require.True(t, strings.HasPrefix(strings.TrimSpace(gpt6.ModelMessages.InstructionsTemplate), "You are Codex, an agent based on GPT-6."))
 	require.Equal(t, []string{"low", "medium", "high", "xhigh", "max", "ultra"}, effortsFromConfiguredCodexLevels(gpt6.SupportedReasoningLevels))
 	require.NotNil(t, gpt6.MultiAgentReasoningEffort)
 	require.Equal(t, "xhigh", *gpt6.MultiAgentReasoningEffort)
-	require.Equal(t, int64(configuredCodexGPT6AstraInputContext), gpt6.ContextWindow)
+	require.Equal(t, int64(configuredCodexGPT6InputContext), gpt6.ContextWindow)
 
 	gpt55 := newConfiguredCodexModelDescriptor("gpt-5.5")
 	require.Equal(t, "GPT-5.5", gpt55.DisplayName)

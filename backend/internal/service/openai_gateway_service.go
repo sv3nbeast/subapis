@@ -4195,8 +4195,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			markPatchDelete("max_completion_tokens")
 		}
 		for _, unsupportedField := range []string{"prompt_cache_retention", "safety_identifier", "prompt_cache_options"} {
-			if account.IsOpenAIApiKey() && isOpenAIGPT6AstraModel(upstreamModel) && unsupportedField != "safety_identifier" {
-				continue // Astra uses prompt_cache_options; migrate legacy TTL at the wire boundary.
+			if account.IsOpenAIApiKey() && isOpenAIGPT6Model(upstreamModel) && unsupportedField != "safety_identifier" {
+				continue // GPT-6 uses prompt_cache_options; migrate legacy TTL at the wire boundary.
 			}
 			if gjson.GetBytes(body, unsupportedField).Exists() {
 				markPatchDelete(unsupportedField)
@@ -5355,7 +5355,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	}
 	targetURL = appendOpenAIResponsesRequestPathSuffix(targetURL, openAIResponsesRequestPathSuffix(c))
 	body = normalizeDeepSeekResponsesRequestBody(account, body)
-	if normalized, _, err := normalizeOpenAIAstraRequest(account, body); err != nil {
+	if normalized, _, err := normalizeOpenAIGPT6Request(account, body); err != nil {
 		return nil, err
 	} else {
 		body = normalized
@@ -6964,7 +6964,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	}
 	targetURL = appendOpenAIResponsesRequestPathSuffix(targetURL, openAIResponsesRequestPathSuffix(c))
 	body = normalizeDeepSeekResponsesRequestBody(account, body)
-	if normalized, _, err := normalizeOpenAIAstraRequest(account, body); err != nil {
+	if normalized, _, err := normalizeOpenAIGPT6Request(account, body); err != nil {
 		return nil, err
 	} else {
 		body = normalized
@@ -12179,7 +12179,8 @@ func normalizeOpenAIReasoningEffortForModel(raw, model string) string {
 }
 
 func supportsOpenAIReasoningEffortMax(model string) bool {
-	if isOpenAIGPT56Model(model) || isOpenAIGPT6AstraModel(model) {
+	// 2026-09-23 实测：Astra / Sol / Luna 的 reasoning.effort=max 均返回 200。
+	if isOpenAIGPT56Model(model) || isOpenAIGPT6Model(model) {
 		return true
 	}
 	normalized := strings.ToLower(lastOpenAIModelSegment(model))

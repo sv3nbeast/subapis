@@ -340,9 +340,9 @@ const (
 	configuredCodexGPT56MaxContext   = 872_000
 	// GPT-6 Astra 的整窗（OpenAI 公布值）与本地对外广播的输入可用余量。
 	// 两者刻意不同，原因见 newConfiguredCodexModelDescriptor 中的注释。
-	configuredCodexGPT6AstraContext      = 1_050_000
-	configuredCodexGPT6AstraInputContext = 922_000
-	configuredCodexToolOutputMaxTokens   = 10_000
+	configuredCodexGPT6Context         = 1_050_000
+	configuredCodexGPT6InputContext    = 922_000
+	configuredCodexToolOutputMaxTokens = 10_000
 )
 
 type configuredCodexReasoningLevel struct {
@@ -514,18 +514,23 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 			if isOpenAIGPT56Model(modelID) {
 				descriptor.MaxContextWindow = configuredCodexGPT56MaxContext
 			}
-			if isOpenAIGPT6AstraModel(modelID) {
-				// Codex resolves the Ultra workflow to this effort before inference.
-				// openai/codex a9896da3: codex-rs/models-manager/models.json.
-				multiAgentEffort := "xhigh"
-				descriptor.MultiAgentReasoningEffort = &multiAgentEffort
+			if isOpenAIGPT6Model(modelID) {
 				descriptor.MultiAgentVersion = "v2"
+				if isOpenAIGPT6AstraModel(modelID) {
+					// Codex resolves the Ultra workflow to this effort before inference.
+					// openai/codex a9896da3: codex-rs/models-manager/models.json.
+					// 上游 manifest（2026-09-23 实测）只有 Astra 带该字段，
+					// Sol / Luna 为 null，故不扩展到整族。
+					multiAgentEffort := "xhigh"
+					descriptor.MultiAgentReasoningEffort = &multiAgentEffort
+				}
 				// 本地设计（9f5e9a62c）：只广播输入可用余量，不广播官方的整窗
-				// configuredCodexGPT6AstraContext。Codex 客户端按 ≈90% 的
+				// configuredCodexGPT6Context。Codex 客户端按 ≈90% 的
 				// max_context_window 才触发自动压缩，广播整窗会把压缩点推到 ~945K，
 				// 使会话长期停留在 >272K 的长上下文计费区间。
-				descriptor.ContextWindow = configuredCodexGPT6AstraInputContext
-				descriptor.MaxContextWindow = configuredCodexGPT6AstraInputContext
+				// Sol / Luna 与 Astra 同为 1,050,000 整窗 / 922,000 最大输入，沿用同一策略。
+				descriptor.ContextWindow = configuredCodexGPT6InputContext
+				descriptor.MaxContextWindow = configuredCodexGPT6InputContext
 			}
 		}
 		if SupportsVerbosity(modelID) {
@@ -558,7 +563,10 @@ func configuredCodexServiceTiersForModel(modelID string) []configuredCodexServic
 }
 
 func configuredCodexSupportsPriorityServiceTier(modelID string) bool {
-	if isOpenAIGPT6AstraModel(modelID) {
+	// The GPT-6 family advertises Fast via service_tier=priority in public model
+	// metadata; the 2026-09-23 upstream Codex manifest carries a priority tier for
+	// Astra, Sol and Luna alike, and a live service_tier=priority probe returns 200.
+	if isOpenAIGPT6Model(modelID) {
 		return true
 	}
 	normalized := canonicalizeOpenAIModelAliasSpelling(modelID)
@@ -567,8 +575,7 @@ func configuredCodexSupportsPriorityServiceTier(modelID string) bool {
 			return true
 		}
 	}
-	// GPT-6 Astra advertises Fast via service_tier=priority in public model metadata.
-	return isOpenAIGPT6AstraModel(modelID)
+	return false
 }
 
 func configuredCodexSupportsUltrafastServiceTier(modelID string) bool {
@@ -631,13 +638,16 @@ func configuredCodexGPTReasoningLevels(modelID string) []configuredCodexReasonin
 		{Effort: "xhigh", Description: "Extra-high reasoning depth for difficult tasks"},
 	}
 	normalized := getNormalizedCodexModel(modelID)
-	if isOpenAIGPT56Model(modelID) || isOpenAIGPT6AstraModel(modelID) {
+	if isOpenAIGPT56Model(modelID) || isOpenAIGPT6Model(modelID) {
 		levels = append(levels, configuredCodexReasoningLevel{
 			Effort:      "max",
 			Description: "Maximum reasoning depth for complex tasks",
 		})
 	}
-	if isOpenAIGPT6AstraModel(modelID) || normalized == "gpt-5.6-sol" || normalized == "gpt-5.6-terra" {
+	// Ultra 只属于上游 manifest 明确声明的模型（2026-09-23 实测：Astra / Sol 有，
+	// Luna 没有）。未声明的模型广播 ultra 会让客户端发出上游拒绝的档位。
+	if isOpenAIGPT6AstraModel(modelID) || isOpenAIGPT6SolModel(modelID) ||
+		normalized == "gpt-5.6-sol" || normalized == "gpt-5.6-terra" {
 		levels = append(levels, configuredCodexReasoningLevel{
 			Effort:      "ultra",
 			Description: "Maximum reasoning with automatic task delegation",
@@ -656,12 +666,12 @@ func isOpenAICodexGPTModel(modelID string) bool {
 
 func isOpenAICodexReasoningGPTModel(modelID string) bool {
 	normalized := canonicalizeOpenAIModelAliasSpelling(modelID)
-	return isOpenAIGPT6AstraModel(normalized) || strings.HasPrefix(normalized, "gpt-5")
+	return isOpenAIGPT6Model(normalized) || strings.HasPrefix(normalized, "gpt-5")
 }
 
 func isOpenAICodexImageInputModel(modelID string) bool {
 	normalized := canonicalizeOpenAIModelAliasSpelling(modelID)
-	return isOpenAIGPT6AstraModel(normalized) ||
+	return isOpenAIGPT6Model(normalized) ||
 		strings.HasPrefix(normalized, "gpt-5") ||
 		strings.HasPrefix(normalized, "gpt-4o") ||
 		strings.HasPrefix(normalized, "gpt-4.1") ||
@@ -2022,6 +2032,8 @@ func CodexModelsManifestETag(body []byte) string {
 
 var apiKeyCodexModelsWithoutResponsesLite = map[string]struct{}{
 	"gpt-6-astra":   {},
+	"gpt-6-sol":     {},
+	"gpt-6-luna":    {},
 	"gpt-5.6-sol":   {},
 	"gpt-5.6-terra": {},
 	"gpt-5.6-luna":  {},

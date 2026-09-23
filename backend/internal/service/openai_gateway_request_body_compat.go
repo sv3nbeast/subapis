@@ -253,7 +253,7 @@ func normalizeOpenAIOAuthResponsesCompatibilityBody(body []byte) ([]byte, bool, 
 	}
 	normalized := body
 	changed := false
-	if next, astraChanged, err := normalizeOpenAIAstraRequest(&Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}, normalized); err != nil {
+	if next, astraChanged, err := normalizeOpenAIGPT6Request(&Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}, normalized); err != nil {
 		return body, false, err
 	} else {
 		normalized = next
@@ -367,7 +367,7 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Ac
 	}
 	normalized := body
 	changed := false
-	if next, astraChanged, err := normalizeOpenAIAstraRequest(account, normalized); err != nil {
+	if next, astraChanged, err := normalizeOpenAIGPT6Request(account, normalized); err != nil {
 		return body, false, err
 	} else {
 		normalized = next

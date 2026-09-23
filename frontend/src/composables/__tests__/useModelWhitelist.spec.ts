@@ -14,6 +14,20 @@ describe('useModelWhitelist', () => {
       expect.objectContaining({ from: 'gpt-6-astra', to: 'gpt-6-astra' })
     ]))
   })
+  it('exposes verified GPT-6 Sol/Luna on OpenAI only', () => {
+    // 2026-09-23 实测：ChatGPT OAuth Responses 接受两者并原样回显；
+    // Kiro generateAssistantResponse 对两者均返回 400 INVALID_MODEL_ID。
+    for (const model of ['gpt-6-sol', 'gpt-6-luna']) {
+      expect(getModelsByPlatform('openai')).toContain(model)
+      expect(getModelsByPlatform('kiro')).not.toContain(model)
+      expect(getPresetMappingsByPlatform('openai')).toEqual(expect.arrayContaining([
+        expect.objectContaining({ from: model, to: model })
+      ]))
+    }
+    // gpt-6-terra 不存在于上游，不得出现在任何平台列表里。
+    expect(getModelsByPlatform('openai')).not.toContain('gpt-6-terra')
+  })
+
   it('openai 模型列表包含 GPT-5.4 官方快照', () => {
     const models = getModelsByPlatform('openai')
 
