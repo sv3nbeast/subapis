@@ -2701,6 +2701,13 @@ readLoop:
 		}
 		lastEventType = eventType
 
+		// codex.rate_limits 是 WS 传输携带限流快照的唯一通道（HTTP 路径走 x-codex-* 头）。
+		// 这里只解析并记录数值与字段名，不写账号状态、不影响重试与调度决策——
+		// 生产实测该事件是 account 级限流拒绝的前导事件（见 openai_ws_ratelimits_observation.go）。
+		if eventType == openAIWSCodexRateLimitsEventType {
+			logOpenAIWSCodexRateLimitsObservation(account.ID, connID, eventCount, message)
+		}
+
 		if responseID == "" && eventResponseID != "" {
 			responseID = eventResponseID
 		}
