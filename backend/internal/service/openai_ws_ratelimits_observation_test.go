@@ -2,6 +2,8 @@ package service
 
 import (
 	"encoding/json"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -141,4 +143,113 @@ func TestOpenAIWSCodexRateLimitsEventTypeMatchesProductionSignature(t *testing.T
 	// 事件名经 parseOpenAIWSEventEnvelope 从 "type" 取出，需与常量一致。
 	eventType, _, _ := parseOpenAIWSEventEnvelope([]byte(`{"type":"codex.rate_limits"}`))
 	require.Equal(t, openAIWSCodexRateLimitsEventType, eventType)
+}
+
+// productionRateLimitsShape 复刻 2026-09-24 生产首批样本（账号 2678）已确认的结构：
+// 根 7 个键，rate_limits 下 4 个键（allowed/limit_reached/primary/secondary）。
+// 叶子字段名与值为构造数据；真实叶子字段名正是本次扩展要观测的对象。
+const productionRateLimitsShape = `{
+	"type": "codex.rate_limits",
+	"plan_type": "pro",
+	"rate_limits": {
+		"allowed": false,
+		"limit_reached": true,
+		"primary":   {"used_percent": 91, "window_minutes": 10080, "reset_after_seconds": 269097},
+		"secondary": null
+	},
+	"code_review_rate_limits": {"allowed": true, "limit_reached": false},
+	"additional_rate_limits": [],
+	"credits": {"has_credits": false, "unlimited": false, "balance": "0"},
+	"promo": {"message": "PROMO_TEXT_SHOULD_NOT_LEAK"}
+}`
+
+// TestCodexRateLimitsObservationAdmissionFields 固化准入字段的解析：
+// allowed / limit_reached 是上游对本请求能否被服务的显式决定。
+func TestCodexRateLimitsObservationAdmissionFields(t *testing.T) {
+	obs := parseOpenAIWSCodexRateLimitsObservation([]byte(productionRateLimitsShape))
+
+	require.NotNil(t, obs.Allowed)
+	require.False(t, *obs.Allowed)
+	require.NotNil(t, obs.LimitReached)
+	require.True(t, *obs.LimitReached)
+	require.Equal(t, "false", openAIWSFormatOptionalBool(obs.Allowed))
+	require.Equal(t, "true", openAIWSFormatOptionalBool(obs.LimitReached))
+
+	// 准入字段只认 rate_limits 下的值，不能被 code_review_rate_limits 的同名键覆盖。
+	require.True(t, *obs.LimitReached, "code_review_rate_limits.limit_reached=false 不得覆盖主窗口判定")
+}
+
+// TestCodexRateLimitsObservationSecondaryNullIsPresentButEmpty 固化生产样本里
+// secondary 解析出 "-" 的成因区分：键存在但为 null，与键缺失是两回事。
+func TestCodexRateLimitsObservationSecondaryNullIsPresentButEmpty(t *testing.T) {
+	obs := parseOpenAIWSCodexRateLimitsObservation([]byte(productionRateLimitsShape))
+
+	require.True(t, obs.PrimaryPresent)
+	require.True(t, obs.SecondaryPresent, "secondary=null 必须被识别为存在")
+	require.Nil(t, obs.SecondaryUsedPercent, "null 不得被解析成 0")
+
+	missing := parseOpenAIWSCodexRateLimitsObservation([]byte(`{"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":1}}}`))
+	require.False(t, missing.SecondaryPresent, "键缺失时必须报告不存在")
+}
+
+// TestCodexRateLimitsObservationKeyPathsRevealStructureWithoutContent 固化路径观测：
+// 结构完整可见，但任意字符串值只记长度。
+func TestCodexRateLimitsObservationKeyPathsRevealStructureWithoutContent(t *testing.T) {
+	obs := parseOpenAIWSCodexRateLimitsObservation([]byte(productionRateLimitsShape))
+	joined := joinOpenAIWSKeySample(obs.KeyPaths)
+
+	for _, want := range []string{
+		"type=codex.rate_limits",
+		"plan_type=pro",
+		"rate_limits.allowed=false",
+		"rate_limits.limit_reached=true",
+		"rate_limits.primary.used_percent=91",
+		"rate_limits.primary.window_minutes=10080",
+		"rate_limits.secondary=null",
+		"code_review_rate_limits.limit_reached=false",
+		"additional_rate_limits=[0]",
+		"credits.has_credits=false",
+		// balance 不在白名单：即使是 "0" 也只记长度。
+		"credits.balance=<string:1>",
+		"promo.message=<string:26>",
+	} {
+		require.Contains(t, joined, want)
+	}
+	require.NotContains(t, joined, "PROMO_TEXT_SHOULD_NOT_LEAK", "非白名单字符串值不得落盘")
+}
+
+// TestCodexRateLimitsObservationKeyPathsAreBounded 固化深度与条数上限，
+// 防止畸形载荷撑爆日志。
+func TestCodexRateLimitsObservationKeyPathsAreBounded(t *testing.T) {
+	// 深度：超过上限的对象以 {} 收尾，不再展开。
+	deep := `{"a":{"b":{"c":{"d":{"e":{"f":1}}}}}}`
+	obs := parseOpenAIWSCodexRateLimitsObservation([]byte(deep))
+	require.Equal(t, []string{"a.b.c.d={}"}, obs.KeyPaths)
+
+	// 条数：宽对象被截断到上限。
+	var wide strings.Builder
+	wide.WriteString(`{`)
+	for i := 0; i < 200; i++ {
+		if i > 0 {
+			wide.WriteString(",")
+		}
+		wide.WriteString(`"k` + strconv.Itoa(i) + `":` + strconv.Itoa(i))
+	}
+	wide.WriteString(`}`)
+	obs = parseOpenAIWSCodexRateLimitsObservation([]byte(wide.String()))
+	require.Len(t, obs.KeyPaths, openAIWSRateLimitsPathSampleLimit)
+
+	// 白名单键的明文值也有长度上限。
+	long := `{"plan_type":"` + strings.Repeat("x", 500) + `"}`
+	obs = parseOpenAIWSCodexRateLimitsObservation([]byte(long))
+	require.Len(t, obs.KeyPaths, 1)
+	require.LessOrEqual(t, len(obs.KeyPaths[0]), len("plan_type=")+openAIWSRateLimitsPathValueMaxRunes+len("..."))
+}
+
+// TestCodexRateLimitsObservationBoolOnlyAcceptsJSONBool 固化准入字段只接受 JSON 布尔。
+func TestCodexRateLimitsObservationBoolOnlyAcceptsJSONBool(t *testing.T) {
+	for _, raw := range []string{`"true"`, `1`, `null`, `{}`} {
+		obs := parseOpenAIWSCodexRateLimitsObservation([]byte(`{"rate_limits":{"limit_reached":` + raw + `}}`))
+		require.Nil(t, obs.LimitReached, "limit_reached=%s 不得被读成布尔", raw)
+	}
 }

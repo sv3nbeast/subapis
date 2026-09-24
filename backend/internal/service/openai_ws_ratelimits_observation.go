@@ -26,16 +26,39 @@ const (
 
 	// openAIWSRateLimitsKeySampleLimit 限制记录的键名个数，避免畸形载荷撑爆日志。
 	openAIWSRateLimitsKeySampleLimit = 24
+
+	// 递归路径观测的边界。生产实测（2026-09-24，账号 2678）该事件根对象有 7 个子对象
+	// （plan_type/rate_limits/code_review_rate_limits/additional_rate_limits/credits/promo），
+	// 需要知道嵌套结构才能确定窗口与额度字段的真实位置，因此记录受限的键路径。
+	// 深度与条数都必须有界，否则畸形载荷会用超长路径撑爆日志。
+	openAIWSRateLimitsPathDepthLimit    = 4
+	openAIWSRateLimitsPathSampleLimit   = 40
+	openAIWSRateLimitsPathValueMaxRunes = 48
 )
 
 // openAIWSCodexRateLimitsObservation 是一次 codex.rate_limits 事件的结构化观测结果。
 //
-// 只承载数值与键名，不承载提示内容、工具参数或任何用户数据。
+// 只承载数值、布尔与协议字段名，不承载提示内容、工具参数或任何用户数据。
 type openAIWSCodexRateLimitsObservation struct {
 	// RootKeys / PayloadKeys 记录实际出现的键名，用于确认上游真实载荷形态。
 	// 键名是协议字段名而非用户内容，因此可以安全落盘。
 	RootKeys    []string
 	PayloadKeys []string
+
+	// KeyPaths 是受限深度的 "a.b.c=值" 路径样本，用于确认嵌套结构。
+	// 字符串值默认只记长度（<string:N>），仅少数协议字段记明文；见
+	// openAIWSRateLimitsPlaintextValueKeys。
+	KeyPaths []string
+
+	// 准入判定。生产实测该事件含 allowed / limit_reached 两个键，
+	// 它们是上游对"本请求能否被服务"的显式决定，比按百分比阈值推断可靠。
+	Allowed      *bool
+	LimitReached *bool
+
+	// 窗口键的**存在性**。用于区分"键缺失"与"键存在但为 null"——
+	// 生产样本中 secondary 解析不出数值，需确认属于哪种。
+	PrimaryPresent   bool
+	SecondaryPresent bool
 
 	// 归一化后的窗口数值，找不到即为 nil。
 	PrimaryUsedPercent   *float64
@@ -72,6 +95,7 @@ func parseOpenAIWSCodexRateLimitsObservation(message []byte) openAIWSCodexRateLi
 		return obs
 	}
 	obs.RootKeys = sampleOpenAIWSJSONKeys(root, openAIWSRateLimitsKeySampleLimit)
+	obs.KeyPaths = sampleOpenAIWSJSONKeyPaths(root)
 
 	payload := root.Get("rate_limits")
 	if !payload.Exists() || !payload.IsObject() {
@@ -80,6 +104,11 @@ func parseOpenAIWSCodexRateLimitsObservation(message []byte) openAIWSCodexRateLi
 	} else {
 		obs.PayloadKeys = sampleOpenAIWSJSONKeys(payload, openAIWSRateLimitsKeySampleLimit)
 	}
+
+	obs.Allowed = openAIWSOptionalBool(payload.Get("allowed"))
+	obs.LimitReached = openAIWSOptionalBool(payload.Get("limit_reached"))
+	obs.PrimaryPresent = payload.Get("primary").Exists() || payload.Get("7d").Exists()
+	obs.SecondaryPresent = payload.Get("secondary").Exists() || payload.Get("5h").Exists()
 
 	obs.PrimaryUsedPercent, obs.PrimaryWindowMinutes, obs.PrimaryResetSeconds =
 		readOpenAIWSRateLimitWindow(payload, "primary", "7d")
@@ -163,6 +192,117 @@ func sampleOpenAIWSJSONKeys(node gjson.Result, limit int) []string {
 	return keys
 }
 
+// openAIWSRateLimitsPlaintextValueKeys 是允许在 KeyPaths 里记录明文值的叶子键。
+// 它们是上游的枚举/协议取值（如 plan_type=pro、limit_reached=true），不会承载用户内容。
+// 其余字符串叶子一律只记长度——即使在这个本应纯协议的事件里，也不假设上游不会放文本。
+var openAIWSRateLimitsPlaintextValueKeys = map[string]struct{}{
+	"type":          {},
+	"plan_type":     {},
+	"limit_reached": {},
+	"allowed":       {},
+	"unlimited":     {},
+	"has_credits":   {},
+	"window":        {},
+	"limit_id":      {},
+	"limit_name":    {},
+}
+
+// sampleOpenAIWSJSONKeyPaths 以受限深度与条数遍历对象，返回 "a.b=值" 形式的路径样本。
+//
+// 值的渲染规则：数值与布尔原样；null 记 null；对象记 {}（仅在达到深度上限时）；
+// 数组记 [N]；字符串默认记 <string:N>，仅白名单键记截断后的明文。
+// 这样既能看清结构，又不会把任意字符串内容写进日志。
+func sampleOpenAIWSJSONKeyPaths(root gjson.Result) []string {
+	if !root.Exists() || !root.IsObject() {
+		return nil
+	}
+	paths := make([]string, 0, 16)
+	var walk func(node gjson.Result, prefix string, depth int) bool
+	walk = func(node gjson.Result, prefix string, depth int) bool {
+		keepGoing := true
+		node.ForEach(func(key, value gjson.Result) bool {
+			if len(paths) >= openAIWSRateLimitsPathSampleLimit {
+				keepGoing = false
+				return false
+			}
+			name := strings.TrimSpace(key.String())
+			if name == "" {
+				return true
+			}
+			path := name
+			if prefix != "" {
+				path = prefix + "." + name
+			}
+			if value.IsObject() && depth+1 < openAIWSRateLimitsPathDepthLimit {
+				if !walk(value, path, depth+1) {
+					keepGoing = false
+					return false
+				}
+				return true
+			}
+			paths = append(paths, path+"="+renderOpenAIWSRateLimitsPathValue(name, value))
+			return true
+		})
+		return keepGoing
+	}
+	walk(root, "", 0)
+	if len(paths) == 0 {
+		return nil
+	}
+	return paths
+}
+
+func renderOpenAIWSRateLimitsPathValue(key string, value gjson.Result) string {
+	switch value.Type {
+	case gjson.Null:
+		return "null"
+	case gjson.True:
+		return "true"
+	case gjson.False:
+		return "false"
+	case gjson.Number:
+		return strconv.FormatFloat(value.Float(), 'f', -1, 64)
+	case gjson.String:
+		if _, ok := openAIWSRateLimitsPlaintextValueKeys[key]; ok {
+			text := value.String()
+			if runes := []rune(text); len(runes) > openAIWSRateLimitsPathValueMaxRunes {
+				text = string(runes[:openAIWSRateLimitsPathValueMaxRunes]) + "..."
+			}
+			return text
+		}
+		return "<string:" + strconv.Itoa(len(value.String())) + ">"
+	}
+	if value.IsArray() {
+		return "[" + strconv.Itoa(len(value.Array())) + "]"
+	}
+	if value.IsObject() {
+		return "{}"
+	}
+	return "?"
+}
+
+// openAIWSOptionalBool 只接受 JSON 布尔；缺失、null 或其他类型都返回 nil，
+// 避免把 "true" 字符串之类的意外形态误读成准入决定。
+func openAIWSOptionalBool(value gjson.Result) *bool {
+	switch value.Type {
+	case gjson.True:
+		v := true
+		return &v
+	case gjson.False:
+		v := false
+		return &v
+	default:
+		return nil
+	}
+}
+
+func openAIWSFormatOptionalBool(value *bool) string {
+	if value == nil {
+		return "-"
+	}
+	return strconv.FormatBool(*value)
+}
+
 // joinOpenAIWSKeySample 把键名样本拼成一行日志值。
 func joinOpenAIWSKeySample(keys []string) string {
 	if len(keys) == 0 {
@@ -196,13 +336,18 @@ func logOpenAIWSCodexRateLimitsObservation(accountID int64, connID string, event
 	obs := parseOpenAIWSCodexRateLimitsObservation(message)
 	logOpenAIWSModeInfo(
 		"codex_rate_limits account_id=%d conn_id=%s idx=%d has_value=%v "+
+			"allowed=%s limit_reached=%s primary_present=%v secondary_present=%v "+
 			"primary_used_percent=%s primary_window_minutes=%s primary_reset_after_seconds=%s "+
 			"secondary_used_percent=%s secondary_window_minutes=%s secondary_reset_after_seconds=%s "+
-			"primary_over_secondary_percent=%s root_keys=%s payload_keys=%s",
+			"primary_over_secondary_percent=%s root_keys=%s payload_keys=%s key_paths=%s",
 		accountID,
 		truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
 		eventIndex,
 		obs.HasAnyValue,
+		openAIWSFormatOptionalBool(obs.Allowed),
+		openAIWSFormatOptionalBool(obs.LimitReached),
+		obs.PrimaryPresent,
+		obs.SecondaryPresent,
 		openAIWSFormatOptionalFloat(obs.PrimaryUsedPercent),
 		openAIWSFormatOptionalInt(obs.PrimaryWindowMinutes),
 		openAIWSFormatOptionalInt(obs.PrimaryResetSeconds),
@@ -212,5 +357,12 @@ func logOpenAIWSCodexRateLimitsObservation(accountID int64, connID string, event
 		openAIWSFormatOptionalFloat(obs.PrimaryOverSecondaryPercent),
 		truncateOpenAIWSLogValue(joinOpenAIWSKeySample(obs.RootKeys), openAIWSLogValueMaxLen),
 		truncateOpenAIWSLogValue(joinOpenAIWSKeySample(obs.PayloadKeys), openAIWSLogValueMaxLen),
+		// 路径样本本身已按条数与值长度封顶，这里再给整行一个独立上限：
+		// 通用的 160 字符上限会截掉大部分结构信息，失去这条日志的意义。
+		truncateOpenAIWSLogValue(joinOpenAIWSKeySample(obs.KeyPaths), openAIWSRateLimitsKeyPathsLogMaxLen),
 	)
 }
+
+// openAIWSRateLimitsKeyPathsLogMaxLen 是 key_paths 字段的整行上限。
+// 40 条路径 × 典型 40 字节 ≈ 1.6KB，4KB 足够容纳完整结构且仍有硬上限。
+const openAIWSRateLimitsKeyPathsLogMaxLen = 4096
