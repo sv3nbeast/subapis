@@ -249,14 +249,14 @@ func isClaudeFable51Model(model string) bool {
 // applyDefaultMaxReasoningEffortMultiplier 控制是否对 claude-fable-5-1 自动套用官方
 // claudeFable51MaxReasoningEffortMultiplier。
 //
-// 本地 fork 对 claude-fable-5-1 使用自有价卡（$15/$75，官方为 $10/$50，见
-// fallbackPrices["claude-fable-5-1"]），单价本身已含 1.5x 溢价；且生产（60530c4c3）
-// 从未存在任何推理强度计费倍率。若在自有价卡之上再自动乘 3.0，effort=max 的
-// 1M input + 1M output 请求会由 $90 变成 $270——这是对用户的静默涨价，
-// 不能随官方同步一起悄悄生效。
+// 历史背景：本 fork 曾对 claude-fable-5-1 使用 $15/$75 的自有价卡，关闭该开关是为了
+// 避免在自有价卡之上再叠加 3.0 倍（effort=max 的 1M input + 1M output 请求会由
+// $90 变成 $270）。2026-09-25 价卡已按官方纠正为 $10/$50（见
+// fallbackPrices["claude-fable-5-1"]），生产从未启用过推理强度计费倍率。
 //
-// 因此默认关闭自动注入；官方机制本身保留：运营若要对 max 档位加价，
-// 在渠道定价的 max_reasoning_effort_multiplier 列显式配置即可
+// 开关仍保持关闭：打开它等于对 effort=max 的请求整体涨价 3 倍，属于需要运营
+// 明确决策的定价变更，不能随价卡纠正一起悄悄生效。官方机制本身保留：运营若要对
+// max 档位加价，在渠道定价的 max_reasoning_effort_multiplier 列显式配置即可
 // （maxReasoningEffortBillingMultiplier 仍会优先采用该显式值）。
 const applyDefaultMaxReasoningEffortMultiplier = false
 
@@ -497,13 +497,16 @@ func (s *BillingService) initFallbackPricing() {
 		CacheCreation1hPrice:       20e-6,   // $20 per MTok
 		SupportsCacheBreakdown:     true,
 	}
+	// Claude Fable 5.1：官方与 Fable 5 同档同价（$10/$50），唯一区别是缓存读取为
+	// 0.025x（$0.25，Fable 5 为 0.1x 即 $1）。2026-09-25 取自 platform.claude.com
+	// 定价页；此前本 fork 按 $15/$75 计费，已按官方价纠正。
 	s.fallbackPrices["claude-fable-5-1"] = &ModelPricing{
-		InputPricePerToken:         15e-6,    // $15 per MTok
-		OutputPricePerToken:        75e-6,    // $75 per MTok
-		CacheCreationPricePerToken: 18.75e-6, // $18.75 per MTok
-		CacheReadPricePerToken:     0.25e-6,  // $0.25 per MTok
-		CacheCreation5mPrice:       18.75e-6, // $18.75 per MTok
-		CacheCreation1hPrice:       30e-6,    // $30 per MTok
+		InputPricePerToken:         10e-6,   // $10 per MTok
+		OutputPricePerToken:        50e-6,   // $50 per MTok
+		CacheCreationPricePerToken: 12.5e-6, // $12.50 per MTok (5m, 1.25x)
+		CacheReadPricePerToken:     0.25e-6, // $0.25 per MTok (0.025x)
+		CacheCreation5mPrice:       12.5e-6, // $12.50 per MTok
+		CacheCreation1hPrice:       20e-6,   // $20 per MTok (2x)
 		SupportsCacheBreakdown:     true,
 	}
 

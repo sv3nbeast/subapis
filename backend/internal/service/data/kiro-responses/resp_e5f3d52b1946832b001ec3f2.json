@@ -1,0 +1,23 @@
+{
+  "id": "resp_e5f3d52b1946832b001ec3f2",
+  "model": "gpt-5.6-sol",
+  "input": [
+    {
+      "role": "user",
+      "content": "context threshold"
+    }
+  ],
+  "output": [
+    {
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "context usage ok"
+        }
+      ]
+    }
+  ],
+  "stored_at": 1790267074
+}

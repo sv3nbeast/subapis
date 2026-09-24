@@ -1429,3 +1429,17 @@ Residual risk:
   5) 生产延迟/缓存命中率的 like-for-like 对照需发布后按技能第 6 节采样（冷热分离、
      每阶段 ≥20 个同形态温样本），本次为静态审查，未提供生产侧数值。
 ```
+
+---
+
+## 追加更正（2026-09-25）：Fable 5.1 价卡已对齐官方
+
+上文 §3 保留本地 `$15/$75` 价卡的决定**已于 2026-09-25 撤销**。依据 `platform.claude.com/docs/en/about-claude/pricing`：
+Fable 5.1 与 Fable 5 **同档同价**（$10/$50 per MTok），唯一区别是缓存读取为 0.025x（$0.25；Fable 5 为 0.1x 即 $1）。官方 `34b8bf1a6` 的做法本来就是对的，本地 `42178f70f` 的 $15/$75 是把 Opus 4.1/4 的旧价误当成了 Fable 5.1 的价。
+
+- 已改：`billing_service.go` `fallbackPrices["claude-fable-5-1"]` → 10e-6/50e-6/12.5e-6/20e-6/0.25e-6；`model_prices_and_context_window.json` 同步。
+- 已改测试：`billing_fable5_test.go`（两处）、`billing_service_test.go:455`、`channel_handler_test.go:TestGetModelDefaultPricing_ReturnsFable51CacheTTLs`、`billing_token_cost_request_test.go:TestCalculateTokenCostForRequest_Fable51MaxEffortKeepsProductionAbsoluteCost`（$90 → $60 绝对金额）。
+- **保持不变**：`applyDefaultMaxReasoningEffortMultiplier = false`。价卡已无溢价，但开启官方 3.0 倍率等于对 effort=max 请求整体涨价 3 倍，属需运营决策的定价变更，不随价卡纠正一起生效。
+- 生产渠道定价此前已单独修正（渠道 6/8/14/21），本次为代码侧收口。
+
+**下次同步注意**：`claude-fable-5-1` 的官方价卡断言（10e-6/50e-6）应直接采纳，不要再按本地价卡保护。

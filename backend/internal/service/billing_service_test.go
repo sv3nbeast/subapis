@@ -452,7 +452,7 @@ func TestGetFallbackPricing_FamilyMatching(t *testing.T) {
 		{name: "claude opus 4.7 dot separator", model: "claude-opus-4.7", expectedInput: 5e-6},
 		{name: "claude opus 4.5 alt separator", model: "claude-opus-4-5-20260101", expectedInput: 5e-6},
 		{name: "claude fable 5", model: "claude-fable-5", expectedInput: 1e-5},
-		{name: "claude fable 5.1", model: "claude-fable-5-1", expectedInput: 15e-6},
+		{name: "claude fable 5.1", model: "claude-fable-5-1", expectedInput: 10e-6},
 		{name: "claude sonnet 5", model: "claude-sonnet-5", expectedInput: 2e-6},
 		{name: "claude generic model fallback sonnet", model: "claude-foo-bar", expectedInput: 3e-6},
 		{name: "gemini explicit fallback", model: "gemini-3-1-pro", expectedInput: 2e-6},
@@ -1892,13 +1892,14 @@ func TestComputeTokenBreakdown_NonExplicitZeroImagePrice_FallsBackToOutput(t *te
 	require.InDelta(t, 150*15e-6, bd.OutputCost, 1e-12)
 }
 
-// 官方 8249ab37d：Fable 5.1 默认携带 max 推理强度 3 倍额度倍率（本地 Fable 5.1 价卡沿用自有单价）。
+// 官方 8249ab37d：Fable 5.1 默认携带 max 推理强度 3 倍额度倍率。
 func TestGetModelPricing_ClaudeFable51DoesNotAutoApplyMaxReasoningEffortMultiplier(t *testing.T) {
 	svc := NewBillingService(&config.Config{}, nil)
 	pricing, err := svc.GetModelPricing("claude-fable-5-1")
 	require.NoError(t, err)
 	require.NotNil(t, pricing)
-	// 本地自有价卡（$15/$75）已含溢价，生产从未存在推理强度倍率：默认不注入官方 3.0，
-	// 否则 effort=max 会静默变成 3 倍计费。见 applyDefaultMaxReasoningEffortMultiplier。
+	// 价卡已于 2026-09-25 按官方纠正为 $10/$50，但倍率开关仍保持关闭：开启它等于对
+	// effort=max 的请求整体涨价 3 倍，属于需要运营决策的定价变更。见
+	// applyDefaultMaxReasoningEffortMultiplier。
 	require.Nil(t, pricing.MaxReasoningEffortMultiplier)
 }

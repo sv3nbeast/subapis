@@ -626,13 +626,12 @@ func TestGetModelDefaultPricing_ReturnsFable51CacheTTLs(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	require.True(t, body.Data.Found)
-	// 本地 Fable 5.1 价卡（42178f70f，2026-09-02）：$15/$75 per MTok，cache write 5m
-	// $18.75、1h $30、cache read $0.25。fallbackPrices 与
-	// resources/model-pricing/model_prices_and_context_window.json 两处一致。
-	// 官方此处按 claude-fable-5 的 $12.5/$20 断言，与生产实际计费口径不符，故改测试不改价卡。
-	require.InDelta(t, 18.75e-6, body.Data.CacheWritePrice, 1e-12)
+	// Fable 5.1 官方与 Fable 5 同价：$10/$50 per MTok，cache write 5m $12.5、1h $20、
+	// cache read $0.25（0.025x）。2026-09-25 已按官方纠正此前 $15/$75 的自有价卡；
+	// fallbackPrices 与 resources/model-pricing/model_prices_and_context_window.json 两处一致。
+	require.InDelta(t, 12.5e-6, body.Data.CacheWritePrice, 1e-12)
 	require.NotNil(t, body.Data.CacheWrite1hPrice)
-	require.InDelta(t, 30e-6, *body.Data.CacheWrite1hPrice, 1e-12)
+	require.InDelta(t, 20e-6, *body.Data.CacheWrite1hPrice, 1e-12)
 	// 官方对 Fable 5.1 自动注入 max 推理强度倍率 3.0；本地默认关闭（自有价卡已含溢价，
 	// 生产从未存在该倍率），需要时由运营在渠道定价显式配置。
 	// 见 service.applyDefaultMaxReasoningEffortMultiplier。

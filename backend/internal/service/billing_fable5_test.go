@@ -30,11 +30,13 @@ func TestGetModelPricing_ClaudeFable51FallbackUsesDedicatedRates(t *testing.T) {
 			pricing, err := svc.GetModelPricing(model)
 			require.NoError(t, err)
 			require.NotNil(t, pricing)
-			require.InDelta(t, 15e-6, pricing.InputPricePerToken, 1e-12)
-			require.InDelta(t, 75e-6, pricing.OutputPricePerToken, 1e-12)
-			require.InDelta(t, 18.75e-6, pricing.CacheCreationPricePerToken, 1e-12)
-			require.InDelta(t, 18.75e-6, pricing.CacheCreation5mPrice, 1e-12)
-			require.InDelta(t, 30e-6, pricing.CacheCreation1hPrice, 1e-12)
+			// Official: same per-token price as Fable 5 ($10/$50); only cache
+			// reads differ (0.025x = $0.25, versus Fable 5's $1).
+			require.InDelta(t, 10e-6, pricing.InputPricePerToken, 1e-12)
+			require.InDelta(t, 50e-6, pricing.OutputPricePerToken, 1e-12)
+			require.InDelta(t, 12.5e-6, pricing.CacheCreationPricePerToken, 1e-12)
+			require.InDelta(t, 12.5e-6, pricing.CacheCreation5mPrice, 1e-12)
+			require.InDelta(t, 20e-6, pricing.CacheCreation1hPrice, 1e-12)
 			require.InDelta(t, 0.25e-6, pricing.CacheReadPricePerToken, 1e-12)
 			require.True(t, pricing.SupportsCacheBreakdown)
 		})
@@ -59,10 +61,12 @@ func TestGetModelPricing_ClaudeFable51VerifiedRatesOverrideStaleDynamicCatalog(t
 
 	pricing, err := svc.GetModelPricing("claude-fable-5-1-thinking")
 	require.NoError(t, err)
-	require.InDelta(t, 15e-6, pricing.InputPricePerToken, 1e-12)
-	require.InDelta(t, 75e-6, pricing.OutputPricePerToken, 1e-12)
-	require.InDelta(t, 18.75e-6, pricing.CacheCreation5mPrice, 1e-12)
-	require.InDelta(t, 30e-6, pricing.CacheCreation1hPrice, 1e-12)
+	require.InDelta(t, 10e-6, pricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 50e-6, pricing.OutputPricePerToken, 1e-12)
+	require.InDelta(t, 12.5e-6, pricing.CacheCreation5mPrice, 1e-12)
+	require.InDelta(t, 20e-6, pricing.CacheCreation1hPrice, 1e-12)
+	// The stale catalog carries Fable 5's 0.1x cache-read rate ($1); the
+	// verified 0.025x ($0.25) must win.
 	require.InDelta(t, 0.25e-6, pricing.CacheReadPricePerToken, 1e-12)
 }
 
