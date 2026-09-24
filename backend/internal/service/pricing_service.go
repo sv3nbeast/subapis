@@ -1390,6 +1390,9 @@ func (s *PricingService) matchByModelFamily(model string) *LiteLLMModelPricing {
 	families := []modelFamily{
 		{name: "fable-5.1", match: []string{"claude-fable-5-1", "claude-fable-5.1"}, pricing: []string{"claude-fable-5-1"}},
 		{name: "fable-5", match: []string{"claude-fable-5", "claude-fable"}, pricing: []string{"claude-fable-5"}},
+		// Opus 5.5 必须排在 Opus 5 之前：claude-opus-5-5 也包含 "claude-opus-5"，
+		// 顺序颠倒会让 5.5 落到 Opus 5 的 $5/$25 价卡（官方为 $4/$20）。
+		{name: "opus-5.5", match: []string{"claude-opus-5-5", "claude-opus-5.5"}, pricing: []string{"claude-opus-5-5"}},
 		{name: "opus-5", match: []string{"claude-opus-5"}, pricing: []string{"claude-opus-5"}},
 		{name: "opus-4.8", match: []string{"claude-opus-4-8", "claude-opus-4.8"}, pricing: []string{"claude-opus-4-8"}},
 		{name: "opus-4.7", match: []string{"claude-opus-4-7", "claude-opus-4.7"}, pricing: []string{"claude-opus-4-7", "claude-opus-4.7", "claude-opus-4-6"}},
@@ -1424,6 +1427,8 @@ func (s *PricingService) matchByModelFamily(model string) *LiteLLMModelPricing {
 		switch {
 		case strings.Contains(model, "opus"):
 			switch {
+			case strings.Contains(model, "opus-5-5") || strings.Contains(model, "opus-5.5"):
+				fallbackName = "opus-5.5"
 			case strings.Contains(model, "opus-5"):
 				fallbackName = "opus-5"
 			case strings.Contains(model, "4.7") || strings.Contains(model, "4-7"):

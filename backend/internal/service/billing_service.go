@@ -470,6 +470,23 @@ func (s *BillingService) initFallbackPricing() {
 	s.fallbackPrices["claude-opus-4.8"] = opus5Pricing
 	s.fallbackPrices["claude-opus-5"] = opus5Pricing
 
+	// Claude Opus 5.5：官方价 $4 输入 / $20 输出 per MTok（2026-09-24 取自官方定价页）。
+	// 缓存读取是输入价的 0.05x（$0.20），不是其它模型的 0.1x；5m 写入 1.25x（$5），
+	// 1h 写入 2x（$8）。Fast 档 $8 / $40（仅 Claude API 一方，Batch 为 $2 / $10）。
+	s.fallbackPrices["claude-opus-5-5"] = &ModelPricing{
+		InputPricePerToken:                 4e-6,   // $4 per MTok
+		InputPricePerTokenPriority:         8e-6,   // $8 per MTok (Fast 2x)
+		OutputPricePerToken:                20e-6,  // $20 per MTok
+		OutputPricePerTokenPriority:        40e-6,  // $40 per MTok (Fast 2x)
+		CacheCreationPricePerToken:         5e-6,   // $5 per MTok (5m, 1.25x)
+		CacheCreationPricePerTokenPriority: 10e-6,  // $10 per MTok (Fast 2x)
+		CacheReadPricePerToken:             0.2e-6, // $0.20 per MTok (0.05x, 非标准 0.1x)
+		CacheReadPricePerTokenPriority:     0.4e-6, // $0.40 per MTok (Fast 2x)
+		CacheCreation5mPrice:               5e-6,   // $5 per MTok
+		CacheCreation1hPrice:               8e-6,   // $8 per MTok (2x)
+		SupportsCacheBreakdown:             true,
+	}
+
 	// Claude Fable 5
 	s.fallbackPrices["claude-fable-5"] = &ModelPricing{
 		InputPricePerToken:         10e-6,   // $10 per MTok
@@ -958,6 +975,21 @@ func (s *BillingService) initFallbackPricing() {
 		LongContextOutputMultiplier:   2,
 	}
 
+	// xAI Grok 4.7: $2 input / $0.50 cached input / $6 output below 200k;
+	// long-context rates are $4 / $1 / $12 (>=200k prompt tokens). Official card
+	// retrieved 2026-09-24; same rate card as Grok 4.6 but its own price family,
+	// so a future divergence only has to change one place.
+	s.fallbackPrices["grok-4.7"] = &ModelPricing{
+		InputPricePerToken:            2e-6,
+		OutputPricePerToken:           6e-6,
+		CacheReadPricePerToken:        0.5e-6,
+		SupportsCacheBreakdown:        false,
+		LongContextInputThreshold:     200000,
+		LongContextThresholdInclusive: true,
+		LongContextInputMultiplier:    2,
+		LongContextOutputMultiplier:   2,
+	}
+
 	// xAI Grok 4.6: $2 input / $0.50 cached input / $6 output below 200k;
 	// long-context rates are $4 / $1 / $12 (>=200k prompt tokens).
 	s.fallbackPrices["grok-4.6"] = &ModelPricing{
@@ -1038,6 +1070,12 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 		return s.fallbackPrices["claude-fable-5"]
 	}
 	if strings.Contains(modelLower, "opus") {
+		// Opus 5.5 必须排在 Opus 5 之前：claude-opus-5-5 同样包含 "opus-5"，
+		// 落到 Opus 5 价卡会按 $5/$25 多收（官方为 $4/$20）。
+		if strings.Contains(modelLower, "opus-5-5") || strings.Contains(modelLower, "opus-5.5") ||
+			strings.Contains(modelLower, "opus55") {
+			return s.fallbackPrices["claude-opus-5-5"]
+		}
 		if strings.Contains(modelLower, "opus-5") || strings.Contains(modelLower, "opus5") {
 			return s.fallbackPrices["claude-opus-5"]
 		}
@@ -1260,6 +1298,8 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	}
 
 	switch modelLower {
+	case "grok-4.7", "grok-4.7-latest":
+		return s.fallbackPrices["grok-4.7"]
 	case "grok", "grok-latest", "grok-4.6", "grok-4.6-latest":
 		return s.fallbackPrices["grok-4.6"]
 	case "grok-4.5", "grok-4.5-latest":

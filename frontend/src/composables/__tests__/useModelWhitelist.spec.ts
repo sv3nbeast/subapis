@@ -28,6 +28,64 @@ describe('useModelWhitelist', () => {
     expect(getModelsByPlatform('openai')).not.toContain('gpt-6-terra')
   })
 
+  it('Opus 5.5 只出现在直连 Claude 平台，Kiro 与 Antigravity 不暴露', () => {
+    // 2026-09-24 实测：Anthropic Messages 接受 claude-opus-5-5 并原样回显；
+    // Kiro ListAvailableModels 共 19 个模型，Claude 系最高到 claude-opus-5。
+    for (const model of ['claude-opus-5-5', 'claude-opus-5-5-thinking']) {
+      expect(getModelsByPlatform('claude')).toContain(model)
+      expect(getModelsByPlatform('kiro')).not.toContain(model)
+      expect(getModelsByPlatform('antigravity')).not.toContain(model)
+    }
+    expect(getPresetMappingsByPlatform('claude')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: 'claude-opus-5-5', to: 'claude-opus-5-5' })
+    ]))
+    // Kiro 不提供该模型，预设按钮也不得出现，否则一点就配出必然 400 的映射。
+    expect(getPresetMappingsByPlatform('kiro')).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: 'claude-opus-5-5' })
+    ]))
+    // Opus 5 必须保持独立存在，5.5 不是它的别名。
+    expect(getModelsByPlatform('claude')).toContain('claude-opus-5')
+    expect(getPresetMappingsByPlatform('kiro')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: 'claude-opus-5', to: 'claude-opus-5' })
+    ]))
+  })
+
+  it('Bedrock 预设不臆造 Opus 5.5 的跨云 ID', () => {
+    // 没有第一方 Bedrock 实测证据，不得凭 Opus 5 的形态推断 5.5 的 ID。
+    expect(getPresetMappingsByPlatform('bedrock')).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: 'claude-opus-5-5' })
+    ]))
+  })
+
+  it('xAI 模型列表和预设映射包含 Grok 4.7，Cursor 不暴露', () => {
+    // 2026-09-24 实测：cli-chat-proxy 返回 200 且回显 grok-4.7；
+    // 合成 ID grok-4.7-nonexistent-zzz 返回 404，确认不是静默回退。
+    const models = getModelsByPlatform('grok')
+
+    expect(models).toContain('grok-4.7')
+    expect(models).toContain('grok-4.7-latest')
+    expect(models).toContain('grok-4.6')
+    expect(models.indexOf('grok-4.7')).toBeLessThan(models.indexOf('grok-4.6'))
+    expect(getPresetMappingsByPlatform('grok')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: 'grok-4.7', to: 'grok-4.7' })
+    ]))
+    // Cursor 的模型目录里没有 grok-4.7。
+    expect(getModelsByPlatform('cursor')).not.toContain('grok-4.7')
+  })
+
+  it('combined 模式支持 Grok 4.7 的 latest 别名映射', () => {
+    const mapping = buildModelMappingObject(
+      'combined',
+      ['grok-4.7'],
+      [{ from: 'grok-4.7-latest', to: 'grok-4.7' }]
+    )
+
+    expect(mapping).toEqual({
+      'grok-4.7': 'grok-4.7',
+      'grok-4.7-latest': 'grok-4.7'
+    })
+  })
+
   it('openai 模型列表包含 GPT-5.4 官方快照', () => {
     const models = getModelsByPlatform('openai')
 
