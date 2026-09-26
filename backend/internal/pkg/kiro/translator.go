@@ -105,6 +105,7 @@ var (
 		"gpt-5.6-sol":          {"low", "medium", "high", "xhigh", "max"},
 		"gpt-5.6-terra":        {"low", "medium", "high", "xhigh", "max"},
 		"gpt-5.6-luna":         {"low", "medium", "high", "xhigh", "max"},
+		"claude-opus-5.5":      {"low", "medium", "high", "xhigh", "max"},
 		"claude-opus-5":        {"low", "medium", "high", "xhigh", "max"},
 		"claude-sonnet-5":      {"low", "medium", "high", "xhigh", "max"},
 		"claude-opus-4.8":      {"low", "medium", "high", "xhigh", "max"},
@@ -546,7 +547,7 @@ func contextWindowTokensForModel(model string) int {
 	}
 	switch normalizeModelAlias(normalized) {
 	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-		"claude-opus-5",
+		"claude-opus-5", "claude-opus-5-5", "claude-opus-5.5",
 		"claude-sonnet-5", "claude-sonnet-5.0",
 		"claude-sonnet-4-6", "claude-sonnet-4.6",
 		"claude-opus-4-6", "claude-opus-4.6",
@@ -578,11 +579,26 @@ func isRejectedKiroModelVariant(model string) bool {
 func requiresImplicitThinkingTagStripping(modelID string) bool {
 	switch strings.TrimSpace(strings.ToLower(modelID)) {
 	case "claude-opus-5", "claude-opus-5-thinking",
+		"claude-opus-5.5", "claude-opus-5-5", "claude-opus-5-5-thinking",
 		"claude-opus-4.7", "claude-opus-4-7", "claude-opus-4-7-thinking",
 		"claude-opus-4.8", "claude-opus-4-8", "claude-opus-4-8-thinking":
 		return true
 	}
 	return false
+}
+
+// isKiroAdaptiveOnlyOpus5Family reports the Opus 5 generation, whose Kiro
+// runtime only accepts the adaptive thinking contract. A legacy
+// thinking.type=enabled request (or effort-only request) is rewritten to
+// adaptive so the turn does not end after reasoning-only output. Opus 5.5
+// accepts nothing but adaptive (its model metadata enum is ["adaptive"]).
+func isKiroAdaptiveOnlyOpus5Family(model string) bool {
+	switch normalizeModelAlias(model) {
+	case "claude-opus-5", "claude-opus-5-5", "claude-opus-5.5":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeModelAlias(model string) string {
@@ -684,7 +700,7 @@ func normalizeKiroEnvPlatform(platform string) string {
 func kiroMaxOutputTokensForModel(model string) int {
 	normalized := normalizeModelAlias(model)
 	switch normalized {
-	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "claude-opus-5", "claude-opus-4-8", "claude-opus-4.8", "claude-opus-4-7", "claude-opus-4.7", "claude-opus-4-6", "claude-opus-4.6":
+	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "claude-opus-5", "claude-opus-5-5", "claude-opus-5.5", "claude-opus-4-8", "claude-opus-4.8", "claude-opus-4-7", "claude-opus-4.7", "claude-opus-4-6", "claude-opus-4.6":
 		return 128000
 	case "claude-sonnet-4-6", "claude-sonnet-4.6":
 		return 64000
@@ -2219,7 +2235,7 @@ func deriveThinkingDirective(body []byte, headers http.Header) *thinkingDirectiv
 	// Opus 5 requires thinking to be explicitly enabled for those effort levels.
 	// An explicit disabled value remains authoritative. Thinking aliases are
 	// handled above by thinkingDirectiveFromModel.
-	if normalizeModelAlias(model) == "claude-opus-5" &&
+	if isKiroAdaptiveOnlyOpus5Family(model) &&
 		(thinkingType == "enabled" || (thinkingType == "" && isKiroAdaptiveEffort(effort))) {
 		thinkingType = "adaptive"
 	}
@@ -2284,7 +2300,7 @@ func thinkingDirectiveFromModel(model string) *thinkingDirective {
 		}
 	// opus 4.7+ 走 adaptive 高预算,budget 对齐 Antigravity 的 ClaudeAdaptiveHighThinkingBudgetTokens
 	// 避免 thinking 提前耗尽导致流式中途断开
-	case "claude-opus-5",
+	case "claude-opus-5", "claude-opus-5-5", "claude-opus-5.5",
 		"claude-opus-4-7", "claude-opus-4.7",
 		"claude-opus-4-8", "claude-opus-4.8":
 		return &thinkingDirective{

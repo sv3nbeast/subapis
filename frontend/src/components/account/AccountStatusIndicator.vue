@@ -227,6 +227,8 @@ const formatScopeName = (scope: string): string => {
     'claude-fable-5-1': 'CFable51',
     'claude-fable-5': 'CFable5',
     'claude-sonnet-5': 'CSon5',
+    'claude-opus-5-5': 'COpus55',
+    'claude-opus-5-5-thinking': 'COpus55T',
     'claude-opus-5': 'COpus5',
     'claude-opus-5-thinking': 'COpus5T',
     'claude-opus-4-6': 'COpus46',

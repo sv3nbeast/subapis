@@ -1297,17 +1297,21 @@ func TestNianzsKiroMinimumCacheableTokens(t *testing.T) {
 	// 遍历 Kiro 实际暴露的全量模型，确保没有未归类的漏网之鱼。上游新增模型时，
 	// 这里会立刻因缺少 expected 条目而失败，迫使新模型被显式归类。
 	expected := map[string]int{
-		"gpt-5.6-sol":                         1024,
-		"gpt-5.6-terra":                       1024,
-		"gpt-5.6-luna":                        1024,
-		"claude-opus-4-8":                     4096,
-		"claude-opus-4-8-thinking":            4096,
-		"claude-opus-4-7":                     4096,
-		"claude-opus-4-7-thinking":            4096,
-		"claude-opus-4-6":                     4096,
-		"claude-opus-4-6-thinking":            4096,
-		"claude-opus-5":                       4096,
-		"claude-opus-5-thinking":              4096,
+		"gpt-5.6-sol":              1024,
+		"gpt-5.6-terra":            1024,
+		"gpt-5.6-luna":             1024,
+		"claude-opus-4-8":          4096,
+		"claude-opus-4-8-thinking": 4096,
+		"claude-opus-4-7":          4096,
+		"claude-opus-4-7-thinking": 4096,
+		"claude-opus-4-6":          4096,
+		"claude-opus-4-6-thinking": 4096,
+		"claude-opus-5":            4096,
+		"claude-opus-5-thinking":   4096,
+		// Opus 5.5 is classified with Opus 5: Kiro's model metadata reports
+		// the same (null) minimumTokensPerCacheCheckpoint for both.
+		"claude-opus-5-5":                     4096,
+		"claude-opus-5-5-thinking":            4096,
 		"claude-opus-4-5-20251101":            4096,
 		"claude-opus-4-5-20251101-thinking":   4096,
 		"claude-sonnet-5":                     1024,

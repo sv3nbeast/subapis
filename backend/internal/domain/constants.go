@@ -202,6 +202,8 @@ var DefaultKiroModelMapping = map[string]string{
 	KiroNativeGPTTerraModel:               KiroNativeGPTTerraModel,
 	KiroNativeGPTLunaModel:                KiroNativeGPTLunaModel,
 	"codex-auto-review":                   KiroNativeGPTLunaModel,
+	"claude-opus-5-5":                     "claude-opus-5.5",
+	"claude-opus-5-5-thinking":            "claude-opus-5.5",
 	"claude-opus-5":                       "claude-opus-5",
 	"claude-opus-5-thinking":              "claude-opus-5",
 	"claude-sonnet-5":                     "claude-sonnet-5",

@@ -499,6 +499,9 @@ func MapModel(model string) string {
 		return "claude-opus-4.7"
 	case "claude-opus-4-6", "claude-opus-4-6-thinking", "claude-opus-4.6":
 		return "claude-opus-4.6"
+	case "claude-opus-5-5", "claude-opus-5-5-thinking", "claude-opus-5.5", "claude-opus-5.5-thinking":
+		// Kiro ListAvailableModels 暴露的上游 ID 带点号（2026-09-26 实测）。
+		return "claude-opus-5.5"
 	case "claude-opus-5", "claude-opus-5-thinking":
 		return "claude-opus-5"
 	case "claude-sonnet-5", "claude-sonnet-5-thinking":
@@ -564,7 +567,8 @@ func requiresImplicitThinkingTagStripping(modelID string) bool {
 	switch strings.TrimSpace(strings.ToLower(modelID)) {
 	case "claude-opus-4.7", "claude-opus-4-7", "claude-opus-4-7-thinking",
 		"claude-opus-4.8", "claude-opus-4-8", "claude-opus-4-8-thinking",
-		"claude-opus-5", "claude-opus-5-thinking":
+		"claude-opus-5", "claude-opus-5-thinking",
+		"claude-opus-5.5", "claude-opus-5-5", "claude-opus-5-5-thinking":
 		return true
 	}
 	return false
@@ -598,7 +602,7 @@ func kiroMaxOutputTokensForModel(model string) int {
 	switch normalized {
 	// Opus 4.7 / 4.8 / 5 与 Kiro GPT-5.6 精确模型上限 128000（对齐 Kiro 官方规格）。
 	case "claude-opus-4-8", "claude-opus-4.8", "claude-opus-4-7", "claude-opus-4.7",
-		"claude-opus-5",
+		"claude-opus-5", "claude-opus-5-5", "claude-opus-5.5",
 		"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
 		return 128000
 	default:
@@ -622,7 +626,7 @@ func contextWindowTokensForModel(model string) int {
 	normalized = strings.TrimSuffix(normalized, "-thinking")
 	switch normalizeModelAlias(normalized) {
 	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-		"claude-opus-5",
+		"claude-opus-5", "claude-opus-5-5", "claude-opus-5.5",
 		"claude-sonnet-5", "claude-sonnet-5.0",
 		"claude-sonnet-4-6", "claude-sonnet-4.6",
 		"claude-opus-4-6", "claude-opus-4.6",
@@ -2453,7 +2457,9 @@ func thinkingDirectiveFromModel(model string) *thinkingDirective {
 	// 避免 thinking 提前耗尽导致流式中途断开
 	case "claude-opus-4-7", "claude-opus-4.7",
 		"claude-opus-4-8", "claude-opus-4.8",
-		"claude-opus-5":
+		"claude-opus-5",
+		// Opus 5.5 只接受 thinking.type=adaptive（Kiro 模型元数据的 enum 仅此一项）。
+		"claude-opus-5-5", "claude-opus-5.5":
 		return &thinkingDirective{
 			Mode:         "adaptive",
 			BudgetTokens: 24576,

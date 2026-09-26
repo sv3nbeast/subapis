@@ -290,6 +290,13 @@ describe('UseKeyModal', () => {
       type: 'adaptive'
     })
     expect(config.provider.anthropic.models['claude-opus-5-thinking'].options.thinking).not.toHaveProperty('budgetTokens')
+    // Opus 5.5 (Kiro upstream claude-opus-5.5): 1M context, 128K output, and
+    // thinking that cannot be disabled, so both entries carry adaptive only.
+    for (const id of ['claude-opus-5-5', 'claude-opus-5-5-thinking']) {
+      expect(config.provider.anthropic.models[id].limit).toEqual({ context: 1000000, output: 128000 })
+      expect(config.provider.anthropic.models[id].options.thinking).toEqual({ type: 'adaptive' })
+      expect(config.provider.anthropic.models[id].options.thinking).not.toHaveProperty('budgetTokens')
+    }
   })
 
   it('includes Claude Code default model in anthropic settings config', () => {

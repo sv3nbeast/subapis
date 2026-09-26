@@ -28,26 +28,30 @@ describe('useModelWhitelist', () => {
     expect(getModelsByPlatform('openai')).not.toContain('gpt-6-terra')
   })
 
-  it('Opus 5.5 只出现在直连 Claude 平台，Kiro 与 Antigravity 不暴露', () => {
-    // 2026-09-24 实测：Anthropic Messages 接受 claude-opus-5-5 并原样回显；
-    // Kiro ListAvailableModels 共 19 个模型，Claude 系最高到 claude-opus-5。
+  it('Opus 5.5 在直连 Claude 与 Kiro 上暴露，Antigravity 不暴露', () => {
+    // 2026-09-24 实测：Anthropic Messages 接受 claude-opus-5-5 并原样回显。
+    // 2026-09-26 实测：Kiro ListAvailableModels 新增 claude-opus-5.5（带点号），
+    // 文本/思考/工具调用均通过，编造的 claude-opus-5-9 返回 INVALID_MODEL_ID。
     for (const model of ['claude-opus-5-5', 'claude-opus-5-5-thinking']) {
       expect(getModelsByPlatform('claude')).toContain(model)
-      expect(getModelsByPlatform('kiro')).not.toContain(model)
+      expect(getModelsByPlatform('kiro')).toContain(model)
       expect(getModelsByPlatform('antigravity')).not.toContain(model)
     }
     expect(getPresetMappingsByPlatform('claude')).toEqual(expect.arrayContaining([
       expect.objectContaining({ from: 'claude-opus-5-5', to: 'claude-opus-5-5' })
     ]))
-    // Kiro 不提供该模型，预设按钮也不得出现，否则一点就配出必然 400 的映射。
-    expect(getPresetMappingsByPlatform('kiro')).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ from: 'claude-opus-5-5' })
+    // Kiro 预设必须指向 Kiro 的上游 ID（带点号），而不是客户端别名。
+    expect(getPresetMappingsByPlatform('kiro')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: 'claude-opus-5-5', to: 'claude-opus-5.5' }),
+      expect.objectContaining({ from: 'claude-opus-5-5-thinking', to: 'claude-opus-5.5' })
     ]))
-    // Opus 5 必须保持独立存在，5.5 不是它的别名。
+    // Opus 5 必须保持独立存在，5.5 不是它的别名；Opus 5 的 Kiro ID 不带点号。
     expect(getModelsByPlatform('claude')).toContain('claude-opus-5')
     expect(getPresetMappingsByPlatform('kiro')).toEqual(expect.arrayContaining([
       expect.objectContaining({ from: 'claude-opus-5', to: 'claude-opus-5' })
     ]))
+    // Cursor 目录里没有 Opus 5.5。
+    expect(getModelsByPlatform('cursor')).not.toContain('claude-opus-5-5')
   })
 
   it('Bedrock 预设不臆造 Opus 5.5 的跨云 ID', () => {

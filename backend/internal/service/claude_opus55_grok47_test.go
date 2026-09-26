@@ -33,11 +33,14 @@ func TestOpus55ModelContract(t *testing.T) {
 	// Opus 5 must keep its own identity: 5.5 is a separate model, not an alias.
 	require.Equal(t, "claude-opus-5", normalizeAnthropicModelIDForUpstream("claude-opus-5"))
 
-	// Kiro's live catalog does not carry Opus 5.5 (19 models, checked 2026-09-24),
-	// so neither Kiro model list may advertise it.
+	// Kiro added Opus 5.5 after 2026-09-24: ListAvailableModels now lists
+	// claude-opus-5.5 (verified 2026-09-26, account 2696), so the Kiro catalog
+	// advertises it. Its Kiro-side contract is covered by the Kiro tests.
+	var kiroHasOpus55 bool
 	for _, m := range kironianzs.DefaultModels {
-		require.NotEqual(t, "claude-opus-5-5", m.ID)
+		kiroHasOpus55 = kiroHasOpus55 || m.ID == "claude-opus-5-5"
 	}
+	require.True(t, kiroHasOpus55)
 }
 
 // TestOpus55PricingDoesNotFallBackToOpus5 is the regression this change exists
