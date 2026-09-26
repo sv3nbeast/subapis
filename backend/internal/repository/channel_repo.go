@@ -85,7 +85,7 @@ func (r *channelRepository) GetByID(ctx context.Context, id int64) (*service.Cha
 	ch := &service.Channel{}
 	var modelMappingJSON, featuresConfigJSON []byte
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, name, description, status, model_mapping, billing_model_source, restrict_models, display_only, features_config, apply_pricing_to_account_stats, created_at, updated_at
+		`SELECT id, name, COALESCE(description, ''), status, model_mapping, COALESCE(billing_model_source, ''), COALESCE(restrict_models, false), display_only, features_config, apply_pricing_to_account_stats, created_at, updated_at
 		 FROM channels WHERE id = $1`, id,
 	).Scan(&ch.ID, &ch.Name, &ch.Description, &ch.Status, &modelMappingJSON, &ch.BillingModelSource, &ch.RestrictModels, &ch.DisplayOnly, &featuresConfigJSON, &ch.ApplyPricingToAccountStats, &ch.CreatedAt, &ch.UpdatedAt)
 	if err == sql.ErrNoRows {
@@ -214,7 +214,7 @@ func (r *channelRepository) List(ctx context.Context, params pagination.Paginati
 
 	// 查询 channel 列表
 	dataQuery := fmt.Sprintf(
-		`SELECT c.id, c.name, c.description, c.status, c.model_mapping, c.billing_model_source, c.restrict_models, c.display_only, c.features_config, c.apply_pricing_to_account_stats, c.created_at, c.updated_at
+		`SELECT c.id, c.name, COALESCE(c.description, ''), c.status, c.model_mapping, COALESCE(c.billing_model_source, ''), COALESCE(c.restrict_models, false), c.display_only, c.features_config, c.apply_pricing_to_account_stats, c.created_at, c.updated_at
 		 FROM channels c WHERE %s ORDER BY %s LIMIT $%d OFFSET $%d`,
 		whereClause, channelListOrderBy(params), argIdx, argIdx+1,
 	)
@@ -306,7 +306,7 @@ func channelListOrderBy(params pagination.PaginationParams) string {
 
 func (r *channelRepository) ListAll(ctx context.Context) ([]service.Channel, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, name, description, status, model_mapping, billing_model_source, restrict_models, display_only, features_config, apply_pricing_to_account_stats, created_at, updated_at FROM channels ORDER BY id`,
+		`SELECT id, name, COALESCE(description, ''), status, model_mapping, COALESCE(billing_model_source, ''), COALESCE(restrict_models, false), display_only, features_config, apply_pricing_to_account_stats, created_at, updated_at FROM channels ORDER BY id`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query all channels: %w", err)

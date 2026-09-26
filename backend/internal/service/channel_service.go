@@ -165,6 +165,10 @@ type ChannelService struct {
 
 	cache   atomic.Value // *channelCache
 	cacheSF singleflight.Group
+	// lastGood 是最近一次从数据库成功构建的快照。重建失败时沿用它，而不是换成
+	// 空缓存：空缓存会同时关掉渠道定价、模型映射和 restrict_models 拦截，且坏数据
+	// 不修复就一直失败（2026-09-24 一行 NULL tier_label 让全站失去渠道定价 2h20m）。
+	lastGood atomic.Pointer[channelCache]
 }
 
 // NewChannelService 创建渠道服务实例。
@@ -200,6 +204,10 @@ func (s *ChannelService) loadCache(ctx context.Context) (*channelCache, error) {
 		return s.buildCache(ctx)
 	})
 	if err != nil {
+		// 触发重建的这次请求同样沿用上一份成功快照，不因重建失败丢掉渠道配置。
+		if last := s.lastGood.Load(); last != nil {
+			return last, nil
+		}
 		return nil, err
 	}
 	cache, ok := result.(*channelCache)
@@ -278,12 +286,20 @@ func expandMappingToCache(cache *channelCache, ch *Channel, gid int64, platform 
 	}
 }
 
-// storeErrorCache 存入短 TTL 空缓存，防止 DB 错误后紧密重试。
-// 通过回退 loadedAt 使剩余 TTL = channelErrorTTL。
-func (s *ChannelService) storeErrorCache() {
-	errorCache := newEmptyChannelCache()
-	errorCache.loadedAt = time.Now().Add(-(channelCacheTTL - channelErrorTTL))
-	s.cache.Store(errorCache)
+// storeFallbackCache 在 DB 加载失败后存入短 TTL 回退快照，防止紧密重试。
+// 有上一份成功快照时沿用它（浅拷贝，内部 map 构建后只读），否则存空缓存。
+// 通过回退 loadedAt 使剩余 TTL = channelErrorTTL，数据修好后能尽快恢复。
+// 返回是否沿用了上一份成功快照。
+func (s *ChannelService) storeFallbackCache() bool {
+	fallback := newEmptyChannelCache()
+	last := s.lastGood.Load()
+	if last != nil {
+		snapshot := *last
+		fallback = &snapshot
+	}
+	fallback.loadedAt = time.Now().Add(-(channelCacheTTL - channelErrorTTL))
+	s.cache.Store(fallback)
+	return last != nil
 }
 
 // buildCache 从数据库构建渠道缓存。
@@ -299,6 +315,7 @@ func (s *ChannelService) buildCache(ctx context.Context) (*channelCache, error) 
 
 	cache := populateChannelCache(channels, groupPlatforms)
 	s.cache.Store(cache)
+	s.lastGood.Store(cache)
 	return cache, nil
 }
 
@@ -306,8 +323,8 @@ func (s *ChannelService) buildCache(ctx context.Context) (*channelCache, error) 
 func (s *ChannelService) fetchChannelData(ctx context.Context) ([]Channel, map[int64]string, error) {
 	channels, err := s.repo.ListAll(ctx)
 	if err != nil {
-		slog.Warn("failed to build channel cache", "error", err)
-		s.storeErrorCache()
+		servingLastGood := s.storeFallbackCache()
+		slog.Error("failed to build channel cache", "error", err, "serving_last_good", servingLastGood)
 		return nil, nil, fmt.Errorf("list all channels: %w", err)
 	}
 
@@ -320,8 +337,8 @@ func (s *ChannelService) fetchChannelData(ctx context.Context) ([]Channel, map[i
 	if len(allGroupIDs) > 0 {
 		groupPlatforms, err = s.repo.GetGroupPlatforms(ctx, allGroupIDs)
 		if err != nil {
-			slog.Warn("failed to load group platforms for channel cache", "error", err)
-			s.storeErrorCache()
+			servingLastGood := s.storeFallbackCache()
+			slog.Error("failed to load group platforms for channel cache", "error", err, "serving_last_good", servingLastGood)
 			return nil, nil, fmt.Errorf("get group platforms: %w", err)
 		}
 	}
