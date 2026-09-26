@@ -206,8 +206,11 @@ func TestForwardAsChatCompletions_APIKeyPropagatesPromptCacheKeyInResponsesBody(
 	require.Error(t, err)
 	require.Nil(t, result)
 	require.Equal(t, "claude-opus-4-8", gjson.GetBytes(upstream.lastBody, "model").String())
-	require.Equal(t, "enabled", gjson.GetBytes(upstream.lastBody, "thinking.type").String())
-	require.Equal(t, int64(BudgetRectifyBudgetTokens), gjson.GetBytes(upstream.lastBody, "thinking.budget_tokens").Int())
+	// Opus 4.7+ only takes adaptive thinking; the alias keeps thinking on, shown
+	// as a summary, with the larger output budget.
+	require.Equal(t, "adaptive", gjson.GetBytes(upstream.lastBody, "thinking.type").String())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "thinking.budget_tokens").Exists())
+	require.Equal(t, "summarized", gjson.GetBytes(upstream.lastBody, "thinking.display").String())
 	require.Equal(t, int64(BudgetRectifyMaxTokens), gjson.GetBytes(upstream.lastBody, "max_tokens").Int())
 }
 
@@ -280,8 +283,11 @@ func TestForwardAsResponses_AnthropicOpus48ThinkingAlias(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, result)
 	require.Equal(t, "claude-opus-4-8", gjson.GetBytes(upstream.lastBody, "model").String())
-	require.Equal(t, "enabled", gjson.GetBytes(upstream.lastBody, "thinking.type").String())
-	require.Equal(t, int64(BudgetRectifyBudgetTokens), gjson.GetBytes(upstream.lastBody, "thinking.budget_tokens").Int())
+	// Opus 4.7+ only takes adaptive thinking; the alias keeps thinking on, shown
+	// as a summary, with the larger output budget.
+	require.Equal(t, "adaptive", gjson.GetBytes(upstream.lastBody, "thinking.type").String())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "thinking.budget_tokens").Exists())
+	require.Equal(t, "summarized", gjson.GetBytes(upstream.lastBody, "thinking.display").String())
 	require.Equal(t, int64(BudgetRectifyMaxTokens), gjson.GetBytes(upstream.lastBody, "max_tokens").Int())
 }
 

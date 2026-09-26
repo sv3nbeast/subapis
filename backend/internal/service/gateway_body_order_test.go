@@ -477,9 +477,12 @@ func TestApplyAnthropicThinkingAliasToRequest_Opus48(t *testing.T) {
 
 	applyAnthropicThinkingAliasToRequest(req, "claude-opus-4.8-thinking")
 
+	// Opus 4.7+ only takes adaptive thinking; the alias still turns thinking on
+	// and keeps the larger output budget.
 	require.NotNil(t, req.Thinking)
-	require.Equal(t, "enabled", req.Thinking.Type)
-	require.Equal(t, BudgetRectifyBudgetTokens, req.Thinking.BudgetTokens)
+	require.Equal(t, "adaptive", req.Thinking.Type)
+	require.Zero(t, req.Thinking.BudgetTokens)
+	require.Equal(t, "summarized", req.Thinking.Display)
 	require.Equal(t, BudgetRectifyMaxTokens, req.MaxTokens)
 }
 

@@ -2473,6 +2473,7 @@ func applyAnthropicThinkingAliasToRequest(req *apicompat.AnthropicRequest, reque
 	}
 	normalizeAnthropicOpus5ThinkingRequest(req, req.Model)
 	normalizeAnthropicFable51Request(req)
+	normalizeAnthropicAdaptiveOnlyThinkingRequest(req)
 }
 
 func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account *Account, fp *Fingerprint) string {
